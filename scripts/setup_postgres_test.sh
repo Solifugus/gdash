@@ -58,10 +58,16 @@ collation_mismatch() {
     [[ "$out" == "1" ]]
 }
 
+# template1 is the only one that MATTERS: CREATE DATABASE copies it by
+# default, so its stale version is what blocks setup. postgres is worth
+# fixing while we are here. template0 is the pristine template and is
+# deliberately locked against connections; it is left alone.
 STALE=()
-for db in template1 template0 postgres; do
+for db in template1 postgres; do
     if collation_mismatch "$db"; then STALE+=("$db"); fi
 done
+TEMPLATE0_STALE=0
+if collation_mismatch template0; then TEMPLATE0_STALE=1; fi
 
 if [[ ${#STALE[@]} -gt 0 && "${1:-}" != "--fix-collation" && "${1:-}" != "--drop" ]]; then
     cat >&2 <<MSG
@@ -99,14 +105,36 @@ MSG
 fi
 
 if [[ "${1:-}" == "--fix-collation" ]]; then
-    for db in "${STALE[@]}"; do
-        echo "refreshing collation version on ${db} (catalog-only system database) ..."
-        psql_super -c "alter database ${db} refresh collation version;"
-    done
     if [[ ${#STALE[@]} -eq 0 ]]; then
         echo "no system-database collation mismatch to fix"
     fi
-    echo "system templates reconciled; continuing with setup"
+    for db in "${STALE[@]}"; do
+        echo "refreshing collation version on ${db} (catalog-only system database) ..."
+        # Tolerated individually: only template1 is required, and a failure
+        # on one must not abandon the run half-done.
+        if psql_super -c "alter database ${db} refresh collation version;" >/dev/null 2>&1; then
+            echo "  ok"
+        else
+            echo "  could not refresh ${db}" >&2
+            if [[ "$db" == "template1" ]]; then
+                echo "template1 is the template CREATE DATABASE copies; setup cannot continue." >&2
+                exit 1
+            fi
+            echo "  (not required for setup; continuing)" >&2
+        fi
+    done
+    if [[ $TEMPLATE0_STALE -eq 1 ]]; then
+        cat <<'MSG'
+
+Note: template0 also records the old collation version. It is left alone on
+purpose -- it is the pristine template and is locked against connections, so
+refreshing it means temporarily flipping datallowconn in the catalog. Nothing
+here needs it. It only matters if you later run CREATE DATABASE ... TEMPLATE
+template0, which will refuse until you reconcile it deliberately.
+MSG
+    fi
+    echo
+    echo "continuing with setup"
     echo
 fi
 
