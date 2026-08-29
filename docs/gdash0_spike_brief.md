@@ -65,10 +65,14 @@ One reference dashboard, committed, `format: 1`. Its shape is fixed here:
 - **one param** with a default.
 - **one control** — a `select` publishing that param, its options from a query
   over the dataset.
-- **two visuals**, both `bar`, both over the one dataset. **One binds the param;
-  one deliberately does not.** Two is the minimum that can prove the design's
-  central interaction claim — that exactly the binding visuals re-run and the
-  other stays put. One visual would prove nothing.
+- **two visuals** over the one dataset, **one `bar` and one `value`**. **One
+  binds the param; one deliberately does not.** Two is the minimum that can
+  prove the design's central interaction claim — that exactly the binding
+  visuals re-run and the other stays put. One visual would prove nothing. Two
+  *different* marks additionally prove the encoding → mark dispatch generalizes
+  rather than being a single hard-coded path, and `value` is the mark that
+  renders a money column through the format layer, so it carries §4.3's text
+  boundary all the way to the pixel.
 - **one tab**, a `vert` containing a `horiz`. Nesting is exercised because the
   layout walker must recurse; nothing more is asked of it.
 
@@ -81,7 +85,7 @@ One reference dashboard, committed, `format: 1`. Its shape is fixed here:
 | Money | INTEGER minor units, per-column scale in `_gdash_meta`, excess decimals **rejected** | the wider format map; `currency` is the only format (GDASH-1) |
 | Swap | `atomic_replace` over `<dataset>.db`, then version-file bump | staging sweep for crash residue (GDASH-2) |
 | Visual queries | plain SELECT against the dataset file, `:name` rewritten to `?` | ATTACH across multiple datasets (GDASH-2) |
-| Render | `bar` only, via the gBASIC chart library | every other mark, `series`, legends, theming (GDASH-1/6) |
+| Render | `bar` and `value` only, dispatched by mark name | every other mark, `series`, legends, theming (GDASH-1/6) |
 | Slicer | one param POST → re-rendered fragments for binding visuals only | client-side niceties beyond the shim |
 | SSE | one stream, polls the version file, emits `refresh` | `publish` events (GDASH-3) |
 
@@ -173,7 +177,7 @@ bump; `access` fail-closed.
 
 Named so deferral is a decision: draft/publish/snapshots/rollback (GDASH-3); any
 auth, session, CSRF or user store (GDASH-4); `user_*` injection and preview-as
-(GDASH-5); every mark but `bar`, `series`, tabs beyond one, `space`/`gap`
+(GDASH-5); every mark but `bar` and `value`, `series`, tabs beyond one, `space`/`gap`
 semantics, the dead-`space` warning, the format map beyond `currency`, golden
 refusal messages (GDASH-1); interval and `on_open` refresh, multi-dataset
 ATTACH, staging sweep, content-hash dedupe (GDASH-2); themes, legends, axis
