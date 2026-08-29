@@ -87,26 +87,10 @@ echo "$out"
 ok "refresh from live Postgres succeeds" "$rc" "0"
 
 # The money assertions: exact minor units, not floats.
-read -r total <<<"$("$GBASIC" - "$ROOT" <<'BAS' 2>/dev/null
-program main(args)
-    load gdash_store from "src/gdash_store.bas"
-    db = args[0] + "/cache/sales/draft/orders.db"
-    r = gdash_store.select_rows(db, "select sum(amount) as total from orders", {}, ["total"])
-    print(r.rows[0]["total__text"])
-end program
-BAS
-)"
+total="$("$GBASIC" tests/pg_sum.bas "$ROOT/cache/sales/draft/orders.db" '*' 2>&1)"
 ok "sum over live data is exact minor units" "$total" "492705"
 
-read -r west <<<"$("$GBASIC" - "$ROOT" <<'BAS' 2>/dev/null
-program main(args)
-    load gdash_store from "src/gdash_store.bas"
-    db = args[0] + "/cache/sales/draft/orders.db"
-    r = gdash_store.select_rows(db, "select sum(amount) as total from orders where region = :region", { region: "west" }, ["total"])
-    print(r.rows[0]["total__text"])
-end program
-BAS
-)"
+west="$("$GBASIC" tests/pg_sum.bas "$ROOT/cache/sales/draft/orders.db" west 2>&1)"
 ok "param-filtered sum over live data" "$west" "325100"
 
 # A value with more decimals than the column scale must be REFUSED, not
@@ -117,15 +101,7 @@ psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDB" -q -c \
 "$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh sales >/dev/null 2>&1
 ok "excess decimals from a live column are refused" "$?" "1"
 
-read -r after <<<"$("$GBASIC" - "$ROOT" <<'BAS' 2>/dev/null
-program main(args)
-    load gdash_store from "src/gdash_store.bas"
-    db = args[0] + "/cache/sales/draft/orders.db"
-    r = gdash_store.select_rows(db, "select sum(amount) as total from orders", {}, ["total"])
-    print(r.rows[0]["total__text"])
-end program
-BAS
-)"
+after="$("$GBASIC" tests/pg_sum.bas "$ROOT/cache/sales/draft/orders.db" '*' 2>&1)"
 ok "rejected refresh left the previous data intact" "$after" "492705"
 
 psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDB" -q -c "drop schema gdash_spike cascade;" >/dev/null 2>&1

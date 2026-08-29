@@ -215,14 +215,14 @@ refresh and SSE; the CLI (`validate`, `refresh`); the reference record.
 
 **Deliberately not built** — §7's list stands unchanged, with these to record:
 
-- **The live-Postgres runner is written but UNEXERCISED.** A server is running
-  on this machine, but no credentials for it were available, so
-  `tests/run_postgres.sh` has been proven only to gate correctly (it skips
-  without `GDASH_POSTGRES_TEST=1` and refuses without a user). Its assertions
-  have never run. The pg → SQLite → minor-unit money path is therefore proven
-  *through the seam*, not against a live server. That is the one §6 criterion
-  met in the hermetic half only, and it is the first thing to run when
-  credentials exist.
+- **The live-Postgres runner PASSES** (5/5), against a real server, once
+  `scripts/setup_postgres_test.sh` provisioned a role. The pg → SQLite →
+  minor-unit money path is therefore proven against a live `numeric(14,2)`
+  column and not only through the fixture seam: sums come back as exact minor
+  units, a param-filtered sum agrees, a `12.3456` value in a widened column is
+  **refused rather than rounded**, and the previously-materialized data
+  survives that refusal intact. It remains opt-in and is never part of the
+  hermetic suite.
 - **`gdash_sql` is a module the brief did not name.** The binding scanner is
   used by both `gdash_record` (dependency graph) and `gdash_store` (rewrite);
   putting it in either would have made the other depend on it backwards. Not

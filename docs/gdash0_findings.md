@@ -369,6 +369,25 @@ Recorded because each cost time and none is in `UNLEARN.md`:
 - **A library alias must match the library's declared name.** `load t from
   "gdash_test.bas"` fails with `library not found: t`; there is no aliasing.
 
+## F10 — a glibc upgrade blocks CREATE DATABASE until the templates are refreshed
+
+**Severity: low for gdash; environmental.** Not a gdash or gBASIC defect,
+recorded because it cost a round trip and will recur on any machine whose libc
+moves.
+
+`scripts/setup_postgres_test.sh` failed midway: Postgres refuses every
+`CREATE DATABASE` when the template databases record an older collation version
+than the OS now provides (here 2.42 → 2.43). The script now preflights and
+refuses to guess, with `--fix-collation` refreshing only `template1` and
+`postgres`. `template0` is left alone — it is locked against connections, so
+refreshing it means flipping `datallowconn` in the catalog, and nothing here
+needs it.
+
+The wider point is deliberately left to the operator: refreshing a collation
+version updates the recorded number without re-sorting anything, so a database
+with real text indexes wants `REINDEX` first. On this machine every database is
+development, so that was noted rather than acted on.
+
 ## What this means for the phase after
 
 Nothing here blocks GDASH-1. F5 and F1 together mean **design §4 needs an
