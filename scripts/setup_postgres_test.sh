@@ -46,6 +46,70 @@ if ! sudo -u postgres psql -qtAXc 'select 1' >/dev/null 2>&1; then
     exit 1
 fi
 
+# ------------------------------------------------------- collation preflight
+# After a glibc upgrade, Postgres refuses CREATE DATABASE because the template
+# databases record the OLD collation version. That is a property of this
+# server, not of gdash -- every CREATE DATABASE on it is blocked until the
+# templates are refreshed.
+collation_mismatch() {
+    local db="$1"
+    local out
+    out="$(psql_super -c "select 1 from pg_database where datname = '${db}' and datcollversion is distinct from pg_database_collation_actual_version(oid)" 2>/dev/null || true)"
+    [[ "$out" == "1" ]]
+}
+
+STALE=()
+for db in template1 template0 postgres; do
+    if collation_mismatch "$db"; then STALE+=("$db"); fi
+done
+
+if [[ ${#STALE[@]} -gt 0 && "${1:-}" != "--fix-collation" && "${1:-}" != "--drop" ]]; then
+    cat >&2 <<MSG
+
+This server's template databases record an older collation version than the
+operating system now provides (a glibc upgrade). Postgres refuses CREATE
+DATABASE until that is reconciled, so this script cannot continue.
+
+  affected: ${STALE[*]}
+
+Re-run with --fix-collation to refresh JUST those system databases:
+
+    sudo $0 --fix-collation
+
+That is safe for them: template0, template1 and postgres hold catalog data
+only, so there are no user indexes whose sort order could have changed.
+
+READ THIS BEFORE YOU DO ANYTHING ELSE, because it is bigger than gdash:
+the same glibc change affects YOUR OWN databases. Refreshing a collation
+version only updates the recorded number -- it does NOT re-sort anything. Any
+existing database with text indexes or collation-aware constraints may now
+have indexes ordered by the old locale rules. The correct remedy there is
+REINDEX (or at minimum REINDEX on text/varchar indexes and unique
+constraints) BEFORE running ALTER DATABASE ... REFRESH COLLATION VERSION on
+it. This script deliberately touches none of your databases.
+
+To see which of your databases are affected:
+
+    sudo -u postgres psql -c "select datname, datcollversion, \
+      pg_database_collation_actual_version(oid) as actual from pg_database \
+      where datcollversion is distinct from pg_database_collation_actual_version(oid);"
+
+MSG
+    exit 1
+fi
+
+if [[ "${1:-}" == "--fix-collation" ]]; then
+    for db in "${STALE[@]}"; do
+        echo "refreshing collation version on ${db} (catalog-only system database) ..."
+        psql_super -c "alter database ${db} refresh collation version;"
+    done
+    if [[ ${#STALE[@]} -eq 0 ]]; then
+        echo "no system-database collation mismatch to fix"
+    fi
+    echo "system templates reconciled; continuing with setup"
+    echo
+fi
+
 # ---------------------------------------------------------------- teardown
 if [[ "${1:-}" == "--drop" ]]; then
     echo "dropping database $DBNAME and role $ROLE ..."
