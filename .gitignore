@@ -1,0 +1,16 @@
+# Build / run artifacts
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# Dev/test roots — the resolver's --root target and hermetic scratch
+/run-root/
+/scratch/
+/tmp/
+
+# Credentials never enter the repo (design §2, CLAUDE.md).
+# Real connection profiles are 0600 files outside the tree; only
+# obviously-fake fixtures are committed.
+connections.json
+users.json
