@@ -258,33 +258,67 @@ is no repository). The gbasic repo was not modified.
 Step-0 proved the platform primitives in isolation. Building on them surfaced
 five more, in rough order of how much they cost.
 
-## F5 — the `money` type is double-backed, so design §4's render path does not hold
+## F5 — the `money` type has an exact core and a lossy entrance
 
-**Severity: high.** A second, independent contradiction of design §4, and it
-survives the F1 fix rather than being cured by it.
+**Severity: medium** (revised down from high, and re-diagnosed — see the
+correction note below).
 
-Design §4 states: *"Rendering divides through gBASIC's exact money type at the
-format layer."* Two probes against the real binary:
+`src/eval.c` settles what money actually is:
 
+```c
+static Value value_money(long long cents) { ... }
+static char *odbc_money_text(long long cents)   /* "Money is integer cents" */
 ```
-a{USD}= number("90071992547409.93")   ' prints 90071992547409.94  -- a cent out
-b{USD}= "90071992547409.93"           ' runtime error: USD modifier expects a number
-```
 
-So the money type (a) refuses a string, meaning there is **no exact way in** for
-a value that cannot survive a double, and (b) is itself inexact at that
-magnitude. It cannot be the format layer for values above 2^53 minor units.
+It is an **exact int64 scaled integer** — the right representation, with the
+full ±$92 quadrillion range at scale 2. Probes agree: `0.01` accumulated 1000
+times yields exactly `10.00`, which a double cannot do, and printing renders
+all 16 significant digits.
 
-**What gdash does instead:** formats from the exact decimal text by string
-surgery — `from_minor` reinserts the decimal point, `format_currency` groups
-thousands — which is exact at every magnitude. Pinned at 2^53 and near int64
-max in `tests/test_render.bas`.
+**The defect is not the storage; it is everything around it.** Three distinct
+problems, around a correct core:
 
-Chart **geometry** still goes through doubles, deliberately: a bar's height is
-pixels, and a sub-cent error in a pixel coordinate is not an error. Every value
-a human *reads* comes from the text. That split is the ruling this phase
-implements, and §4 needs an edit to match it: the money type is right for
-ordinary magnitudes and wrong as the general mechanism.
+1. **Construction launders through a double.** A literal or `number()` result
+   is a double before `value_money` sees it, so `big{USD}= 92233720368547.75`
+   yields `...76` — a cent out. And the modifier **refuses a string**
+   (`USD modifier expects a number`), so there is no exact way in at all. The
+   type's own range is unreachable through its own constructor.
+2. **`*` and `/` by a number leave integer arithmetic.** Both go through
+   `round_to_cents(amount / 100.0)` on a `double`. So a money value that *was*
+   exact silently degrades the first time it is scaled — arguably worse than
+   (1), because it corrupts a value the caller had already got right.
+3. **Scale is fixed at cents.** There is no per-currency exponent, so JPY
+   (0 decimals) and anything at scale 4/6/8 has no money representation. This
+   is the case that actually bites in practice: the 2^53 ceiling is
+   unreachable at scale 2 (~$90 trillion) but sits at ~$9 billion at scale 6
+   and ~$90 million at scale 8, and those are ordinary amounts for FX rates,
+   per-unit costs, and crypto.
+
+**Correction to the earlier write-up.** This finding previously said the money
+type was "double-backed" and could not be the format layer. That diagnosis was
+wrong — it was inferred from a probe that called `number()` first, which
+destroyed the precision before the money type was involved. The storage was
+never the problem. The conclusion gdash acted on still holds for a different
+reason: with no string constructor, there is no exact path into the type, so
+gdash's format layer works from decimal text either way.
+
+**What gdash needs from a fix: nothing, to keep working.** gdash does money in
+text and int64 in SQLite and never constructs a `money` value. But an exact
+text constructor plus integer-preserving `*` and `/` would let gdash's
+`from_minor`/`format_currency` delegate to the platform instead, which is the
+Studio rule — general capability belongs in the library with gdash as first
+caller. Suggested order, for the gbasic repo's own process to rule on:
+
+1. **`m{USD}= "1250.75"`** — parse decimal text to cents by integer
+   arithmetic. Small, and it alone makes the type's existing range reachable.
+   Excess decimals should be **rejected rather than rounded**, matching what
+   gdash does and what design §4 requires.
+2. **Keep `*` and `/` in integer arithmetic** where the operand is integral;
+   define the rounding rule explicitly where division genuinely needs one.
+   This is the silent-corruption case.
+3. **Per-currency scale**, which is a representation change and a real design
+   question. Deferred unless demand appears — it is what would let a scale-8
+   column use the type at all.
 
 ## F6 — library functions share one namespace, and collisions are silent
 
@@ -390,8 +424,9 @@ development, so that was noted rather than acted on.
 
 ## What this means for the phase after
 
-Nothing here blocks GDASH-1. F5 and F1 together mean **design §4 needs an
-edit** — its headroom figure and its stated render path are both wrong — and
-that edit is the maintainer's. F6 is the one to act on soonest, because it is a
+Nothing here blocks GDASH-1. F1 and F5 together mean **design §4 needs a
+one-line correction** — the headroom figure is wrong and the limit is
+scale-dependent — but at scale 2 the ceiling is unreachable in practice, so
+this is housekeeping rather than urgency. F6 is the one to act on soonest, because it is a
 trap the next module to be written will fall into, not a limit that merely has
 to be lived with.
