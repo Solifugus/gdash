@@ -1,7 +1,7 @@
 # GDASH-0 — Vertical spike: phase brief
 
-**Status:** step-0 verification COMPLETE (`gdash0_findings.md`); implementation
-not started.
+**Status:** COMPLETE. Step-0 verification and implementation both done; at the
+review boundary. Findings in `gdash0_findings.md`; DONE note in §9.
 **Narrows:** the GDASH-0 paragraph of `gdash_development_plan.md`.
 **Authority:** `gdash_design.md` outranks this brief. Where this brief is
 silent, the design rules; where the design and an implementation disagree, that
@@ -196,3 +196,48 @@ boundary and write the report. Never push.** Platform gaps found while building
 are findings for the report and candidates for gbasic's `DOGFOOD.md`, filed only
 through that repo's own process — nothing under `~/development/gbasic` is
 modified from here.
+
+
+---
+
+## 9. DONE note
+
+All seven §6 criteria met. The hermetic suite is 154 in-process assertions
+across six suites plus 22 end-to-end assertions over a real HTTP server, green
+from a clean checkout with no services running, ending scratch-clean.
+
+**Built:** the resolver; the record loader and its validation subset; the SQL
+binding scanner (one scan serving both the dependency graph and the positional
+rewrite); the staging store with the money text boundary; the fixture and
+Postgres sources behind one seam; the refresh child and its supervision; the
+`bar` and `value` marks; the server with its shell, slicer round trip, manual
+refresh and SSE; the CLI (`validate`, `refresh`); the reference record.
+
+**Deliberately not built** — §7's list stands unchanged, with these to record:
+
+- **The live-Postgres runner is written but UNEXERCISED.** A server is running
+  on this machine, but no credentials for it were available, so
+  `tests/run_postgres.sh` has been proven only to gate correctly (it skips
+  without `GDASH_POSTGRES_TEST=1` and refuses without a user). Its assertions
+  have never run. The pg → SQLite → minor-unit money path is therefore proven
+  *through the seam*, not against a live server. That is the one §6 criterion
+  met in the hermetic half only, and it is the first thing to run when
+  credentials exist.
+- **`gdash_sql` is a module the brief did not name.** The binding scanner is
+  used by both `gdash_record` (dependency graph) and `gdash_store` (rewrite);
+  putting it in either would have made the other depend on it backwards. Not
+  scope, just structure.
+- **Currency scale is per-dataset, not per-channel.** A `currency`-formatted
+  channel takes its scale from the dataset's money columns, which must agree.
+  An aggregate of minor units is still minor units at the same scale, so this
+  is correct for the reference record and for anything shaped like it; a
+  per-channel scale belongs with GDASH-1's format map.
+- **`_stale_note` shows a file mtime**, not a recorded refresh time. Good
+  enough to prove "data as of" is real; GDASH-2 owns the audited version of it.
+- **No audit log.** Design §8 lists the events; every one of them belongs to a
+  phase that is not this one.
+
+**Design edits the maintainer owes**, both from findings and neither made here:
+§4's money headroom (F1: ~$90 trillion, not ~$92 quadrillion) and §4's render
+path (F5: the money type is double-backed and cannot be the format layer above
+2^53).

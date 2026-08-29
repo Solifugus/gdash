@@ -1,6 +1,9 @@
 # GDASH-0 — Step-0 findings
 
-**Status:** step-0 verification complete; **phase halted before deliverables.**
+**Status:** step-0 verification complete; deliverables built; **at the review
+boundary.** §§0–4 are the step-0 record (the halt described in §0 was cleared by
+the maintainer, who supplied the repository and the brief). §5 is what
+implementation surfaced.
 **Date:** 2026-08-28
 **Platform:** gBASIC 0.1.0-rc8 (`~/development/gbasic/gbasic`)
 **Method:** every claim below was probed against the real binary. Nothing here is
@@ -8,7 +11,14 @@ read off a doc. Probe sources are throwaway; each finding states its repro.
 
 ---
 
-## 0. Halt conditions (why the phase stopped here)
+## 0. Halt conditions — RESOLVED
+
+Both were cleared by the maintainer after this section was written: the
+repository was initialized on `master`, and `docs/gdash0_spike_brief.md` was
+written and then amended to make the second visual a `value` mark. The record
+below stands as written.
+
+### The original halt
 
 Two blockers, neither of which step-0 can design around. Per CLAUDE.md
 ("If a verification fails, stop and report — do not design around it").
@@ -239,3 +249,130 @@ brief's implementation must respect, and F3's workaround is already proven.
 
 Nothing was implemented, and no scope was assumed. No commits were made (there
 is no repository). The gbasic repo was not modified.
+
+
+---
+
+# 5. Findings from implementation
+
+Step-0 proved the platform primitives in isolation. Building on them surfaced
+five more, in rough order of how much they cost.
+
+## F5 — the `money` type is double-backed, so design §4's render path does not hold
+
+**Severity: high.** A second, independent contradiction of design §4, and it
+survives the F1 fix rather than being cured by it.
+
+Design §4 states: *"Rendering divides through gBASIC's exact money type at the
+format layer."* Two probes against the real binary:
+
+```
+a{USD}= number("90071992547409.93")   ' prints 90071992547409.94  -- a cent out
+b{USD}= "90071992547409.93"           ' runtime error: USD modifier expects a number
+```
+
+So the money type (a) refuses a string, meaning there is **no exact way in** for
+a value that cannot survive a double, and (b) is itself inexact at that
+magnitude. It cannot be the format layer for values above 2^53 minor units.
+
+**What gdash does instead:** formats from the exact decimal text by string
+surgery — `from_minor` reinserts the decimal point, `format_currency` groups
+thousands — which is exact at every magnitude. Pinned at 2^53 and near int64
+max in `tests/test_render.bas`.
+
+Chart **geometry** still goes through doubles, deliberately: a bar's height is
+pixels, and a sub-cent error in a pixel coordinate is not an error. Every value
+a human *reads* comes from the text. That split is the ruling this phase
+implements, and §4 needs an edit to match it: the money type is right for
+ordinary magnitudes and wrong as the general mechanism.
+
+## F6 — library functions share one namespace, and collisions are silent
+
+**Severity: high.** This was the single most expensive finding of the phase and
+the one most likely to bite the next contributor.
+
+There is no per-library namespace for function *definitions*. A function
+defined in one library silently **overrides** a same-named function in another
+loaded library, and the only signal is a warning on stderr.
+
+It happened twice:
+
+- `gdash_render._escape` overrode `chart._escape`. Cosmetic — caught by the
+  warning, renamed to `_html_escape`. Note that the underscore prefix, which
+  every stdlib library uses to mark a function private, provides **no isolation
+  whatsoever**.
+- `gdash_paths.resolve` overrode **`web.resolve`**. A `server` block implies
+  `load web`, and the web library uses its own `resolve` for routing, so this
+  broke *every route that did any work* while the trivial literal-returning
+  route still answered — a failure that looks like "my handler is wrong"
+  rather than "I renamed a stdlib function out from under the server". Renamed
+  to `roles()`.
+
+The second case is the dangerous shape: an ordinary, obvious name for a
+resolver, taken by a stdlib module the program never mentions, breaking code
+that never calls it. Any gdash module is one common noun away from repeating
+it. Candidate platform asks, for the gbasic repo's own process: make the
+override an error rather than a warning, or scope definitions to their library.
+
+## F7 — no `chmod`, so a 0600 credentials file needs a subprocess
+
+**Severity: medium.** Design §3 requires credentials to reach the refresh child
+through a 0600 temp file. There is no permissions builtin, so `gdash_refresh`
+shells out to `chmod` via `process.run`. It works and the job file is deleted
+after the fetch, but a security-relevant property currently depends on an
+external binary being present and on the call succeeding. `umask` at startup
+plus a restricted `run_dir` would be a better belt; a `set_mode`-style builtin
+would be better still.
+
+## F8 — `load` takes a compile-time literal, so library paths cannot be resolved
+
+**Severity: medium.** CLAUDE.md requires that no path literal exist outside the
+resolver. `load chart from "..."` needs a literal at parse time, so the chart
+library's location provably **cannot** go through the resolver. `gdash_render`
+resolves it against the sibling layout CLAUDE.md documents
+(`../../gbasic/stdlib/chart.bas`), which is right for a dev checkout and wrong
+for an installed build. GDASH-7 needs a real answer — a vendored copy, an
+install-time path, or a platform way to load by module name.
+
+## F9 — an SSE body that emits only on change never learns its client left
+
+**Severity: medium; a gdash lesson more than a platform defect.** `emit`'s
+false return is the entire liveness protocol, so a stream that emits *only when
+something changes* has no way to notice a departed reader, and holds its worker
+until its own tick ceiling. The first end-to-end run hung on exactly this.
+
+The stream now sends a comment heartbeat every few seconds, so a disconnect is
+noticed promptly. This matters more here than it would elsewhere: design §5
+already names the pinned worker as this architecture's ceiling, and a stream
+that outlives its client spends that ceiling on nobody. Worth stating in the
+GDASH-7 worker-sizing documentation the plan already calls for.
+
+## Smaller platform notes
+
+Recorded because each cost time and none is in `UNLEARN.md`:
+
+- **`exists()` accepts only a *file* reference.** A directory reference raises
+  `exists expects a file reference`. A file reference over a directory path
+  answers correctly, so that is the one existence test for both kinds.
+- **`list()` returns an empty array for a missing directory** rather than
+  raising, so it cannot distinguish absent from empty and cannot serve as an
+  existence test.
+- **`make_dir` is neither idempotent nor parent-creating** — it raises on an
+  existing directory. `persist.ensure_dir` exists in the stdlib; gdash has its
+  own to avoid the dependency.
+- **`on error goto next` is frame-scoped and does nothing at top level.** An
+  error there terminates the program despite the guard. Every gdash entry point
+  puts its work inside a `program` block or a function for this reason.
+- **`try_decode` returns a result record** `{ ok, value, message, offset, line,
+  column }`, not the decoded value. Treating the return as the document yields
+  an empty record and a misleading validation failure.
+- **A library alias must match the library's declared name.** `load t from
+  "gdash_test.bas"` fails with `library not found: t`; there is no aliasing.
+
+## What this means for the phase after
+
+Nothing here blocks GDASH-1. F5 and F1 together mean **design §4 needs an
+edit** — its headroom figure and its stated render path are both wrong — and
+that edit is the maintainer's. F6 is the one to act on soonest, because it is a
+trap the next module to be written will fall into, not a limit that merely has
+to be lived with.
