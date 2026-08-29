@@ -22,6 +22,9 @@ fi
 # rather than depending on where the runner was invoked from.
 cd "$HERE/.."
 
+# The refresh parent starts a child interpreter; it finds it here.
+export GDASH_GBASIC="$GBASIC"
+
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/gdash-test-XXXXXX")"
 ROOT="$SCRATCH/root"
 mkdir -p "$ROOT"
