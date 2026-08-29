@@ -18,6 +18,10 @@ if [[ ! -x "$GBASIC" ]]; then
     exit 2
 fi
 
+# Tests reference repo-relative fixtures, so the run is anchored at the root
+# rather than depending on where the runner was invoked from.
+cd "$HERE/.."
+
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/gdash-test-XXXXXX")"
 ROOT="$SCRATCH/root"
 mkdir -p "$ROOT"

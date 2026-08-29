@@ -1,0 +1,57 @@
+{
+  "format": 1,
+  "name": "sales",
+  "title": "Sales",
+  "access": "open",
+
+  "datasets": {
+    "orders": {
+      "profile": "warehouse",
+      "refresh": "manual",
+      "sql": "select region, month, amount from sales.orders",
+      "columns": {
+        "amount": { "type": "money", "scale": 2 }
+      }
+    }
+  },
+
+  "params": {
+    "region": { "default": "west" }
+  },
+
+  "controls": {
+    "region_picker": {
+      "kind": "select",
+      "param": "region",
+      "dataset": "orders",
+      "label": "Region",
+      "sql": "select distinct region as value from orders order by 1"
+    }
+  },
+
+  "visuals": {
+    "by_month": {
+      "dataset": "orders",
+      "sql": "select month as month, sum(amount) as total from orders where region = :region group by month order by month",
+      "encoding": { "mark": "bar", "x": "month", "y": "total", "format": "currency", "title": "Revenue by month" }
+    },
+
+    "grand_total": {
+      "dataset": "orders",
+      "sql": "select sum(amount) as total from orders",
+      "encoding": { "mark": "value", "value": "total", "format": "currency", "title": "All regions, all months" }
+    }
+  },
+
+  "tabs": [
+    {
+      "name": "Overview",
+      "layout": {
+        "vert": [
+          { "control": "region_picker" },
+          { "horiz": [ { "visual": "by_month" }, { "visual": "grand_total" } ] }
+        ]
+      }
+    }
+  ]
+}
