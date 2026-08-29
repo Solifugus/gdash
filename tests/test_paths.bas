@@ -6,7 +6,7 @@ program main(args)
     root = args[0]
 
     ' --root collapses every role under one directory (design §6).
-    p = gdash_paths.resolve(root)
+    p = gdash_paths.roles(root)
     s = gdash_test.eq(s, p.mode, "root", "root mode")
     s = gdash_test.eq(s, p.config_dir, root + "/etc", "config_dir under root")
     s = gdash_test.eq(s, p.state_dir, root + "/lib", "state_dir under root")
@@ -15,7 +15,7 @@ program main(args)
     s = gdash_test.eq(s, p.run_dir, root + "/run", "run_dir under root")
 
     ' FHS when no root is given.
-    f = gdash_paths.resolve("")
+    f = gdash_paths.roles("")
     s = gdash_test.eq(s, f.mode, "fhs", "fhs mode")
     s = gdash_test.eq(s, f.state_dir, "/var/lib/gdash", "fhs state_dir")
     s = gdash_test.eq(s, f.cache_dir, "/var/cache/gdash", "fhs cache_dir")

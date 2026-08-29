@@ -7,7 +7,7 @@ program main(args)
 
     s = gdash_test.suite("refresh")
     root = args[0]
-    p = gdash_paths.resolve(root)
+    p = gdash_paths.roles(root)
 
     ref = gdash_record.load_file("dashboards/sales/draft.json")
     s = gdash_test.ok(s, ref.ok, "reference record loads")

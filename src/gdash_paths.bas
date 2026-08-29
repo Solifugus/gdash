@@ -70,7 +70,7 @@ library gdash_paths
     end function
 
     ' root = "" means FHS (installed); otherwise every role lives under root.
-    function resolve(root)
+    function roles(root)
         if root = "" then
             return { mode: "fhs", root: "", config_dir: "/etc/gdash", state_dir: "/var/lib/gdash", cache_dir: "/var/cache/gdash", log_dir: "/var/log/gdash", run_dir: "/run/gdash" }
         end if
@@ -88,7 +88,7 @@ library gdash_paths
             end if
             i += 1
         end while
-        return resolve(root)
+        return roles(root)
     end function
 
     ' Precious state (design §6): /var/lib is the entire backup set.

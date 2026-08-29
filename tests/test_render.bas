@@ -8,7 +8,7 @@ program main(args)
 
     s = gdash_test.suite("render")
     root = args[0]
-    p = gdash_paths.resolve(root)
+    p = gdash_paths.roles(root)
 
     rec = gdash_record.load_file("dashboards/sales/draft.json").record
     r = gdash_refresh.run(p, "sales", rec, "orders", { kind: "fixture", path: "fixtures/orders.json" })

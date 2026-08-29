@@ -46,6 +46,16 @@ for testfile in "$HERE"/test_*.bas; do
     fi
 done
 
+# The end-to-end spine, over a real HTTP server. Still hermetic: loopback
+# only, fixture source, no database, no display.
+if [[ "${GDASH_SKIP_E2E:-0}" != "1" ]]; then
+    echo "--- end-to-end ---"
+    ran=$((ran + 1))
+    if ! "$HERE/run_e2e.sh"; then
+        failed=$((failed + 1))
+    fi
+fi
+
 echo "---"
 echo "suites run: $ran, failed: $failed"
 
