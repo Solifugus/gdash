@@ -22,6 +22,7 @@ library gdash_render
     ' finding.
     load chart from "../../gbasic/stdlib/chart.bas"
     load gdash_store from "gdash_store.bas"
+    load gdash_format from "gdash_format.bas"
 
     function _html_escape(text)
         t = replace(string(text), "&", "&amp;")
@@ -29,41 +30,6 @@ library gdash_render
         t = replace(t, ">", "&gt;")
         t = replace(t, chr(34), "&quot;")
         return t
-    end function
-
-    ' Thousands separators by string surgery, so the digits stay exact.
-    function _group(digits)
-        out = ""
-        n = len(digits)
-        i = 0
-        while i < n
-            if i > 0 and mod(n - i, 3) = 0 then
-                out = out + ","
-            end if
-            out = out + mid(digits, i, 1)
-            i += 1
-        end while
-        return out
-    end function
-
-    function format_currency(minor_text, scale)
-        plain = gdash_store.from_minor(minor_text, scale)
-        neg = false
-        if starts_with(plain, "-") then
-            neg = true
-            plain = mid(plain, 1, len(plain) - 1)
-        end if
-        bits = split(plain, ".")
-        whole = _group(bits[0])
-        if count(bits) = 2 then
-            body = "$" + whole + "." + bits[1]
-        else
-            body = "$" + whole
-        end if
-        if neg then
-            return "-" + body
-        end if
-        return body
     end function
 
     ' The scale for a formatted channel comes from the dataset's own money
@@ -86,6 +52,13 @@ library gdash_render
             i += 1
         end while
         return first
+    end function
+
+    ' The currency a money channel renders in. Declared on the encoding so a
+    ' JPY column does not render as dollars; USD when unstated.
+    function currency_of(visual)
+        enc = visual["encoding"]
+        return default(enc["currency"], "USD")
     end function
 
     function _err(message)
@@ -131,7 +104,11 @@ library gdash_render
                 if is_unknown(exact) then
                     return _err("visual '" + name + "': money channel was not fetched exactly")
                 end if
-                shown = format_currency(exact, scale)
+                got = gdash_format.currency(exact, scale, currency_of(visual))
+                if not got.ok then
+                    return _err("visual '" + name + "': " + got.message)
+                end if
+                shown = got.text
             else
                 shown = string(row0[ch])
             end if
@@ -157,7 +134,9 @@ library gdash_render
                     exact = rows[i][ych + "__text"]
                     ' Geometry is pixels, so the double is harmless here; the
                     ' exact text is what any label would show.
-                    vals = concat(vals, [number(gdash_store.from_minor(exact, scale))])
+                    ' Geometry is pixels, so the double is harmless here;
+                    ' every value a human READS comes from the exact text.
+                    vals = concat(vals, [number(gdash_format.minor_to_decimal(exact, scale))])
                 else
                     vals = concat(vals, [rows[i][ych]])
                 end if

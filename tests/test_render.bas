@@ -15,15 +15,8 @@ program main(args)
     s = gdash_test.ok(s, r.ok, "dataset refreshed for rendering -- " + r.message)
     live = gdash_paths.dataset_db(p, "sales", "orders")
 
-    ' --- currency formatting is exact at every magnitude (finding F5) ---
-    s = gdash_test.eq(s, gdash_render.format_currency("325100", 2), "$3,251.00", "grouped and scaled")
-    s = gdash_test.eq(s, gdash_render.format_currency("1", 2), "$0.01", "one cent")
-    s = gdash_test.eq(s, gdash_render.format_currency("-125075", 2), "-$1,250.75", "negative")
-    s = gdash_test.eq(s, gdash_render.format_currency("100", 2), "$1.00", "no separator needed")
-    ' The money type renders this one a cent wrong; string surgery does not.
-    s = gdash_test.eq(s, gdash_render.format_currency("9007199254740993", 2), "$90,071,992,547,409.93", "exact past 2^53")
-    s = gdash_test.eq(s, gdash_render.format_currency("9223372036854775", 2), "$92,233,720,368,547.75", "exact near int64 max")
-
+    ' Currency formatting itself is pinned in test_format; what matters
+    ' here is that a visual renders THROUGH it.
     s = gdash_test.eq(s, gdash_render.money_scale(live), 2, "scale read from the dataset")
 
     ' --- the value mark ---

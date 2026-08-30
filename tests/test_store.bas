@@ -1,6 +1,7 @@
 program main(args)
     load gdash_test from "gdash_test.bas"
     load gdash_store from "../src/gdash_store.bas"
+    load gdash_format from "../src/gdash_format.bas"
     load gdash_paths from "../src/gdash_paths.bas"
 
     s = gdash_test.suite("store")
@@ -31,11 +32,11 @@ program main(args)
     big = "92233720368547.75"
     conv = gdash_store.to_minor(big, 2)
     s = gdash_test.eq(s, conv.minor, "9223372036854775", "large money converts exactly")
-    s = gdash_test.eq(s, gdash_store.from_minor(conv.minor, 2), big, "and round-trips back exactly")
+    s = gdash_test.eq(s, gdash_format.minor_to_decimal(conv.minor, 2), big, "and round-trips back exactly")
     ' 2^53 + 1 in minor units survives the round trip as text.
-    s = gdash_test.eq(s, gdash_store.from_minor("9007199254740993", 2), "90071992547409.93", "past 2^53 renders exactly")
-    s = gdash_test.eq(s, gdash_store.from_minor("1", 2), "0.01", "one cent renders")
-    s = gdash_test.eq(s, gdash_store.from_minor("-125075", 2), "-1250.75", "negative renders")
+    s = gdash_test.eq(s, gdash_format.minor_to_decimal("9007199254740993", 2), "90071992547409.93", "past 2^53 renders exactly")
+    s = gdash_test.eq(s, gdash_format.minor_to_decimal("1", 2), "0.01", "one cent renders")
+    s = gdash_test.eq(s, gdash_format.minor_to_decimal("-125075", 2), "-1250.75", "negative renders")
 
     ' --- type inference for undeclared columns (design §4) ---
     s = gdash_test.eq(s, gdash_store.infer_kind(["1", "2", "-3"]), "integer", "integer-looking -> integer")
@@ -62,7 +63,7 @@ program main(args)
     res = gdash_store.select_rows(dbp, "select sum(amount) as total from orders where region = :region", { region: "west" }, ["total"])
     s = gdash_test.ok(s, res.ok, "visual query runs")
     s = gdash_test.eq(s, res.rows[0]["total__text"], "215100", "sum of 1250.75 + 900.25 in minor units")
-    s = gdash_test.eq(s, gdash_store.from_minor(res.rows[0]["total__text"], 2), "2151.00", "renders as money exactly")
+    s = gdash_test.eq(s, gdash_format.minor_to_decimal(res.rows[0]["total__text"], 2), "2151.00", "renders as money exactly")
 
     ' The :name rewrite reached SQLite as a positional bind.
     res2 = gdash_store.select_rows(dbp, "select sum(amount) as total from orders where region = :region", { region: "east" }, ["total"])

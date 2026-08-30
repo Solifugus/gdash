@@ -3,6 +3,7 @@ program main(args)
     load gdash_paths from "../src/gdash_paths.bas"
     load gdash_record from "../src/gdash_record.bas"
     load gdash_store from "../src/gdash_store.bas"
+    load gdash_format from "../src/gdash_format.bas"
     load gdash_refresh from "../src/gdash_refresh.bas"
 
     s = gdash_test.suite("refresh")
@@ -27,7 +28,7 @@ program main(args)
     tot = gdash_store.select_rows(live, "select sum(amount) as total from orders where region = :region", { region: "west" }, ["total"])
     s = gdash_test.ok(s, tot.ok, "visual query runs against the refreshed file")
     s = gdash_test.eq(s, tot.rows[0]["total__text"], "325100", "1250.75 + 900.25 + 1100.00 in minor units")
-    s = gdash_test.eq(s, gdash_store.from_minor(tot.rows[0]["total__text"], 2), "3251.00", "renders exactly")
+    s = gdash_test.eq(s, gdash_format.minor_to_decimal(tot.rows[0]["total__text"], 2), "3251.00", "renders exactly")
 
     ' Per-column scale travelled with the data.
     s = gdash_test.eq(s, gdash_store.money_columns(live)["amount"], 2, "scale recorded in _gdash_meta")

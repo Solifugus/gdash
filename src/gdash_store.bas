@@ -85,29 +85,6 @@ library gdash_store
         return { ok: true, minor: minor, message: "" }
     end function
 
-    ' Minor units (as text) -> display text with the decimal point put back.
-    ' String surgery, not division, so it stays exact past 2^53.
-    function from_minor(minor_text, scale)
-        t = trim(string(minor_text))
-        neg = false
-        if starts_with(t, "-") then
-            neg = true
-            t = mid(t, 1, len(t) - 1)
-        end if
-        while len(t) <= scale
-            t = "0" + t
-        end while
-        if scale = 0 then
-            out = t
-        else
-            out = mid(t, 0, len(t) - scale) + "." + mid(t, len(t) - scale, scale)
-        end if
-        if neg then
-            out = "-" + out
-        end if
-        return out
-    end function
-
     function _sql_type(declared)
         if declared = "money" then
             return "INTEGER"
