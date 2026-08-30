@@ -1,6 +1,7 @@
 # GDASH-2 — Refresh engine: phase brief
 
-**Status:** IN PROGRESS.
+**Status:** COMPLETE. All six §5 criteria met; at the review boundary.
+Findings in `gdash2_findings.md`; DONE note in §7.
 **Narrows:** the GDASH-2 paragraph of `gdash_development_plan.md`.
 **Authority:** `gdash_design.md` outranks this brief. The findings of GDASH-0
 (`gdash0_findings.md`) and GDASH-1 (`gdash1_findings.md`) are inputs, not open
@@ -246,3 +247,58 @@ for the scheduler (GDASH-7). Cross-dashboard fetch dedupe and dataset sharing
 the next tick is the retry, and an exponential backoff wants an operator to
 have asked for one. Per-dataset refresh from the UI: the manual refresh button
 stays whole-dashboard until someone wants otherwise.
+
+---
+
+## 7. DONE note
+
+All six §5 criteria met. The hermetic suite is 15 suites — 318 in-process
+assertions plus 60 end-to-end — green from a clean checkout with no services
+running, ending scratch-clean; the opt-in live-Postgres runner passes 8/8.
+
+**Built:** `on_open` and `interval` policies over a pure due-decision whose
+clock is an argument; the scheduler as its own program plus `gdash schedule`
+for one pass; per-dataset refresh state (last attempt, last success, last
+error, rows, content hash, pending request); draft and published data
+directories with draft-manual-only enforced at the entry point; ATTACH so a
+visual query names sibling datasets with no prefix; schema-qualified metadata
+reads; the eleven-dataset load-time refusal; per-dataset "data as of" and
+per-dataset failure on the page; the JSONL audit log; the staging sweep; and
+the content-hash skip that keeps an unchanged refresh from reloading every
+open tab.
+
+Also built, and overdue: the library-namespace sweep (G2-8), which the GDASH-1
+report claimed existed and which did not.
+
+**The plan's premise that failed:** there is no server-side timer (G2-1). The
+`server` block has one hook, `main` must return for the event loop to run, and
+`workers: N` runs `main` N+1 times. The scheduler is therefore a separate
+program, and the plan's "per-dataset scheduling off the server's timer" is not
+what shipped.
+
+**Deliberately not built** — §6 stands, with these to record:
+
+- **Cross-dashboard fetch dedupe is not built**, and what *is* built is a
+  different thing wearing a similar name (G2-10). The design's §2 item —
+  sharing one fetch between two dashboards, keyed on (source, query) — waits
+  with dataset sharing in design §10.
+- **No retry-with-backoff.** A failed dataset retries on its own interval,
+  because a failed attempt counts as an attempt. An exponential backoff wants
+  an operator to have asked for one.
+- **No per-dataset refresh from the UI.** The button refreshes the whole
+  dashboard. Per-dataset control is a UI question, and there is no UI to ask
+  it in yet.
+- **The scheduler has no unit file** (GDASH-7), so a deployment that starts
+  only the server has silent policies (G2-13). The status line makes that
+  visible; it does not make it right.
+- **`on_open` does not wait.** Opening a dashboard files a request and renders
+  what is there. A viewer who opens a never-refreshed dashboard sees "no data
+  yet" and the data arrives over SSE. Blocking the page on a source fetch is
+  the thing design §3 exists to avoid.
+- **Publish is still GDASH-3's**, and only the read side of `current` is here.
+  The end-to-end run writes the pointer itself (G2-12).
+
+**Design edits still owed** (the maintainer's): the two from GDASH-1 (§4's
+money headroom figure; §4's render path now bounded by the money type's
+storage scale), and one new — **§2's content-hash sentence** should say which
+dedupe is meant, because gdash now has one of them and not the other (G2-10).
