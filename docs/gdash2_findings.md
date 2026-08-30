@@ -117,16 +117,26 @@ New since GDASH-1 and genuinely useful: `file_type(p)` answers `"file"` or
 `"folder"` on a plain string path without raising, which is what
 `gdash_paths.path_exists` hand-rolls with `{file}=` and `on error goto next`.
 
-But `docs/reference.md:4120` says the third answer is `"missing"`, and it is
+But `docs/reference.md:4227` says the third answer is `"missing"`, and it is
 `unknown` — `is_unknown(file_type("absent"))` is true and
 `file_type("absent") = "missing"` is false. A caller following the
 documentation writes a comparison that is never true, and on a *missing* path
 that reads as "not a folder", which is the answer they wanted for the wrong
 reason. It only bites when the distinction matters.
 
-Documentation finding for the gbasic repo's own process. gdash keeps its own
-`path_exists` rather than switching on the strength of a documented return
-value that is not the actual one.
+**Corrected during GDASH-3's step-0, and the correction sharpens the finding.**
+I reported this as one line being wrong. It is not: `file_type` is documented
+**twice**, and the two entries disagree. Line 4227 says `"file"`, `"folder"`,
+or `"missing"`; line 4355 says `"file"`, `"folder"` or `"other"` (a device,
+socket, FIFO), or `unknown` when nothing is there — which is exactly the
+behaviour. The correct entry predates the one I read.
+
+That changes the fix. Rewording line 4227 would leave two entries for one
+builtin, free to drift apart again; the entries want merging. It also changes
+what I should have done: I grepped, took the first hit, and reported the
+documentation as wrong without checking whether the documentation said
+anything else. gdash keeps its own `path_exists` either way — that decision
+was about not depending on a return value I had not verified, and it stands.
 
 ---
 
