@@ -46,6 +46,14 @@ for testfile in "$HERE"/test_*.bas; do
     fi
 done
 
+# The format doc's refusal catalog is generated from the golden. If they
+# disagree the documentation is wrong, which is a test failure, not a chore.
+echo "--- documentation ---"
+ran=$((ran + 1))
+if ! "$HERE/../scripts/gen_catalog_appendix.py" --check; then
+    failed=$((failed + 1))
+fi
+
 # The end-to-end spine, over a real HTTP server. Still hermetic: loopback
 # only, fixture source, no database, no display.
 if [[ "${GDASH_SKIP_E2E:-0}" != "1" ]]; then

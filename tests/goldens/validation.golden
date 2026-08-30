@@ -1,0 +1,96 @@
+format missing
+  ERROR record has no 'format'
+  ERROR record has no tabs
+format unsupported
+  ERROR unsupported record format: 99 (this build reads format 1)
+  ERROR record has no tabs
+name missing
+  ERROR record has no 'name'
+  ERROR record has no tabs
+access unsupported
+  ERROR unsupported access mode: 'public' (this build understands 'open')
+  ERROR record has no tabs
+datasets missing
+  ERROR record has no 'datasets' object
+  ERROR record has no tabs
+visuals missing
+  ERROR record has no 'visuals' object
+  ERROR record has no tabs
+tabs missing
+  ERROR record has no 'tabs' array
+tabs empty
+  ERROR record has no tabs
+dataset illegal name
+  ERROR dataset name is not a legal SQL identifier: '2bad'
+dataset sql missing
+  ERROR dataset 'd1' has no 'sql'
+dataset profile missing
+  ERROR dataset 'd1' has no 'profile'
+dataset binds a param
+  ERROR dataset 'd1' binds param ':region'; params may appear only in visual queries
+dataset refresh policy
+  ERROR dataset 'd1' uses refresh policy 'interval'; this build implements 'manual' only
+money scale missing
+  ERROR money column 'd1.amt' has no 'scale'
+money scale negative
+  ERROR money column 'd1.amt' has a non-integer or negative scale
+money currency unsupported
+  ERROR money column 'd1.amt' names currency 'XYZ', which this build does not support
+visual dataset missing
+  ERROR visual 'v1' has no 'dataset'
+visual dataset unknown
+  ERROR visual 'v1' names undefined dataset 'nope'
+visual sql missing
+  ERROR visual 'v1' has no 'sql'
+visual binding unresolved
+  ERROR visual 'v1' binds ':ghost', which is not a declared param
+visual encoding missing
+  ERROR visual 'v1' has no 'encoding'
+visual mark missing
+  ERROR visual 'v1' encoding has no 'mark'
+visual mark unknown
+  ERROR visual 'v1' uses mark 'sankey'; this build renders bar, line, value and table
+bar missing channels
+  ERROR visual 'v1' mark 'bar' needs both 'x' and 'y' channels
+value missing channel
+  ERROR visual 'v1' mark 'value' needs a 'value' channel
+table with channels
+  ERROR visual 'v1' mark 'table' takes no x, y or series channel; it renders result columns in SELECT order
+series on wrong mark
+  ERROR visual 'v1' sets 'series', which only mark 'bar' or 'line' uses
+format unknown
+  ERROR visual 'v1' uses format 'sparkline'; this build renders currency, number, percent and text
+formats on wrong mark
+  ERROR visual 'v1' sets 'formats', which only mark 'table' uses
+formats unknown name
+  ERROR visual 'v1' formats column 'a' as 'sparkline'; this build renders currency, number, percent and text
+visual currency unsupported
+  ERROR visual 'v1' names currency 'XYZ', which this build does not support
+control kind
+  ERROR control 'c1' has kind 'radio'; this build implements 'select'
+control param missing
+  ERROR control 'c1' has no 'param'
+control param undeclared
+  ERROR control 'c1' publishes ':ghost', which is not a declared param
+control dataset unknown
+  ERROR control 'c1' names undefined dataset 'nope'
+tab name missing
+  ERROR tab[0] has no 'name'
+tab layout missing
+  ERROR tab[0] has no 'layout'
+layout leaf unknown visual
+  ERROR tab[0].layout.vert[0]: layout leaf names undefined visual 'ghost'
+layout leaf unknown control
+  ERROR tab[0].layout.vert[0]: layout leaf names undefined control 'ghost'
+layout node unrecognised
+  ERROR tab[0].layout.vert[0]: layout node must be vert, horiz, visual or control
+layout container not array
+  ERROR tab[0].layout.vert must be an array
+space illegal
+  ERROR tab[0].layout: 'space' is 'justify'; it must be between, around, evenly, start, end or center
+gap negative
+  ERROR tab[0].layout: 'gap' must be a non-negative number
+weight zero
+  ERROR tab[0].layout.vert[0]: 'weight' must be a positive number
+WARNING dead space
+  WARN  tab[0].layout: 'space' is ignored because every child is weighted, so there is no leftover room to distribute
