@@ -3,9 +3,15 @@
 ' usage:
 '   gdash_cli.bas --root <dir> validate <dashboard>
 '   gdash_cli.bas --root <dir> refresh  <dashboard> [dataset]
+'   gdash_cli.bas --root <dir> schedule
 '
 ' Authoring in this phase is the record file itself (design §10), so the CLI
 ' is what an author uses to check a record and pull data.
+'
+' `refresh` is a person asking, so it is always a manual trigger and always
+' operates on the DRAFT -- which is the only way a draft ever refreshes
+' (design §3). `schedule` runs one policy pass over every published
+' dashboard; gdash_scheduler.bas is that pass on a period.
 
 program main(args)
     load gdash_paths from "gdash_paths.bas"
@@ -32,8 +38,27 @@ program main(args)
 
     if verb = "" then
         print to error "usage: gdash --root <dir> validate|refresh <dashboard> [dataset]"
+        print to error "       gdash --root <dir> schedule"
         exit(2)
     end if
+
+    ' One pass, then exit. A cron entry and gdash_scheduler.bas are the same
+    ' code path; there is no server-side timer to hang either on (finding
+    ' G2-1).
+    if verb = "schedule" then
+        result = gdash_refresh.pass(p)
+        j = 0
+        while j < count(result.notes)
+            print(result.notes[j])
+            j += 1
+        end while
+        print("schedule: " + string(result.checked) + " checked, " + string(result.refreshed) + " refreshed, " + string(result.unchanged) + " unchanged, " + string(result.failed) + " failed")
+        if result.failed > 0 then
+            exit(1)
+        end if
+        exit(0)
+    end if
+
     if count(rest) < 1 then
         print to error "which dashboard?"
         exit(2)
@@ -87,12 +112,16 @@ program main(args)
                 print to error "no connection profile named '" + string(ds["profile"]) + "'"
                 exit(1)
             end if
-            r = gdash_refresh.run(p, name, rec, dn, prof)
+            r = gdash_refresh.run(p, name, "draft", rec, dn, prof, "manual")
             if not r.ok then
                 print to error "refresh failed: " + r.message
                 exit(1)
             end if
-            print("refreshed " + name + "." + dn + " -> version " + string(r.version))
+            if r.unchanged then
+                print("unchanged " + name + "." + dn + " (" + string(r.rows) + " rows, version " + string(r.version) + " stands)")
+            else
+                print("refreshed " + name + "." + dn + " -> version " + string(r.version))
+            end if
             j += 1
         end while
         exit(0)

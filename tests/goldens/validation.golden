@@ -29,7 +29,19 @@ dataset profile missing
 dataset binds a param
   ERROR dataset 'd1' binds param ':region'; params may appear only in visual queries
 dataset refresh policy
-  ERROR dataset 'd1' uses refresh policy 'interval'; this build implements 'manual' only
+  ERROR dataset 'd1' uses refresh policy 'hourly'; the policies are 'manual', 'on_open' and 'interval'
+interval without a period
+  ERROR dataset 'd1' refreshes on an interval but has no 'every' (seconds)
+interval period not a whole number
+  ERROR dataset 'd1' has 'every' of '0.5'; it must be a whole number of seconds, at least 1
+period without an interval
+  ERROR dataset 'd1' sets 'every' but its refresh policy is 'manual'; 'every' belongs only to 'interval'
+min_age without on_open
+  ERROR dataset 'd1' sets 'min_age' but its refresh policy is 'manual'; 'min_age' belongs only to 'on_open'
+min_age not a whole number
+  ERROR dataset 'd1' has 'min_age' of '-1'; it must be a whole number of seconds, zero or more
+too many datasets
+  ERROR dashboard has 12 datasets; SQLite attaches at most 10 beside the one being queried, so 11 is the limit
 money scale missing
   ERROR money column 'd1.amt' has no 'scale'
 money scale negative

@@ -37,8 +37,8 @@ library gdash_render
     ' scale. This phase requires the dataset's money columns to agree on a
     ' scale, which the reference record satisfies; a per-channel scale is
     ' GDASH-1's business along with the rest of the format map.
-    function money_scale(db_path)
-        cols = gdash_store.money_columns(db_path)
+    function money_scale(db_path, attach)
+        cols = gdash_store.money_columns(db_path, attach)
         names = keys(cols)
         if count(names) = 0 then
             return -1
@@ -135,7 +135,7 @@ library gdash_render
         return { xs: xs, names: names, df: df }
     end function
 
-    function render_visual(name, visual, rows, db_path)
+    function render_visual(name, visual, rows, db_path, attach)
         enc = visual["encoding"]
         mark = enc["mark"]
 
@@ -147,7 +147,7 @@ library gdash_render
         is_money = enc["format"] = "currency"
         scale = 0
         if mark = "table" then
-            probe = money_scale(db_path)
+            probe = money_scale(db_path, attach)
             if probe > 0 then
                 scale = probe
             else
@@ -155,7 +155,7 @@ library gdash_render
             end if
         end if
         if is_money then
-            scale = money_scale(db_path)
+            scale = money_scale(db_path, attach)
             if scale = -1 then
                 return _err("visual '" + name + "' formats as currency but its dataset declares no money column")
             end if

@@ -57,6 +57,11 @@ program main(args)
         exit(6)
     end if
 
+    ' The parent compares this against the hash it recorded last time and
+    ' skips the swap when nothing moved. Computed here because this is where
+    ' the fetched rows are; the parent only ever sees a staging file, and two
+    ' SQLite files with identical content are not necessarily identical bytes.
     print "rows=" + string(count(got.rows))
+    print "hash=" + gdash_store.content_hash(got.columns, got.rows)
     exit(0)
 end program

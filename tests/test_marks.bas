@@ -10,16 +10,16 @@ program main(args)
     root = args[0]
     p = gdash_paths.roles(root)
     rec = gdash_record.load_file("dashboards/sales/draft.json").record
-    r = gdash_refresh.run(p, "sales", rec, "orders", { kind: "fixture", path: "fixtures/orders.json" })
+    r = gdash_refresh.run(p, "sales", "draft", rec, "orders", { kind: "fixture", path: "fixtures/orders.json" }, "manual")
     s = gdash_test.ok(s, r.ok, "dataset refreshed -- " + r.message)
-    live = gdash_paths.dataset_db(p, "sales", "orders")
+    live = gdash_paths.dataset_db(p, "sales", "draft", "orders")
 
     ' --- series: one query fans out into one chart series per value ---
     sq = "select month as month, region as region, sum(amount) as total from orders group by month, region order by month, region"
     v = { dataset: "orders", sql: sq, encoding: { mark: "line", x: "month", y: "total", series: "region", format: "currency" } }
-    res = gdash_store.select_rows(live, sq, {}, gdash_render.exact_columns(v))
+    res = gdash_store.select_rows(live, sq, {}, gdash_render.exact_columns(v), {})
     s = gdash_test.ok(s, res.ok, "series query runs")
-    frag = gdash_render.render_visual("trend", v, res.rows, live)
+    frag = gdash_render.render_visual("trend", v, res.rows, live, {})
     s = gdash_test.contains_text(s, frag, "<svg", "line mark renders SVG")
     s = gdash_test.ok(s, not contains(frag, "gdash-error"), "line rendered without error -- " + mid(frag, 0, 120))
 
@@ -36,20 +36,20 @@ program main(args)
 
     ' bar takes the same series channel off the same record shape
     vb = { dataset: "orders", sql: sq, encoding: { mark: "bar", x: "month", y: "total", series: "region", format: "currency" } }
-    bfrag = gdash_render.render_visual("trendbar", vb, res.rows, live)
+    bfrag = gdash_render.render_visual("trendbar", vb, res.rows, live, {})
     s = gdash_test.contains_text(s, bfrag, "<svg", "bar renders with series too")
     s = gdash_test.ok(s, bfrag != frag, "bar and line are different renders")
 
     ' a series channel naming no column is refused
     vbad = { dataset: "orders", sql: sq, encoding: { mark: "line", x: "month", y: "total", series: "ghost" } }
-    s = gdash_test.contains_text(s, gdash_render.render_visual("x", vbad, res.rows, live), "which the query does not return", "bad series channel refused")
+    s = gdash_test.contains_text(s, gdash_render.render_visual("x", vbad, res.rows, live, {}), "which the query does not return", "bad series channel refused")
 
     ' --- table: SELECT order, per-column formats ---
     tq = "select region as region, month as month, sum(amount) as total from orders group by region, month order by region, month"
     vt = { dataset: "orders", sql: tq, encoding: { mark: "table", title: "Detail", formats: { total: "currency" } } }
-    tres = gdash_store.select_rows(live, tq, {}, gdash_render.exact_columns(vt))
+    tres = gdash_store.select_rows(live, tq, {}, gdash_render.exact_columns(vt), {})
     s = gdash_test.eq(s, string(gdash_render.exact_columns(vt)), string(["total"]), "currency column crosses exactly")
-    tfrag = gdash_render.render_visual("detail", vt, tres.rows, live)
+    tfrag = gdash_render.render_visual("detail", vt, tres.rows, live, {})
     s = gdash_test.contains_text(s, tfrag, "<table>", "table mark renders a table")
     s = gdash_test.contains_text(s, tfrag, "$1,250.75", "money column formatted as currency")
     ' SELECT order preserved, and the exactness helper column is not shown
@@ -60,7 +60,7 @@ program main(args)
 
     ' formats accept the long form with options
     vt2 = { dataset: "orders", sql: tq, encoding: { mark: "table", formats: { total: { name: "number", decimals: 0 } } } }
-    t2 = gdash_render.render_visual("d2", vt2, tres.rows, live)
+    t2 = gdash_render.render_visual("d2", vt2, tres.rows, live, {})
     s = gdash_test.ok(s, not contains(t2, "$"), "number format is not currency")
 
     ' an unformatted column renders as its raw text

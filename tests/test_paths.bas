@@ -31,13 +31,48 @@ program main(args)
 
     ' Role gdash_paths.
     s = gdash_test.eq(s, gdash_paths.record_file(p, "sales"), root + "/lib/dashboards/sales/draft.json", "record_file")
-    s = gdash_test.eq(s, gdash_paths.dataset_db(p, "sales", "orders"), root + "/cache/sales/draft/orders.db", "dataset_db")
-    s = gdash_test.eq(s, gdash_paths.dataset_staging(p, "sales", "orders"), root + "/cache/sales/draft/orders__staging.db", "dataset_staging")
-    s = gdash_test.eq(s, gdash_paths.version_file(p, "sales"), root + "/cache/sales/draft/version", "version_file")
+    s = gdash_test.eq(s, gdash_paths.dataset_db(p, "sales", "draft", "orders"), root + "/cache/sales/draft/orders.db", "dataset_db")
+    s = gdash_test.eq(s, gdash_paths.dataset_staging(p, "sales", "draft", "orders"), root + "/cache/sales/draft/orders__staging.db", "dataset_staging")
+    s = gdash_test.eq(s, gdash_paths.version_file(p, "sales", "draft"), root + "/cache/sales/draft/version", "version_file")
 
     ' The staging file sits beside its live file, so the swap is a same-
     ' filesystem rename (atomic_replace refuses to cross devices).
-    s = gdash_test.eq(s, gdash_paths.data_dir(p, "sales"), root + "/cache/sales/draft", "staging shares live dir")
+    s = gdash_test.eq(s, gdash_paths.data_dir(p, "sales", "draft"), root + "/cache/sales/draft", "staging shares live dir")
+
+    ' Draft and published data never share a directory (design §7).
+    s = gdash_test.eq(s, gdash_paths.data_dir(p, "sales", "published"), root + "/cache/sales/published", "published data_dir")
+    s = gdash_test.ok(s, gdash_paths.dataset_db(p, "sales", "draft", "orders") != gdash_paths.dataset_db(p, "sales", "published", "orders"), "draft and published datasets are different files")
+    s = gdash_test.eq(s, gdash_paths.dataset_state(p, "sales", "published", "orders"), root + "/cache/sales/published/orders.state.json", "dataset_state")
+    s = gdash_test.eq(s, gdash_paths.dataset_lock(p, "sales", "draft", "orders"), root + "/cache/sales/draft/orders.lock", "dataset_lock")
+
+    ' Publication: no `current` means draft, which is every dashboard until
+    ' GDASH-3 ships publish.
+    made = gdash_paths.ensure_dir(gdash_paths.dashboard_dir(p, "pubtest"))
+    pub = gdash_paths.publication(p, "pubtest")
+    s = gdash_test.eq(s, pub.mode, "draft", "no pointer means draft")
+    s = gdash_test.ok(s, not pub.published, "no pointer means not published")
+    s = gdash_test.eq(s, pub.record_file, gdash_paths.record_file(p, "pubtest"), "draft serves draft.json")
+
+    ' A pointer naming a real snapshot publishes it.
+    made = gdash_paths.ensure_dir(gdash_paths.snapshot_dir(p, "pubtest"))
+    sf {file} = gdash_paths.snapshot_file(p, "pubtest", "0001.json")
+    write(sf, "{}")
+    cf {file} = gdash_paths.current_pointer(p, "pubtest")
+    write(cf, "0001.json" + chr(10))
+    pub = gdash_paths.publication(p, "pubtest")
+    s = gdash_test.eq(s, pub.mode, "published", "a pointer to a real snapshot publishes")
+    s = gdash_test.eq(s, pub.record_file, gdash_paths.snapshot_file(p, "pubtest", "0001.json"), "published serves the snapshot")
+
+    ' A pointer to a snapshot that is not there is not a published dashboard;
+    ' it is a broken one, and serving the draft instead of nothing is the
+    ' stale-but-coherent posture applied to the record.
+    write(cf, "9999.json")
+    s = gdash_test.eq(s, gdash_paths.publication(p, "pubtest").mode, "draft", "a dangling pointer falls back to draft")
+
+    ' The pointer names a snapshot, never a path. Otherwise `current` holding
+    ' "../../../etc/gdash/connections.json" would read credentials as a record.
+    write(cf, "../../../etc/passwd")
+    s = gdash_test.eq(s, gdash_paths.publication(p, "pubtest").mode, "draft", "a pointer with a path separator is refused")
 
     ' ensure_dir is idempotent and creates parents.
     deep = root + "/cache/sales/draft/nested/deeper"

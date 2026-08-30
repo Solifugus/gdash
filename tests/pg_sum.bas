@@ -10,9 +10,9 @@ program main(args)
     db = args[0]
     region = args[1]
     if region = "*" then
-        r = gdash_store.select_rows(db, "select sum(amount) as total from orders", {}, ["total"])
+        r = gdash_store.select_rows(db, "select sum(amount) as total from orders", {}, ["total"], {})
     else
-        r = gdash_store.select_rows(db, "select sum(amount) as total from orders where region = :region", { region: region }, ["total"])
+        r = gdash_store.select_rows(db, "select sum(amount) as total from orders where region = :region", { region: region }, ["total"], {})
     end if
     if not r.ok then
         print to error "query failed: " + r.message

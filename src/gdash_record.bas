@@ -13,6 +13,7 @@ library gdash_record
 
     load gdash_sql from "gdash_sql.bas"
     load gdash_format from "gdash_format.bas"
+    load gdash_store from "gdash_store.bas"
 
     function _get(r, k)
         return r[k]
@@ -207,6 +208,16 @@ library gdash_record
             datasets = {}
         end if
         ds_names = keys(datasets)
+
+        ' SQLite allows ten attached databases besides `main` (finding G2-4),
+        ' and a visual query attaches every sibling dataset so it can name
+        ' them unqualified. Refused at LOAD time rather than at render time:
+        ' a dashboard that validates and then fails on its twelfth dataset
+        ' would break the load-time red/green promise (design §1).
+        if count(ds_names) > gdash_store.attach_limit() + 1 then
+            errors = concat(errors, ["dashboard has " + string(count(ds_names)) + " datasets; SQLite attaches at most " + string(gdash_store.attach_limit()) + " beside the one being queried, so " + string(gdash_store.attach_limit() + 1) + " is the limit"])
+        end if
+
         i = 0
         while i < count(ds_names)
             dn = ds_names[i]
@@ -232,9 +243,34 @@ library gdash_record
             if not _has(ds, "profile") then
                 errors = concat(errors, ["dataset '" + dn + "' has no 'profile'"])
             end if
+            ' `refresh` stays a STRING and gains sibling keys, because
+            ' format: 1 is a published contract that documented it as one.
+            pol = "manual"
             if _has(ds, "refresh") then
-                if ds["refresh"] != "manual" then
-                    errors = concat(errors, ["dataset '" + dn + "' uses refresh policy '" + string(ds["refresh"]) + "'; this build implements 'manual' only"])
+                pol = string(ds["refresh"])
+                if pol != "manual" and pol != "on_open" and pol != "interval" then
+                    errors = concat(errors, ["dataset '" + dn + "' uses refresh policy '" + pol + "'; the policies are 'manual', 'on_open' and 'interval'"])
+                end if
+            end if
+            if pol = "interval" then
+                ev = ds["every"]
+                if is_unknown(ev) then
+                    errors = concat(errors, ["dataset '" + dn + "' refreshes on an interval but has no 'every' (seconds)"])
+                else if type(ev) != "number" or ev < 1 or ev != round(ev, 0) then
+                    errors = concat(errors, ["dataset '" + dn + "' has 'every' of '" + string(ev) + "'; it must be a whole number of seconds, at least 1"])
+                end if
+            else if _has(ds, "every") then
+                ' A stray `every` beside a manual dataset reads as a schedule
+                ' that will never run, which is worse than no schedule at all.
+                errors = concat(errors, ["dataset '" + dn + "' sets 'every' but its refresh policy is '" + pol + "'; 'every' belongs only to 'interval'"])
+            end if
+            if pol != "on_open" and _has(ds, "min_age") then
+                errors = concat(errors, ["dataset '" + dn + "' sets 'min_age' but its refresh policy is '" + pol + "'; 'min_age' belongs only to 'on_open'"])
+            end if
+            if pol = "on_open" and _has(ds, "min_age") then
+                ma = ds["min_age"]
+                if type(ma) != "number" or ma < 0 or ma != round(ma, 0) then
+                    errors = concat(errors, ["dataset '" + dn + "' has 'min_age' of '" + string(ma) + "'; it must be a whole number of seconds, zero or more"])
                 end if
             end if
             ' money columns must declare a non-negative integer scale

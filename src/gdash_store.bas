@@ -14,6 +14,7 @@
 library gdash_store
 
     load sqlite
+    load crypto
     load gdash_sql from "gdash_sql.bas"
 
     function _digits_only(s)
@@ -254,23 +255,47 @@ library gdash_store
         return { ok: true, message: "", rejected: 0 }
     end function
 
-    function money_columns(path)
+    ' Every dataset file carries its own _gdash_meta, and an UNQUALIFIED read
+    ' of it across attached schemas resolves silently to `main` (finding
+    ' G2-3) -- which would render one dataset's money column at another
+    ' dataset's scale, with no error anywhere. So every metadata read is
+    ' schema-qualified, and it is qualified here, inside the module, where no
+    ' caller can forget to.
+    function _meta_from(db, schema, into)
+        out = into
         on error goto next
-        db = sqlite.connect(path)
+        rows = sqlite.query(db, "select column_name, scale from " + _quote_ident(schema) + "._gdash_meta where kind = 'money'")
         if error then
-            return {}
+            return out
         end if
-        rows = sqlite.query(db, "select column_name, scale from _gdash_meta where kind = 'money'")
-        sqlite.close(db)
-        if error then
-            return {}
-        end if
-        out = {}
         i = 0
         while i < count(rows)
             out[rows[i].column_name] = rows[i].scale
             i += 1
         end while
+        return out
+    end function
+
+    ' Scales for every money column reachable from this visual: the primary
+    ' dataset's own, plus each attached sibling's. The primary is read LAST so
+    ' it wins a name collision -- it is the dataset the visual named.
+    function money_columns(path, attach)
+        on error goto next
+        db = sqlite.connect(path)
+        if error then
+            return {}
+        end if
+        out = {}
+        names = keys(attach)
+        i = 0
+        while i < count(names)
+            if _attach_one(db, names[i], attach[names[i]]) then
+                out = _meta_from(db, names[i], out)
+            end if
+            i += 1
+        end while
+        out = _meta_from(db, "main", out)
+        sqlite.close(db)
         return out
     end function
 
@@ -294,10 +319,53 @@ library gdash_store
         return out
     end function
 
+    ' SQLite allows ten attached databases besides `main` (finding G2-4); the
+    ' record validator refuses a dashboard with more datasets than that, so
+    ' reaching the limit here means the validator was bypassed.
+    function attach_limit()
+        return 10
+    end function
+
+    function _attach_one(db, alias, file)
+        on error goto next
+        sqlite.exec(db, "attach database ? as " + _quote_ident(alias), [file])
+        if error then
+            return false
+        end if
+        return true
+    end function
+
+    ' A dataset's content, as one string, hashed. Used to decide whether a
+    ' refresh actually changed anything -- an unchanged refresh must not bump
+    ' the version, because every open tab reloads when it does.
+    '
+    ' sha256() returns RAW BYTES and len() will lie about them (finding G2-5);
+    ' crypto.sha256_hex is the form that may be stored, compared and encoded.
+    function content_hash(column_names, rows)
+        parts = [join(column_names, chr(31))]
+        r = 0
+        while r < count(rows)
+            row = rows[r]
+            cells = []
+            c = 0
+            while c < count(row)
+                cells = concat(cells, [string(row[c])])
+                c += 1
+            end while
+            parts = concat(parts, [join(cells, chr(31))])
+            r += 1
+        end while
+        return crypto.sha256_hex(join(parts, chr(30)))
+    end function
+
     ' Run a visual query. `exact` names result columns whose values must not
     ' cross the gBASIC number boundary; each comes back additionally as
     ' <name>__text, cast in SQLite where the arithmetic was already exact.
-    function select_rows(path, sql, values, exact)
+    '
+    ' `attach` maps a sibling dataset's name to its file. Unqualified table
+    ' names resolve across attached schemas (finding G2-2), so a visual query
+    ' joining two datasets reads exactly like one over a single dataset.
+    function select_rows(path, sql, values, exact, attach)
         scanned = gdash_sql.scan(sql)
         args = gdash_sql.args_for(scanned, values)
         stmt = scanned.sql
@@ -316,6 +384,12 @@ library gdash_store
         if error then
             return { ok: false, rows: [], message: "dataset not available" }
         end if
+        anames = keys(attach)
+        i = 0
+        while i < count(anames)
+            joined = _attach_one(db, anames[i], attach[anames[i]])
+            i += 1
+        end while
         rows = sqlite.query(db, stmt, args)
         if error then
             msg = error.message

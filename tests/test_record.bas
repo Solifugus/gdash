@@ -70,9 +70,33 @@ program main(args)
     bad8 = { format: 99, name: "b", datasets: {}, params: {}, visuals: {}, tabs: [{ layout: { vert: [] } }] }
     s = gdash_test.contains_text(s, join(gdash_record.validate(bad8), "|"), "unsupported record format", "unknown format version refused")
 
-    ' A refresh policy this build does not implement is refused, not ignored.
-    bad9 = { format: 1, name: "b", datasets: { d1: { profile: "p", sql: "select 1", refresh: "interval" } }, params: {}, visuals: {}, tabs: [{ layout: { vert: [] } }] }
-    s = gdash_test.contains_text(s, join(gdash_record.validate(bad9), "|"), "manual", "unimplemented refresh policy refused")
+    ' A refresh policy that does not exist is refused, not ignored.
+    bad9 = { format: 1, name: "b", datasets: { d1: { profile: "p", sql: "select 1", refresh: "hourly" } }, params: {}, visuals: {}, tabs: [{ layout: { vert: [] } }] }
+    s = gdash_test.contains_text(s, join(gdash_record.validate(bad9), "|"), "the policies are", "an invented refresh policy refused")
+
+    ' An interval without a period is a schedule that cannot run.
+    bad9b = { format: 1, name: "b", datasets: { d1: { profile: "p", sql: "select 1", refresh: "interval" } }, params: {}, visuals: {}, tabs: [{ layout: { vert: [] } }] }
+    s = gdash_test.contains_text(s, join(gdash_record.validate(bad9b), "|"), "no 'every'", "interval without a period refused")
+
+    ' A period beside a policy that will never use it reads as a schedule
+    ' that silently does nothing, which is worse than no schedule at all.
+    bad9c = { format: 1, name: "b", datasets: { d1: { profile: "p", sql: "select 1", refresh: "manual", every: 300 } }, params: {}, visuals: {}, tabs: [{ layout: { vert: [] } }] }
+    s = gdash_test.contains_text(s, join(gdash_record.validate(bad9c), "|"), "belongs only to 'interval'", "a stray 'every' is refused")
+
+    ' A valid interval dataset passes.
+    good9 = { format: 1, name: "b", access: "open", datasets: { d1: { profile: "p", sql: "select 1", refresh: "interval", every: 300 } }, params: {}, visuals: {}, tabs: [{ name: "t", layout: { vert: [] } }] }
+    s = gdash_test.eq(s, count(gdash_record.validate(good9)), 0, "a well-formed interval dataset validates")
+
+    ' Eleven datasets is the ceiling; twelve is refused at load rather than
+    ' at render (finding G2-4).
+    many = {}
+    mi = 0
+    while mi < 12
+        many["d" + string(mi)] = { profile: "p", sql: "select 1" }
+        mi += 1
+    end while
+    toomany = { format: 1, name: "b", datasets: many, params: {}, visuals: {}, tabs: [{ name: "t", layout: { vert: [] } }] }
+    s = gdash_test.contains_text(s, join(gdash_record.validate(toomany), "|"), "SQLite attaches at most", "a twelfth dataset is refused at load")
 
     ' --- load failures are values, not raises ---
     miss = gdash_record.load_file(root + "/nope.json")

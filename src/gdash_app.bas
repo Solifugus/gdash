@@ -10,6 +10,7 @@ library gdash_app
     load gdash_store from "gdash_store.bas"
     load gdash_render from "gdash_render.bas"
     load gdash_refresh from "gdash_refresh.bas"
+    load gdash_sched from "gdash_sched.bas"
 
     function _root_of(req)
         return default(env("GDASH_ROOT"), "")
@@ -48,46 +49,70 @@ library gdash_app
         return rec["access"] = "open"
     end function
 
-    ' Returns { ok, rec, p, response } -- response set only when refusing.
+    ' Returns { ok, rec, p, mode, response } -- response set only when
+    ' refusing. A published dashboard serves its snapshot and its published
+    ' data; one that has never been published serves the draft, which is
+    ' every dashboard until GDASH-3 ships publish.
     function _load_dashboard(req, name)
         p = paths_for(req)
-        if not contains(name, "/") then
-            loaded = gdash_record.load_file(gdash_paths.record_file(p, name))
-        else
-            return { ok: false, rec: {}, p: p, response: _refuse(400, "bad dashboard name") }
+        if contains(name, "/") then
+            return { ok: false, rec: {}, p: p, mode: "draft", response: _refuse(400, "bad dashboard name") }
         end if
+        pub = gdash_paths.publication(p, name)
+        loaded = gdash_record.load_file(pub.record_file)
         if not loaded.ok then
             if contains(join(loaded.errors, "|"), "not found") then
-                return { ok: false, rec: {}, p: p, response: _refuse(404, "no such dashboard: " + name) }
+                return { ok: false, rec: {}, p: p, mode: pub.mode, response: _refuse(404, "no such dashboard: " + name) }
             end if
-            return { ok: false, rec: {}, p: p, response: _refuse(500, "dashboard is invalid: " + join(loaded.errors, "; ")) }
+            return { ok: false, rec: {}, p: p, mode: pub.mode, response: _refuse(500, "dashboard is invalid: " + join(loaded.errors, "; ")) }
         end if
         if not _access_ok(loaded.record) then
-            return { ok: false, rec: {}, p: p, response: _refuse(403, "this dashboard does not grant open access") }
+            return { ok: false, rec: {}, p: p, mode: pub.mode, response: _refuse(403, "this dashboard does not grant open access") }
         end if
-        return { ok: true, rec: loaded.record, p: p, response: {} }
+        return { ok: true, rec: loaded.record, p: p, mode: pub.mode, response: {} }
     end function
 
-    function _visual_fragment(p, name, rec, vis_name, values)
+    ' Every OTHER dataset of this dashboard that exists on disk, so a visual
+    ' query may name it. Unqualified table names resolve across attached
+    ' schemas (finding G2-2), which is why a cross-dataset join needs no
+    ' syntax in the record and no prefix in the SQL.
+    function _attach_for(p, name, mode, rec, primary)
+        out = {}
+        names = keys(rec["datasets"])
+        i = 0
+        while i < count(names)
+            if names[i] != primary then
+                path = gdash_paths.dataset_db(p, name, mode, names[i])
+                if gdash_paths.path_exists(path) then
+                    out[names[i]] = path
+                end if
+            end if
+            i += 1
+        end while
+        return out
+    end function
+
+    function _visual_fragment(p, name, mode, rec, vis_name, values)
         v = rec["visuals"][vis_name]
-        db = gdash_paths.dataset_db(p, name, v["dataset"])
+        db = gdash_paths.dataset_db(p, name, mode, v["dataset"])
         if not gdash_paths.path_exists(db) then
             return "<div class=" + chr(34) + "gdash-empty" + chr(34) + ">No data yet -- this dataset has never refreshed.</div>"
         end if
-        res = gdash_store.select_rows(db, v["sql"], values, gdash_render.exact_columns(v))
+        attach = _attach_for(p, name, mode, rec, v["dataset"])
+        res = gdash_store.select_rows(db, v["sql"], values, gdash_render.exact_columns(v), attach)
         if not res.ok then
             return "<div class=" + chr(34) + "gdash-error" + chr(34) + ">query failed: " + res.message + "</div>"
         end if
-        return gdash_render.render_visual(vis_name, v, res.rows, db)
+        return gdash_render.render_visual(vis_name, v, res.rows, db, attach)
     end function
 
-    function _control_fragment(p, name, rec, ctl_name, values)
+    function _control_fragment(p, name, mode, rec, ctl_name, values)
         c = rec["controls"][ctl_name]
         opts = []
         if not is_unknown(c["sql"]) then
-            db = gdash_paths.dataset_db(p, name, c["dataset"])
+            db = gdash_paths.dataset_db(p, name, mode, c["dataset"])
             if gdash_paths.path_exists(db) then
-                res = gdash_store.select_rows(db, c["sql"], values, [])
+                res = gdash_store.select_rows(db, c["sql"], values, [], _attach_for(p, name, mode, rec, c["dataset"]))
                 if res.ok then
                     i = 0
                     while i < count(res.rows)
@@ -135,28 +160,28 @@ library gdash_app
         return "flex:" + string(w) + " 1 0"
     end function
 
-    function _layout(p, name, rec, node, values)
+    function _layout(p, name, mode, rec, node, values)
         if not is_unknown(node["vert"]) then
-            return _container(p, name, rec, node, node["vert"], values, "gdash-vert")
+            return _container(p, name, mode, rec, node, node["vert"], values, "gdash-vert")
         end if
         if not is_unknown(node["horiz"]) then
-            return _container(p, name, rec, node, node["horiz"], values, "gdash-horiz")
+            return _container(p, name, mode, rec, node, node["horiz"], values, "gdash-horiz")
         end if
         if not is_unknown(node["visual"]) then
             vn = node["visual"]
-            return "<div class=" + chr(34) + "gdash-cell" + chr(34) + " style=" + chr(34) + _child_style(node) + chr(34) + " data-visual=" + chr(34) + vn + chr(34) + ">" + _visual_fragment(p, name, rec, vn, values) + "</div>"
+            return "<div class=" + chr(34) + "gdash-cell" + chr(34) + " style=" + chr(34) + _child_style(node) + chr(34) + " data-visual=" + chr(34) + vn + chr(34) + ">" + _visual_fragment(p, name, mode, rec, vn, values) + "</div>"
         end if
         if not is_unknown(node["control"]) then
-            return "<div class=" + chr(34) + "gdash-cell" + chr(34) + " style=" + chr(34) + _child_style(node) + chr(34) + ">" + _control_fragment(p, name, rec, node["control"], values) + "</div>"
+            return "<div class=" + chr(34) + "gdash-cell" + chr(34) + " style=" + chr(34) + _child_style(node) + chr(34) + ">" + _control_fragment(p, name, mode, rec, node["control"], values) + "</div>"
         end if
         return ""
     end function
 
-    function _container(p, name, rec, node, kids, values, cls)
+    function _container(p, name, mode, rec, node, kids, values, cls)
         out = []
         i = 0
         while i < count(kids)
-            out = concat(out, [_layout(p, name, rec, kids[i], values)])
+            out = concat(out, [_layout(p, name, mode, rec, kids[i], values)])
             i += 1
         end while
 
@@ -179,22 +204,65 @@ library gdash_app
         return "<div class=" + chr(34) + cls + chr(34) + " style=" + chr(34) + style + chr(34) + ">" + join(out, "") + "</div>"
     end function
 
-    function _stale_note(p, name, rec)
-        ds = keys(rec["datasets"])
-        if count(ds) = 0 then
-            return ""
-        end if
-        db = gdash_paths.dataset_db(p, name, ds[0])
-        if not gdash_paths.path_exists(db) then
-            return "never refreshed"
+    function _when(at)
+        if at = 0 then
+            return "never"
         end if
         on error goto next
-        f {file} = db
-        t = file_mtime(f)
+        t = from_epoch(at)
         if error then
-            return ""
+            return string(at)
         end if
-        return "data as of " + string(t)
+        return string(t)
+    end function
+
+    ' One line per dataset, not one line for the dashboard. With two datasets
+    ' a single "data as of" is a statement about whichever one the code
+    ' happened to look at, and it stops being true the moment they diverge --
+    ' which is exactly when a viewer most needs it to be true.
+    '
+    ' A failed refresh is surfaced here too. Stale-but-coherent is only a
+    ' virtue if the viewer is told the data is stale; otherwise it is just a
+    ' dashboard quietly showing last week.
+    function _status_block(p, name, mode, rec)
+        ds = keys(rec["datasets"])
+        rows = []
+        i = 0
+        while i < count(ds)
+            st = gdash_sched.read_state(gdash_paths.dataset_state(p, name, mode, ds[i]))
+            line = _html_escape(ds[i]) + ": data as of " + _html_escape(_when(st.last_success))
+            cls = "gdash-stale-ok"
+            if st.last_error != "" then
+                cls = "gdash-stale-bad"
+                line = line + " — last refresh failed: " + _html_escape(st.last_error)
+            end if
+            rows = concat(rows, ["<span class=" + chr(34) + cls + chr(34) + ">" + line + "</span>"])
+            i += 1
+        end while
+        return join(rows, "")
+    end function
+
+    ' The page-open side of the `on_open` policy. It files a REQUEST and
+    ' returns; it does not fetch. The whole point of the two-tier model
+    ' (design §3) is that the expensive fetch stays off the request path, and
+    ' fetching inline here would pin a worker for exactly as long as the
+    ' source is slow. The scheduler performs it; SSE tells the open tabs.
+    function _request_opens(p, name, mode, rec)
+        if mode != "published" then
+            return 0
+        end if
+        ds = keys(rec["datasets"])
+        now = epoch()
+        i = 0
+        while i < count(ds)
+            statepath = gdash_paths.dataset_state(p, name, mode, ds[i])
+            st = gdash_sched.read_state(statepath)
+            if gdash_sched.should_request(rec["datasets"][ds[i]], st, now) then
+                wrote = gdash_sched.write_state(statepath, gdash_sched.with_request(st, now))
+            end if
+            i += 1
+        end while
+        return 0
     end function
 
     function _shim()
@@ -225,7 +293,8 @@ library gdash_app
         s = s + ".gdash-value-number{font-size:28px;font-variant-numeric:tabular-nums}"
         s = s + ".gdash-error{color:#a00;border:1px solid #a00;border-radius:6px;padding:8px;font-size:13px}"
         s = s + ".gdash-empty{color:#666;font-style:italic;padding:8px}"
-        s = s + ".gdash-stale{color:#666;font-size:12px;margin-bottom:12px}"
+        s = s + ".gdash-stale{color:#666;font-size:12px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:16px}"
+        s = s + ".gdash-stale-bad{color:#a00}"
         s = s + ".gdash-tabs{display:flex;gap:4px;border-bottom:1px solid #ddd;margin-bottom:16px}"
         s = s + ".gdash-tab{border:0;background:none;padding:8px 14px;cursor:pointer;font-size:14px;color:#555;border-bottom:2px solid transparent}"
         s = s + ".gdash-tab-active{color:#111;border-bottom-color:#333;font-weight:600}"
@@ -243,6 +312,8 @@ library gdash_app
         end if
         rec = got.rec
         p = got.p
+        mode = got.mode
+        asked = _request_opens(p, name, mode, rec)
         values = gdash_record.resolve_params(rec, req.query)
 
         tabs = rec["tabs"]
@@ -262,7 +333,7 @@ library gdash_app
                 hidden = ""
             end if
             navs = concat(navs, ["<button class=" + chr(34) + "gdash-tab" + sel + chr(34) + " data-tab=" + chr(34) + string(ti) + chr(34) + " onclick=" + chr(34) + "gdashTab(this)" + chr(34) + ">" + _html_escape(tname) + "</button>"])
-            panes = concat(panes, ["<div class=" + chr(34) + "gdash-pane" + chr(34) + " data-pane=" + chr(34) + string(ti) + chr(34) + hidden + ">" + _layout(p, name, rec, tabs[ti]["layout"], values) + "</div>"])
+            panes = concat(panes, ["<div class=" + chr(34) + "gdash-pane" + chr(34) + " data-pane=" + chr(34) + string(ti) + chr(34) + hidden + ">" + _layout(p, name, mode, rec, tabs[ti]["layout"], values) + "</div>"])
             ti += 1
         end while
         tabbar = ""
@@ -273,7 +344,7 @@ library gdash_app
         q = chr(34)
         html = "<!doctype html><html><head><meta charset=" + q + "utf-8" + q + "><title>" + string(default(rec["title"], name)) + "</title><style>" + _style() + "</style></head><body>"
         html = html + "<h1>" + string(default(rec["title"], name)) + "</h1>"
-        html = html + "<div class=" + q + "gdash-stale" + q + ">" + _stale_note(p, name, rec) + "</div>"
+        html = html + "<div class=" + q + "gdash-stale" + q + ">" + _status_block(p, name, mode, rec) + "</div>"
         html = html + body
         html = html + "<script>" + _shim() + "</script>"
         html = html + "</body></html>"
@@ -290,6 +361,7 @@ library gdash_app
         end if
         rec = got.rec
         p = got.p
+        mode = got.mode
 
         supplied = req["json"]
         if is_unknown(supplied) then
@@ -315,7 +387,7 @@ library gdash_app
         frags = {}
         i = 0
         while i < count(moving)
-            frags[moving[i]] = _visual_fragment(p, name, rec, moving[i], values)
+            frags[moving[i]] = _visual_fragment(p, name, mode, rec, moving[i], values)
             i += 1
         end while
         return _json({ fragments: frags, rerendered: moving })
@@ -328,6 +400,7 @@ library gdash_app
         end if
         rec = got.rec
         p = got.p
+        mode = got.mode
 
         profiles = gdash_refresh.load_profiles(p)
         ds_names = keys(rec["datasets"])
@@ -340,7 +413,10 @@ library gdash_app
             if is_unknown(prof) then
                 return _refuse(500, "no connection profile named '" + string(pname) + "'")
             end if
-            r = gdash_refresh.run(p, name, rec, dn, prof)
+            ' A person pressed the button, so the trigger is manual whatever
+            ' the policy says -- including on a draft, which is the only way a
+            ' draft ever refreshes at all (design §3).
+            r = gdash_refresh.run(p, name, mode, rec, dn, prof, "manual")
             if not r.ok then
                 ' The old dataset is still there and still correct.
                 return _refuse(502, r.message)
@@ -359,7 +435,7 @@ library gdash_app
             return 0
         end if
         p = got.p
-        vfile = gdash_paths.version_file(p, name)
+        vfile = gdash_paths.version_file(p, name, got.mode)
         seen = gdash_store.read_version(vfile)
 
         alive = emit(req, "event: hello" + chr(10) + "data: " + string(seen) + chr(10) + chr(10))

@@ -92,33 +92,97 @@ library gdash_paths
     end function
 
     ' Precious state (design §6): /var/lib is the entire backup set.
-    function dashboard_dir(p, name)
-        return _join(_join(p.state_dir, "dashboards"), name)
+    function dashboards_dir(p)
+        return _join(p.state_dir, "dashboards")
     end function
 
-    ' GDASH-0 is draft-only: no publish, no snapshots (GDASH-3 owns those), and
-    ' draft datasets refresh manually only (design §3) -- which is exactly this
-    ' phase's refresh policy, so operating entirely in draft needs no deviation
-    ' from the §6 layout.
+    function dashboard_dir(p, name)
+        return _join(dashboards_dir(p), name)
+    end function
+
+    ' The draft is the one mutable record; editing touches it and nothing else
+    ' (design §7). Draft datasets refresh manually only -- see `publication`
+    ' for how the served record, and therefore the policy, is decided.
     function record_file(p, name)
         return _join(dashboard_dir(p, name), "draft.json")
     end function
 
-    ' Disposable cache: may be deleted whenever the service is stopped.
-    function data_dir(p, name)
-        return _join(_join(p.cache_dir, name), "draft")
+    ' Design §7: publish copies the draft to snapshots/NNNN.json and
+    ' atomically repoints `current`. GDASH-2 implements the READ side only --
+    ' resolving the pointer -- because without it the scheduler has nothing to
+    ' schedule. Every write (publish, rollback, diff, pinning) is GDASH-3's,
+    ' and if it rules the pointer differently, this is the one function that
+    ' changes.
+    function snapshot_dir(p, name)
+        return _join(dashboard_dir(p, name), "snapshots")
     end function
 
-    function dataset_db(p, name, ds)
-        return _join(data_dir(p, name), ds + ".db")
+    function current_pointer(p, name)
+        return _join(dashboard_dir(p, name), "current")
     end function
 
-    function dataset_staging(p, name, ds)
-        return _join(data_dir(p, name), ds + "__staging.db")
+    function snapshot_file(p, name, leaf)
+        return _join(snapshot_dir(p, name), leaf)
     end function
 
-    function version_file(p, name)
-        return _join(data_dir(p, name), "version")
+    ' Which record is served, and therefore which data directory applies.
+    ' Returns { mode, record_file, published }. A dashboard with no `current`
+    ' is a draft: that is the state of every dashboard until GDASH-3 ships,
+    ' and it is also the honest answer for one that has never been published.
+    function publication(p, name)
+        ptr = current_pointer(p, name)
+        if not path_exists(ptr) then
+            return { mode: "draft", record_file: record_file(p, name), published: false }
+        end if
+        on error goto next
+        cf {file} = ptr
+        leaf = trim(read(cf))
+        if error or leaf = "" then
+            return { mode: "draft", record_file: record_file(p, name), published: false }
+        end if
+        ' The pointer names a snapshot inside the dashboard's own snapshot
+        ' directory. It never names a path: a `current` holding "../../etc"
+        ' would otherwise read a file outside the dashboard entirely.
+        if contains(leaf, "/") then
+            return { mode: "draft", record_file: record_file(p, name), published: false }
+        end if
+        snap = snapshot_file(p, name, leaf)
+        if not path_exists(snap) then
+            return { mode: "draft", record_file: record_file(p, name), published: false }
+        end if
+        return { mode: "published", record_file: snap, published: true }
+    end function
+
+    ' Disposable cache: may be deleted whenever the service is stopped. Draft
+    ' and published data never share a directory, because a draft edit must
+    ' not be able to leak into production (design §7) and the cheapest way to
+    ' guarantee that is for the two never to name the same file.
+    function data_dir(p, name, mode)
+        return _join(_join(p.cache_dir, name), mode)
+    end function
+
+    function dataset_db(p, name, mode, ds)
+        return _join(data_dir(p, name, mode), ds + ".db")
+    end function
+
+    function dataset_staging(p, name, mode, ds)
+        return _join(data_dir(p, name, mode), ds + "__staging.db")
+    end function
+
+    ' Last attempt, last success, last error, row count, content hash and any
+    ' pending refresh request. Beside the data it describes, so deleting the
+    ' cache directory forgets the state with it -- which is correct: state
+    ' about data that is gone is not state worth keeping.
+    function dataset_state(p, name, mode, ds)
+        return _join(data_dir(p, name, mode), ds + ".state.json")
+    end function
+
+    function dataset_lock(p, name, mode, ds)
+        return _join(data_dir(p, name, mode), ds + ".lock")
+    end function
+
+    function version_file(p, name, mode)
+        return _join(data_dir(p, name, mode), "version")
     end function
 
     function connections_file(p)

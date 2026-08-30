@@ -88,7 +88,25 @@ program main(args)
     lines = concat(lines, [emit_case("dataset sql missing", ds_case("d1", { profile: "p" }))])
     lines = concat(lines, [emit_case("dataset profile missing", ds_case("d1", { sql: "select 1" }))])
     lines = concat(lines, [emit_case("dataset binds a param", ds_case("d1", { profile: "p", sql: "select * from t where r = :region" }))])
-    lines = concat(lines, [emit_case("dataset refresh policy", ds_case("d1", { profile: "p", sql: "select 1", refresh: "interval" }))])
+    lines = concat(lines, [emit_case("dataset refresh policy", ds_case("d1", { profile: "p", sql: "select 1", refresh: "hourly" }))])
+    lines = concat(lines, [emit_case("interval without a period", ds_case("d1", { profile: "p", sql: "select 1", refresh: "interval" }))])
+    lines = concat(lines, [emit_case("interval period not a whole number", ds_case("d1", { profile: "p", sql: "select 1", refresh: "interval", every: 0.5 }))])
+    lines = concat(lines, [emit_case("period without an interval", ds_case("d1", { profile: "p", sql: "select 1", refresh: "manual", every: 300 }))])
+    lines = concat(lines, [emit_case("min_age without on_open", ds_case("d1", { profile: "p", sql: "select 1", refresh: "manual", min_age: 60 }))])
+    lines = concat(lines, [emit_case("min_age not a whole number", ds_case("d1", { profile: "p", sql: "select 1", refresh: "on_open", min_age: -1 }))])
+
+    ' Twelve datasets: one more than SQLite will attach beside the one being
+    ' queried, refused at load rather than at render.
+    crowd = skeleton()
+    crowd["datasets"] = {}
+    crowd["visuals"] = {}
+    crowd["tabs"] = [{ name: "T", layout: { vert: [] } }]
+    ci = 0
+    while ci < 12
+        crowd["datasets"]["d" + string(ci)] = { profile: "p", sql: "select 1" }
+        ci += 1
+    end while
+    lines = concat(lines, [emit_case("too many datasets", crowd)])
     lines = concat(lines, [emit_case("money scale missing", ds_case("d1", { profile: "p", sql: "select 1", columns: { amt: { type: "money" } } }))])
     lines = concat(lines, [emit_case("money scale negative", ds_case("d1", { profile: "p", sql: "select 1", columns: { amt: { type: "money", scale: -1 } } }))])
     lines = concat(lines, [emit_case("money currency unsupported", ds_case("d1", { profile: "p", sql: "select 1", columns: { amt: { type: "money", scale: 2, currency: "XYZ" } } }))])
