@@ -16,7 +16,7 @@ server-level and live in `/etc/gdash/connections.json` (0600).
 | `format` | yes | Format version. Must be `1`. |
 | `name` | yes | Identifier for the dashboard. |
 | `title` | no | Shown as the page heading. Defaults to `name`. |
-| `access` | no | `open` is the only value this build understands. **Absent means closed** — see §8. |
+| `access` | no | `open` is the only value this build understands. **Absent means closed** — see §9. |
 | `datasets` | yes | Object of dataset name → dataset. |
 | `params` | no | Object of param name → `{ default }`. |
 | `controls` | no | Object of control name → control. |
@@ -223,7 +223,40 @@ every visual keeps rendering, and the status line says the last refresh failed.
 Stale-but-coherent beats broken (design §3) — but only if the viewer is told,
 which is what this line is for.
 
-## 8. Access
+**A dataset whose definition changed says so too.** The state records the
+`profile` and `sql` that produced what is on disk. When the record now being
+served asks a different question — after an edit and a publish, or after a
+rollback to a version whose dataset differs — the status line says the data
+predates the record, and the scheduler treats that dataset as due whatever its
+interval. A `manual` dataset says the same thing and waits for a person,
+because a manual dataset waiting for a person is what `manual` means.
+
+The refresh that follows often changes nothing: a query can be rewritten and
+still return the same rows. The version does not bump, no one reloads, and the
+warning clears anyway — the record and its data agree again, which is what the
+warning was about.
+
+## 8. Publishing, and what a viewer sees across one
+
+A record is edited as `draft.json` and published to an immutable snapshot;
+`current` names the snapshot in force. This document describes the *record*,
+so the lifecycle lives in design §7 — but two of its consequences are visible
+to a viewer and belong here:
+
+- **A viewer is pinned to the snapshot they opened.** Publishing does not move
+  a reader mid-session; the pin is a session cookie scoped to that dashboard,
+  and it ends when the browser does. No one sees a half-updated dashboard.
+- **A publish is announced, not applied.** Open tabs receive a `publish` event
+  and show a banner offering a reload. A data `refresh` still reloads by
+  itself, because new numbers under the same record are what a dashboard is
+  for; a new record is a different thing and the viewer decides when to take
+  it.
+
+**A draft that does not validate cannot be published.** Publishing runs the
+full validation in this document and refuses on any error — warnings do not
+block. Nothing is written and `current` does not move.
+
+## 9. Access
 
 `access: open` is a **per-dashboard opt-in, never a server default**. A record
 with no `access` key is refused with 403. A half-configured server fails

@@ -1,6 +1,7 @@
 # GDASH-3 — Draft, publish, snapshots: phase brief
 
-**Status:** IN PROGRESS.
+**Status:** COMPLETE. All seven §5 criteria met; at the review boundary.
+Findings in `gdash3_findings.md`; DONE note in §7.
 **Narrows:** the GDASH-3 paragraph of `gdash_development_plan.md`.
 **Authority:** `gdash_design.md` outranks this brief. The findings of GDASH-0,
 GDASH-1 and GDASH-2 are inputs, not open questions.
@@ -202,3 +203,49 @@ snapshots are kept, per design §7. A designer UI (design §10); authoring is
 still file editing. Diff rendering beyond unified text — no side-by-side, no
 semantic diff of the JSON structure. Per-dataset publish. Scheduled or delayed
 publish. Any notion of "unpublish" beyond rolling back to an earlier snapshot.
+
+---
+
+## 7. DONE note
+
+All seven §5 criteria met. The hermetic suite is 17 suites — 388 in-process
+assertions plus 94 end-to-end — green from a clean checkout with no services
+running, ending scratch-clean; the opt-in live-Postgres runner passes 8/8.
+
+**Built:** publish (draft bytes → `snapshots/NNNN.json` → atomic `current`
+repoint), with an invalid draft refused and audited; rollback by name or one
+step back; `snapshots` and `diff` verbs and a `/d/{name}/diff` endpoint;
+session pinning as a path-scoped session cookie resolved through the same
+containment as the pointer; the publish notice as an SSE event distinct from
+`refresh`, answered by a banner rather than a reload; the definition-hash
+staleness rule of §2.3; and a hand-rolled unified diff with no dependency on
+`diff(1)`.
+
+`tests/e2e_publish.py` is gone. The end-to-end run publishes through the real
+path, and its remaining helper writes drafts only — which is what an author
+does, since authoring is file editing.
+
+**Fixed along the way, and it was GDASH-2's:** a published dashboard whose
+dataset is `manual` could be refreshed from the browser and by nothing else
+(G3-2). `refresh` now targets what the dashboard serves.
+
+**Deliberately not built** — §6 stands, with these to record:
+
+- **The pin knows a browser, not a person.** Clearing cookies or opening a
+  second browser gets `current`. That is the whole of what a cookie can know
+  and the whole of what §7 asks; identity is GDASH-4's.
+- **The diff is unified text and nothing else.** No side-by-side, no
+  structural diff of the JSON, no rendering in the page — the endpoint returns
+  both texts so a caller can do better if it wants to.
+- **A rewritten record is reported as a rewrite.** Beyond 250,000 LCS cells the
+  diff stops trying to align lines and emits the old wholesale followed by the
+  new. A record that large has not been edited.
+- **Nothing prunes snapshots.** Design §7 says keep them all and they are small
+  text; a retention policy is an operations question nobody has asked yet.
+- **Publish is per-dashboard and immediate.** No scheduled publish, no
+  publishing a group of dashboards together, no "unpublish" beyond rolling
+  back to an earlier snapshot.
+
+**Design edits still owed** (the maintainer's): §4's money headroom figure;
+§4's render path, now bounded by the money type's storage scale; and §2's
+content-hash sentence, which should say which dedupe is meant (G2-10).
