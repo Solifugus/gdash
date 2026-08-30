@@ -23,8 +23,19 @@ cp dashboards/sales/draft.json "$ROOT/lib/dashboards/sales/draft.json"
 
 # Obviously-fake profile values; the fixture source needs no credentials.
 cat > "$ROOT/etc/connections.json" <<JSON
-{ "warehouse": { "kind": "fixture", "path": "fixtures/orders.json" } }
+{ "warehouse":  { "kind": "fixture", "path": "fixtures/orders.json" },
+  "regionbook": { "kind": "fixture", "path": "fixtures/regions.json" },
+  "flaky":      { "kind": "fixture", "path": "fixtures/orders_unavailable.json" } }
 JSON
+
+# Repointing one profile at a different fixture is how this run makes a source
+# change, go down, and come back.
+repoint(){ python3 -c "
+import json,sys
+c=json.load(open(sys.argv[1]))
+c['warehouse']['path']=sys.argv[2]
+json.dump(c,open(sys.argv[1],'w'))
+" "$ROOT/etc/connections.json" "$1"; }
 
 # A dashboard that does NOT opt into open access, to prove fail-closed.
 mkdir -p "$ROOT/lib/dashboards/private"
@@ -57,6 +68,11 @@ has "$page" 'data-param="region"' "page carries the slicer bound to :region"
 has "$page" "<option" "slicer options came from a query over the dataset"
 has "$page" "north" "slicer lists a value only the data knows"
 has "$page" "EventSource" "page opens an SSE stream"
+
+echo "--- two datasets, joined with no schema prefix (design §3) ---"
+has "$page" "Ada Okonjo" "a visual joins the second dataset and renders a value only it knows"
+has "$page" "orders: data as of" "the status line names the first dataset"
+has "$page" "regions: data as of" "and the second, because one line for a dashboard stops being true"
 
 echo "--- tabs and the table mark (GDASH-1) ---"
 has "$page" 'class="gdash-tabs"' "multi-tab record renders a tab bar"
@@ -91,19 +107,91 @@ echo "--- SSE carries a refresh notification (design §5) ---"
 curl -s -N --max-time 6 "http://127.0.0.1:$PORT/d/sales/events" > "$SCRATCH/sse.txt" &
 SSE=$!
 sleep 1
-"$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh sales >/dev/null 2>&1
+# Refetching identical data no longer bumps the version, so the notification
+# has to be driven by data that actually moved.
+repoint fixtures/orders_moved.json
+"$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh sales orders >/dev/null 2>&1
 sleep 2.5
 kill $SSE 2>/dev/null; wait $SSE 2>/dev/null
 has "$(cat "$SCRATCH/sse.txt")" "data: refresh" "SSE emitted on the version bump"
 
+echo "--- an unchanged refresh does not bump the version ---"
+before_v="$(cat "$ROOT/cache/sales/draft/version")"
+out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh sales orders 2>&1)"
+has "$out" "unchanged" "refetching identical data reports unchanged"
+ok "and leaves the version alone" "$(cat "$ROOT/cache/sales/draft/version")" "$before_v"
+
 echo "--- a failed refresh leaves the dashboard serving old data ---"
-cat > "$ROOT/etc/connections.json" <<JSON
-{ "warehouse": { "kind": "fixture", "path": "fixtures/orders_unavailable.json" } }
-JSON
+repoint fixtures/orders_unavailable.json
 "$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh sales >/dev/null 2>&1
 ok "failed refresh exits nonzero" "$?" "1"
 page2="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/sales")"
-has "$page2" '$4,927.05' "dashboard still shows the previous data"
+has "$page2" '$5,339.65' "dashboard still shows the previous data"
+has "$page2" "last refresh failed" "and says the last refresh failed"
+has "$page2" "configured to fail" "naming what the source said"
+
+# ---------------------------------------------------------------------------
+# The scheduler. GDASH-3 owns publish, so this writes the `current` pointer and
+# a snapshot by hand -- the read side is what GDASH-2 implements (brief §2.4).
+# ---------------------------------------------------------------------------
+echo "--- policy refresh needs a published dashboard (design §3) ---"
+python3 "$HERE/e2e_publish.py" "$ROOT"
+repoint fixtures/orders.json
+
+out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" schedule 2>&1)"
+has "$out" "timed.orders: refreshed" "an interval dataset with no data yet refreshes on the first pass"
+has "$out" "timed.regions: refreshed" "so does its hour-long sibling"
+hasnt "$out" "sales." "an unpublished dashboard is not scheduled at all"
+hasnt "$out" "opened.orders: refreshed" "an on_open dataset waits for someone to open it"
+has "$out" "down.orders:" "a failing dataset is reported"
+if [[ -f "$ROOT/cache/timed/published/orders.db" ]]; then echo "  ok   published data lands in the published directory"; pass=$((pass+1)); else echo "  FAIL published data lands in the published directory"; fail=$((fail+1)); fi
+if [[ -f "$ROOT/cache/timed/draft/orders.db" ]]; then echo "  FAIL a policy refresh must not write the draft directory"; fail=$((fail+1)); else echo "  ok   a policy refresh does not touch the draft directory"; pass=$((pass+1)); fi
+
+echo "--- the interval is honoured, and an unchanged refetch is quiet ---"
+v1="$(cat "$ROOT/cache/timed/published/version")"
+out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" schedule 2>&1)"
+hasnt "$out" "timed.regions" "the hour-long dataset is not due a second later"
+sleep 1.2
+out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" schedule 2>&1)"
+has "$out" "timed.orders: unchanged" "the one-second interval fires again and finds nothing changed"
+ok "and the version did not move" "$(cat "$ROOT/cache/timed/published/version")" "$v1"
+
+echo "--- on_open: opening the page files a request the scheduler honours ---"
+page3="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/opened")"
+has "$page3" "never refreshed" "the page serves what it has, which is nothing yet"
+out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" schedule 2>&1)"
+has "$out" "opened.orders: refreshed" "the open is honoured on the next pass"
+out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" schedule 2>&1)"
+hasnt "$out" "opened.orders" "and is not repeated: the request was a flag, and it is spent"
+page4="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/opened")"
+has "$page4" "orders: data as of" "the data arrived without anyone asking twice"
+
+echo "--- a failing published dataset surfaces on its dashboard ---"
+page5="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/down")"
+has "$page5" "last refresh failed" "the failure is on the page, not only in a log"
+has "$page5" "configured to fail" "with what the source said"
+
+echo "--- crash residue is swept ---"
+printf 'not a database' > "$ROOT/cache/timed/published/orders__staging.db"
+"$GBASIC" src/gdash_cli.bas --root "$ROOT" schedule >/dev/null 2>&1
+if [[ -f "$ROOT/cache/timed/published/orders__staging.db" ]]; then echo "  FAIL crash residue is swept"; fail=$((fail+1)); else echo "  ok   crash residue is swept"; pass=$((pass+1)); fi
+audit="$(cat "$ROOT/log/audit.log")"
+has "$audit" "sweep.staging" "and the sweep is audited"
+has "$audit" "refresh.failed" "so is a failed refresh"
+hasnt "$audit" "fixtures/orders" "and no profile internals reach the log"
+
+echo "--- the scheduler process does the same on a period ---"
+"$GBASIC" --line-buffered src/gdash_scheduler.bas --root "$ROOT" --every 1 > "$SCRATCH/sched.log" 2>&1 &
+SCH=$!
+curl -s -N --max-time 8 "http://127.0.0.1:$PORT/d/timed/events" > "$SCRATCH/sse2.txt" &
+SSE2=$!
+sleep 1
+repoint fixtures/orders_moved.json
+sleep 4
+kill $SCH 2>/dev/null; wait $SCH 2>/dev/null
+kill $SSE2 2>/dev/null; wait $SSE2 2>/dev/null
+has "$(cat "$SCRATCH/sched.log")" "timed.orders: refreshed" "the scheduler picked up the changed data by itself"
+has "$(cat "$SCRATCH/sse2.txt")" "data: refresh" "and every open tab was told over SSE, with no one pressing anything"
 
 kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
 rm -rf "$SCRATCH"

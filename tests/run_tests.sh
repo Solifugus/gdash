@@ -46,6 +46,20 @@ for testfile in "$HERE"/test_*.bas; do
     fi
 done
 
+# The library-namespace sweep. gBASIC function names are global and a second
+# definition silently overrides the first, warning only on stderr (F6). This
+# has now bitten twice, so it is checked rather than remembered.
+echo "--- library namespace ---"
+ran=$((ran + 1))
+sweep="$SCRATCH/overrides.err"
+if "$GBASIC" "$HERE/overrides_probe.bas" >/dev/null 2>"$sweep" && ! grep -qi "override" "$sweep"; then
+    echo "ok   no library overrides across every gdash module and the stdlib it touches"
+else
+    echo "FAIL library overrides (or the probe would not load):"
+    cat "$sweep"
+    failed=$((failed + 1))
+fi
+
 # The format doc's refusal catalog is generated from the golden. If they
 # disagree the documentation is wrong, which is a test failure, not a chore.
 echo "--- documentation ---"

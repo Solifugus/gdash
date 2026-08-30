@@ -3,22 +3,30 @@
   "name": "sales",
   "title": "Sales",
   "access": "open",
-
   "datasets": {
     "orders": {
       "profile": "warehouse",
       "refresh": "manual",
       "sql": "select region, month, amount from sales.orders",
       "columns": {
-        "amount": { "type": "money", "scale": 2, "currency": "USD" }
+        "amount": {
+          "type": "money",
+          "scale": 2,
+          "currency": "USD"
+        }
       }
+    },
+    "regions": {
+      "profile": "regionbook",
+      "refresh": "manual",
+      "sql": "select region, label, manager from sales.regions"
     }
   },
-
   "params": {
-    "region": { "default": "west" }
+    "region": {
+      "default": "west"
+    }
   },
-
   "controls": {
     "region_picker": {
       "kind": "select",
@@ -28,26 +36,43 @@
       "sql": "select distinct region as value from orders order by 1"
     }
   },
-
   "visuals": {
     "by_month": {
       "dataset": "orders",
       "sql": "select month as month, sum(amount) as total from orders where region = :region group by month order by month",
-      "encoding": { "mark": "bar", "x": "month", "y": "total", "format": "currency", "currency": "USD", "title": "Revenue by month" }
+      "encoding": {
+        "mark": "bar",
+        "x": "month",
+        "y": "total",
+        "format": "currency",
+        "currency": "USD",
+        "title": "Revenue by month"
+      }
     },
-
     "grand_total": {
       "dataset": "orders",
       "sql": "select sum(amount) as total from orders",
-      "encoding": { "mark": "value", "value": "total", "format": "currency", "currency": "USD", "title": "All regions, all months" }
+      "encoding": {
+        "mark": "value",
+        "value": "total",
+        "format": "currency",
+        "currency": "USD",
+        "title": "All regions, all months"
+      }
     },
-
     "trend_by_region": {
       "dataset": "orders",
       "sql": "select month as month, region as region, sum(amount) as total from orders group by month, region order by month, region",
-      "encoding": { "mark": "line", "x": "month", "y": "total", "series": "region", "format": "currency", "currency": "USD", "title": "Every region over time" }
+      "encoding": {
+        "mark": "line",
+        "x": "month",
+        "y": "total",
+        "series": "region",
+        "format": "currency",
+        "currency": "USD",
+        "title": "Every region over time"
+      }
     },
-
     "detail": {
       "dataset": "orders",
       "sql": "select region as region, month as month, sum(amount) as total from orders group by region, month order by region, month",
@@ -55,20 +80,41 @@
         "mark": "table",
         "title": "Detail",
         "currency": "USD",
-        "formats": { "total": "currency" }
+        "formats": {
+          "total": "currency"
+        }
+      }
+    },
+    "by_manager": {
+      "dataset": "orders",
+      "sql": "select r.manager as manager, sum(o.amount) as total from orders o join regions r on r.region = o.region group by r.manager order by 1",
+      "encoding": {
+        "mark": "bar",
+        "x": "manager",
+        "y": "total",
+        "format": "currency",
+        "currency": "USD",
+        "title": "Revenue by account manager"
       }
     }
   },
-
   "tabs": [
     {
       "name": "Overview",
       "layout": {
         "vert": [
-          { "control": "region_picker" },
-          { "horiz": [
-              { "visual": "by_month", "weight": 2 },
-              { "visual": "grand_total" }
+          {
+            "control": "region_picker"
+          },
+          {
+            "horiz": [
+              {
+                "visual": "by_month",
+                "weight": 2
+              },
+              {
+                "visual": "grand_total"
+              }
             ],
             "gap": 16,
             "space": "between"
@@ -81,7 +127,10 @@
       "name": "Trend",
       "layout": {
         "vert": [
-          { "visual": "trend_by_region", "weight": 1 }
+          {
+            "visual": "trend_by_region",
+            "weight": 1
+          }
         ],
         "gap": 12
       }
@@ -90,7 +139,13 @@
       "name": "Detail",
       "layout": {
         "vert": [
-          { "visual": "detail" }
+          {
+            "visual": "by_manager",
+            "weight": 1
+          },
+          {
+            "visual": "detail"
+          }
         ],
         "gap": 12
       }

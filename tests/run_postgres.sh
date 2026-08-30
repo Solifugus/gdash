@@ -57,6 +57,15 @@ insert into gdash_spike.orders values
     ('east','2026-01',640.10),
     ('east','2026-02',725.90),
     ('north','2026-01',310.05);
+create table gdash_spike.regions (
+    region  text not null,
+    label   text not null,
+    manager text not null
+);
+insert into gdash_spike.regions values
+    ('west','West','Ada Okonjo'),
+    ('east','East','Bo Lindqvist'),
+    ('north','North','Ada Okonjo');
 SQL
 if [[ $? -ne 0 ]]; then echo "could not seed the test schema" >&2; rm -rf "$SCRATCH"; exit 1; fi
 
@@ -64,8 +73,10 @@ if [[ $? -ne 0 ]]; then echo "could not seed the test schema" >&2; rm -rf "$SCRA
 # supplied at run time. Nothing here is committed.
 umask 077
 cat > "$ROOT/etc/connections.json" <<JSON
-{ "warehouse": { "kind": "postgres", "host": "$PGHOST", "port": $PGPORT,
-                 "database": "$PGDB", "user": "$PGUSER", "password": "$PGPASSWORD" } }
+{ "warehouse":  { "kind": "postgres", "host": "$PGHOST", "port": $PGPORT,
+                  "database": "$PGDB", "user": "$PGUSER", "password": "$PGPASSWORD" },
+  "regionbook": { "kind": "postgres", "host": "$PGHOST", "port": $PGPORT,
+                  "database": "$PGDB", "user": "$PGUSER", "password": "$PGPASSWORD" } }
 JSON
 chmod 600 "$ROOT/etc/connections.json"
 
@@ -75,6 +86,7 @@ import json,sys
 p=sys.argv[1]+'/lib/dashboards/sales/draft.json'
 d=json.load(open(p))
 d['datasets']['orders']['sql']="select region, month, amount from gdash_spike.orders"
+d['datasets']['regions']['sql']="select region, label, manager from gdash_spike.regions"
 json.dump(d,open(p,'w'),indent=2)
 PY
 
@@ -92,6 +104,20 @@ ok "sum over live data is exact minor units" "$total" "492705"
 
 west="$("$GBASIC" tests/pg_sum.bas "$ROOT/cache/sales/draft/orders.db" west 2>&1)"
 ok "param-filtered sum over live data" "$west" "325100"
+
+# Two datasets from the same live server, joined in one visual query with no
+# schema prefix, summing money across the join. The fixture seam can prove the
+# attachment; only this proves it over rows that arrived as strings from pg.
+mgr="$("$GBASIC" tests/pg_join.bas "$ROOT/cache/sales/draft" 2>&1)"
+ok "money sums exactly across a two-dataset join over live data" "$mgr" "Ada Okonjo=356105"
+
+# A second refresh of unchanged live data must not bump the version, or every
+# open tab reloads on a timer to see the same numbers.
+v1="$(cat "$ROOT/cache/sales/draft/version")"
+out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh sales orders 2>&1)"
+case "$out" in *unchanged*) ok "an unchanged live refetch is recognised" "0" "0" ;;
+                        *) ok "an unchanged live refetch is recognised" "$out" "unchanged" ;; esac
+ok "and does not bump the version" "$(cat "$ROOT/cache/sales/draft/version")" "$v1"
 
 # A value with more decimals than the column scale must be REFUSED, not
 # rounded, even coming from a real numeric column.

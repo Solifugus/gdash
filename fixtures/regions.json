@@ -1,0 +1,8 @@
+{
+  "columns": ["region", "label", "manager"],
+  "rows": [
+    ["west", "West", "Ada Okonjo"],
+    ["east", "East", "Bo Lindqvist"],
+    ["north", "North", "Ada Okonjo"]
+  ]
+}
