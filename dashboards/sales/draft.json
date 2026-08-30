@@ -10,7 +10,7 @@
       "refresh": "manual",
       "sql": "select region, month, amount from sales.orders",
       "columns": {
-        "amount": { "type": "money", "scale": 2 }
+        "amount": { "type": "money", "scale": 2, "currency": "USD" }
       }
     }
   },
@@ -33,13 +33,30 @@
     "by_month": {
       "dataset": "orders",
       "sql": "select month as month, sum(amount) as total from orders where region = :region group by month order by month",
-      "encoding": { "mark": "bar", "x": "month", "y": "total", "format": "currency", "title": "Revenue by month" }
+      "encoding": { "mark": "bar", "x": "month", "y": "total", "format": "currency", "currency": "USD", "title": "Revenue by month" }
     },
 
     "grand_total": {
       "dataset": "orders",
       "sql": "select sum(amount) as total from orders",
-      "encoding": { "mark": "value", "value": "total", "format": "currency", "title": "All regions, all months" }
+      "encoding": { "mark": "value", "value": "total", "format": "currency", "currency": "USD", "title": "All regions, all months" }
+    },
+
+    "trend_by_region": {
+      "dataset": "orders",
+      "sql": "select month as month, region as region, sum(amount) as total from orders group by month, region order by month, region",
+      "encoding": { "mark": "line", "x": "month", "y": "total", "series": "region", "format": "currency", "currency": "USD", "title": "Every region over time" }
+    },
+
+    "detail": {
+      "dataset": "orders",
+      "sql": "select region as region, month as month, sum(amount) as total from orders group by region, month order by region, month",
+      "encoding": {
+        "mark": "table",
+        "title": "Detail",
+        "currency": "USD",
+        "formats": { "total": "currency" }
+      }
     }
   },
 
@@ -49,8 +66,33 @@
       "layout": {
         "vert": [
           { "control": "region_picker" },
-          { "horiz": [ { "visual": "by_month" }, { "visual": "grand_total" } ] }
-        ]
+          { "horiz": [
+              { "visual": "by_month", "weight": 2 },
+              { "visual": "grand_total" }
+            ],
+            "gap": 16,
+            "space": "between"
+          }
+        ],
+        "gap": 12
+      }
+    },
+    {
+      "name": "Trend",
+      "layout": {
+        "vert": [
+          { "visual": "trend_by_region", "weight": 1 }
+        ],
+        "gap": 12
+      }
+    },
+    {
+      "name": "Detail",
+      "layout": {
+        "vert": [
+          { "visual": "detail" }
+        ],
+        "gap": 12
       }
     }
   ]

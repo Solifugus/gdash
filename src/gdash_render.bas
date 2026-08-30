@@ -73,6 +73,68 @@ library gdash_render
         return contains(keys(row), name)
     end function
 
+    ' The series channel fans rows out into one chart series per distinct
+    ' value, in RESULT order -- the SQL decides the order, as it decides
+    ' everything else about shape. A missing (x, series) pair stays `unknown`,
+    ' which the chart library renders as a gap rather than a zero; a zero
+    ' would be a claim the data never made.
+    function _pivot(rows, xch, ych, sch, is_money, scale)
+        xs = []
+        names = []
+        i = 0
+        while i < count(rows)
+            xv = string(rows[i][xch])
+            if not contains(xs, xv) then
+                xs = concat(xs, [xv])
+            end if
+            if sch != "" then
+                sv = string(rows[i][sch])
+                if not contains(names, sv) then
+                    names = concat(names, [sv])
+                end if
+            end if
+            i += 1
+        end while
+        if sch = "" then
+            names = [ych]
+        end if
+
+        df = {}
+        df[xch] = xs
+        c = 0
+        while c < count(names)
+            col = []
+            r = 0
+            while r < count(xs)
+                col = concat(col, [unknown])
+                r += 1
+            end while
+            df[names[c]] = col
+            c += 1
+        end while
+
+        i = 0
+        while i < count(rows)
+            xv = string(rows[i][xch])
+            slot = find(xs, xv)
+            key = ych
+            if sch != "" then
+                key = string(rows[i][sch])
+            end if
+            if is_money then
+                raw = rows[i][ych + "__text"]
+                v = number(gdash_format.minor_to_decimal(raw, scale))
+            else
+                v = rows[i][ych]
+            end if
+            col = df[key]
+            col[slot] = v
+            df[key] = col
+            i += 1
+        end while
+        return { xs: xs, names: names, df: df }
+    end function
+
     function render_visual(name, visual, rows, db_path)
         enc = visual["encoding"]
         mark = enc["mark"]
@@ -84,6 +146,14 @@ library gdash_render
 
         is_money = enc["format"] = "currency"
         scale = 0
+        if mark = "table" then
+            probe = money_scale(db_path)
+            if probe > 0 then
+                scale = probe
+            else
+                scale = 2
+            end if
+        end if
         if is_money then
             scale = money_scale(db_path)
             if scale = -1 then
@@ -116,7 +186,7 @@ library gdash_render
             return "<div class=" + chr(34) + "gdash-value" + chr(34) + "><div class=" + chr(34) + "gdash-value-title" + chr(34) + ">" + _html_escape(title) + "</div><div class=" + chr(34) + "gdash-value-number" + chr(34) + ">" + _html_escape(shown) + "</div></div>"
         end if
 
-        if mark = "bar" then
+        if mark = "bar" or mark = "line" then
             xch = enc["x"]
             ych = enc["y"]
             if not _has_column(row0, xch) then
@@ -125,48 +195,138 @@ library gdash_render
             if not _has_column(row0, ych) then
                 return _err("visual '" + name + "': channel 'y' names column '" + string(ych) + "', which the query does not return")
             end if
-            cats = []
-            vals = []
-            i = 0
-            while i < count(rows)
-                cats = concat(cats, [string(rows[i][xch])])
-                if is_money then
-                    exact = rows[i][ych + "__text"]
-                    ' Geometry is pixels, so the double is harmless here; the
-                    ' exact text is what any label would show.
-                    ' Geometry is pixels, so the double is harmless here;
-                    ' every value a human READS comes from the exact text.
-                    vals = concat(vals, [number(gdash_format.minor_to_decimal(exact, scale))])
-                else
-                    vals = concat(vals, [rows[i][ych]])
+            sch = ""
+            if not is_unknown(enc["series"]) then
+                sch = enc["series"]
+                if not _has_column(row0, sch) then
+                    return _err("visual '" + name + "': channel 'series' names column '" + string(sch) + "', which the query does not return")
                 end if
-                i += 1
-            end while
+            end if
+
+            shaped = _pivot(rows, xch, ych, sch, is_money, scale)
             on error goto next
-            svg = chart.bar_xy(cats, vals)
+            if mark = "bar" then
+                svg = chart.bar(shaped.df, xch, shaped.names)
+            else
+                svg = chart.line(shaped.df, xch, shaped.names)
+            end if
             if error then
                 return _err("visual '" + name + "': chart library refused the data: " + error.message)
             end if
             return svg
         end if
 
+        if mark = "table" then
+            ' The table mark renders result columns in SELECT ORDER with a
+            ' per-column formats map (design §2). No column list, no ordering
+            ' options, no aggregation: the SQL stays the single place shape is
+            ' decided.
+            fmts = enc["formats"]
+            if is_unknown(fmts) then
+                fmts = {}
+            end if
+            cols = []
+            all_cols = keys(row0)
+            i = 0
+            while i < count(all_cols)
+                cn = all_cols[i]
+                ' the __text siblings are the exactness mechanism, not data
+                if not ends_with(cn, "__text") then
+                    cols = concat(cols, [cn])
+                end if
+                i += 1
+            end while
+
+            head = []
+            i = 0
+            while i < count(cols)
+                head = concat(head, ["<th>" + _html_escape(cols[i]) + "</th>"])
+                i += 1
+            end while
+
+            body = []
+            r = 0
+            while r < count(rows)
+                cells = []
+                c = 0
+                while c < count(cols)
+                    cn = cols[c]
+                    entry = fmts[cn]
+                    if is_unknown(entry) then
+                        shown = string(rows[r][cn])
+                    else
+                        spec = format_spec(entry, scale, currency_of(visual))
+                        shown = gdash_format.apply(spec, rows[r][cn], rows[r][cn + "__text"])
+                    end if
+                    cells = concat(cells, ["<td>" + _html_escape(shown) + "</td>"])
+                    c += 1
+                end while
+                body = concat(body, ["<tr>" + join(cells, "") + "</tr>"])
+                r += 1
+            end while
+
+            title = default(enc["title"], "")
+            return "<div class=" + chr(34) + "gdash-table" + chr(34) + "><div class=" + chr(34) + "gdash-table-title" + chr(34) + ">" + _html_escape(title) + "</div><table><thead><tr>" + join(head, "") + "</tr></thead><tbody>" + join(body, "") + "</tbody></table></div>"
+        end if
+
         return _err("visual '" + name + "' uses mark '" + string(mark) + "', which this build does not render")
     end function
 
-    ' Which result columns of a visual query must cross exactly (design §4.3
-    ' text boundary): the channel the encoding formats as currency.
+    ' Which result columns of a visual query must cross exactly (the F1 text
+    ' boundary): every channel this encoding formats as currency.
     function exact_columns(visual)
         enc = visual["encoding"]
+        mark = enc["mark"]
+        if mark = "table" then
+            out = []
+            fmts = enc["formats"]
+            if is_unknown(fmts) then
+                return out
+            end if
+            cols = keys(fmts)
+            i = 0
+            while i < count(cols)
+                if format_name(fmts[cols[i]]) = "currency" then
+                    out = concat(out, [cols[i]])
+                end if
+                i += 1
+            end while
+            return out
+        end if
         if enc["format"] != "currency" then
             return []
         end if
-        if enc["mark"] = "value" then
+        if mark = "value" then
             return [enc["value"]]
         end if
-        if enc["mark"] = "bar" then
+        if mark = "bar" or mark = "line" then
             return [enc["y"]]
         end if
         return []
+    end function
+
+    ' A formats entry is either a bare name ("currency") or a record carrying
+    ' options ({ name: "number", decimals: 2 }). Both spellings are honoured
+    ' because the short one is what most columns want and the long one is
+    ' what the rest need.
+    function format_name(entry)
+        if type(entry) = "record" then
+            return default(entry["name"], "text")
+        end if
+        return string(entry)
+    end function
+
+    function format_spec(entry, scale, code)
+        nm = format_name(entry)
+        spec = { name: nm, scale: scale, currency: code, decimals: 0 }
+        if type(entry) = "record" then
+            spec["decimals"] = default(entry["decimals"], 0)
+            spec["currency"] = default(entry["currency"], code)
+        end if
+        if nm = "percent" and type(entry) != "record" then
+            spec["decimals"] = 1
+        end if
+        return spec
     end function
 
     function render_control(name, control, options, current)

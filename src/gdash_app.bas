@@ -19,6 +19,14 @@ library gdash_app
         return gdash_paths.roles(_root_of(req))
     end function
 
+    function _html_escape(text)
+        t = replace(string(text), "&", "&amp;")
+        t = replace(t, "<", "&lt;")
+        t = replace(t, ">", "&gt;")
+        t = replace(t, chr(34), "&quot;")
+        return t
+    end function
+
     function _html(body)
         return { body: body, headers: { "content-type": "text/html; charset=utf-8" } }
     end function
@@ -94,31 +102,81 @@ library gdash_app
         return gdash_render.render_control(ctl_name, c, opts, values[c["param"]])
     end function
 
-    function _layout(p, name, rec, node, values)
-        if not is_unknown(node["vert"]) then
-            return _container(p, name, rec, node["vert"], values, "gdash-vert")
+    function _space_css(sp)
+        if sp = "between" then
+            return "space-between"
         end if
-        if not is_unknown(node["horiz"]) then
-            return _container(p, name, rec, node["horiz"], values, "gdash-horiz")
+        if sp = "around" then
+            return "space-around"
         end if
-        if not is_unknown(node["visual"]) then
-            vn = node["visual"]
-            return "<div class=" + chr(34) + "gdash-cell" + chr(34) + " data-visual=" + chr(34) + vn + chr(34) + ">" + _visual_fragment(p, name, rec, vn, values) + "</div>"
+        if sp = "evenly" then
+            return "space-evenly"
         end if
-        if not is_unknown(node["control"]) then
-            return "<div class=" + chr(34) + "gdash-cell" + chr(34) + ">" + _control_fragment(p, name, rec, node["control"], values) + "</div>"
+        if sp = "start" then
+            return "flex-start"
+        end if
+        if sp = "end" then
+            return "flex-end"
+        end if
+        if sp = "center" then
+            return "center"
         end if
         return ""
     end function
 
-    function _container(p, name, rec, kids, values, cls)
+    ' A child with a weight flexes; a child without one takes natural size
+    ' (design §2). That is flex-grow versus flex:0 0 auto, which is exactly
+    ' the distinction the record is making.
+    function _child_style(node)
+        w = node["weight"]
+        if is_unknown(w) then
+            return "flex:0 0 auto"
+        end if
+        return "flex:" + string(w) + " 1 0"
+    end function
+
+    function _layout(p, name, rec, node, values)
+        if not is_unknown(node["vert"]) then
+            return _container(p, name, rec, node, node["vert"], values, "gdash-vert")
+        end if
+        if not is_unknown(node["horiz"]) then
+            return _container(p, name, rec, node, node["horiz"], values, "gdash-horiz")
+        end if
+        if not is_unknown(node["visual"]) then
+            vn = node["visual"]
+            return "<div class=" + chr(34) + "gdash-cell" + chr(34) + " style=" + chr(34) + _child_style(node) + chr(34) + " data-visual=" + chr(34) + vn + chr(34) + ">" + _visual_fragment(p, name, rec, vn, values) + "</div>"
+        end if
+        if not is_unknown(node["control"]) then
+            return "<div class=" + chr(34) + "gdash-cell" + chr(34) + " style=" + chr(34) + _child_style(node) + chr(34) + ">" + _control_fragment(p, name, rec, node["control"], values) + "</div>"
+        end if
+        return ""
+    end function
+
+    function _container(p, name, rec, node, kids, values, cls)
         out = []
         i = 0
         while i < count(kids)
             out = concat(out, [_layout(p, name, rec, kids[i], values)])
             i += 1
         end while
-        return "<div class=" + chr(34) + cls + chr(34) + ">" + join(out, "") + "</div>"
+
+        style = _child_style(node)
+        gp = node["gap"]
+        if not is_unknown(gp) then
+            style = style + ";gap:" + string(gp) + "px"
+        end if
+        sp = node["space"]
+        if not is_unknown(sp) then
+            css = _space_css(sp)
+            ' `space` is emitted even when validation warned it is dead: the
+            ' warning tells the author it will do nothing, and silently
+            ' dropping it would make the rendered page disagree with the
+            ' record.
+            if css != "" then
+                style = style + ";justify-content:" + css
+            end if
+        end if
+        return "<div class=" + chr(34) + cls + chr(34) + " style=" + chr(34) + style + chr(34) + ">" + join(out, "") + "</div>"
     end function
 
     function _stale_note(p, name, rec)
@@ -148,6 +206,9 @@ library gdash_app
         js = js + ".then(function(r){return r.json()}).then(function(d){"
         js = js + "for(var k in d.fragments){var c=document.querySelector('[data-visual='+JSON.stringify(k)+']');if(c){c.innerHTML=d.fragments[k]}}"
         js = js + "});}"
+        js = js + "function gdashTab(b){var i=b.getAttribute('data-tab');"
+        js = js + "var ts=document.querySelectorAll('.gdash-tab');for(var j=0;j<ts.length;j++){ts[j].classList.toggle('gdash-tab-active',ts[j]===b)}"
+        js = js + "var ps=document.querySelectorAll('.gdash-pane');for(var k=0;k<ps.length;k++){ps[k].hidden=(ps[k].getAttribute('data-pane')!==i)}}"
         js = js + "var es=new EventSource(location.pathname+'/events');"
         js = js + "es.onmessage=function(e){if(e.data==='refresh'){location.reload()}};"
         return js
@@ -165,6 +226,13 @@ library gdash_app
         s = s + ".gdash-error{color:#a00;border:1px solid #a00;border-radius:6px;padding:8px;font-size:13px}"
         s = s + ".gdash-empty{color:#666;font-style:italic;padding:8px}"
         s = s + ".gdash-stale{color:#666;font-size:12px;margin-bottom:12px}"
+        s = s + ".gdash-tabs{display:flex;gap:4px;border-bottom:1px solid #ddd;margin-bottom:16px}"
+        s = s + ".gdash-tab{border:0;background:none;padding:8px 14px;cursor:pointer;font-size:14px;color:#555;border-bottom:2px solid transparent}"
+        s = s + ".gdash-tab-active{color:#111;border-bottom-color:#333;font-weight:600}"
+        s = s + ".gdash-table table{border-collapse:collapse;width:100%;font-size:13px}"
+        s = s + ".gdash-table th{text-align:left;border-bottom:1px solid #ccc;padding:6px 10px;color:#555;font-weight:600}"
+        s = s + ".gdash-table td{border-bottom:1px solid #eee;padding:6px 10px;font-variant-numeric:tabular-nums}"
+        s = s + ".gdash-table-title{font-size:12px;color:#666;margin-bottom:6px}"
         return s
     end function
 
@@ -178,7 +246,30 @@ library gdash_app
         values = gdash_record.resolve_params(rec, req.query)
 
         tabs = rec["tabs"]
-        body = _layout(p, name, rec, tabs[0]["layout"], values)
+        ' Every tab renders server-side in one response and switches on the
+        ' client. Workers share no in-memory state (design §5), so a tab
+        ' switch that needed a round trip would have nowhere to remember
+        ' which tab a viewer is on.
+        navs = []
+        panes = []
+        ti = 0
+        while ti < count(tabs)
+            tname = string(default(tabs[ti]["name"], "Tab " + string(ti + 1)))
+            sel = ""
+            hidden = " hidden"
+            if ti = 0 then
+                sel = " gdash-tab-active"
+                hidden = ""
+            end if
+            navs = concat(navs, ["<button class=" + chr(34) + "gdash-tab" + sel + chr(34) + " data-tab=" + chr(34) + string(ti) + chr(34) + " onclick=" + chr(34) + "gdashTab(this)" + chr(34) + ">" + _html_escape(tname) + "</button>"])
+            panes = concat(panes, ["<div class=" + chr(34) + "gdash-pane" + chr(34) + " data-pane=" + chr(34) + string(ti) + chr(34) + hidden + ">" + _layout(p, name, rec, tabs[ti]["layout"], values) + "</div>"])
+            ti += 1
+        end while
+        tabbar = ""
+        if count(tabs) > 1 then
+            tabbar = "<div class=" + chr(34) + "gdash-tabs" + chr(34) + ">" + join(navs, "") + "</div>"
+        end if
+        body = tabbar + join(panes, "")
         q = chr(34)
         html = "<!doctype html><html><head><meta charset=" + q + "utf-8" + q + "><title>" + string(default(rec["title"], name)) + "</title><style>" + _style() + "</style></head><body>"
         html = html + "<h1>" + string(default(rec["title"], name)) + "</h1>"

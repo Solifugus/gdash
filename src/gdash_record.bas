@@ -12,6 +12,7 @@
 library gdash_record
 
     load gdash_sql from "gdash_sql.bas"
+    load gdash_format from "gdash_format.bas"
 
     function _get(r, k)
         return r[k]
@@ -27,14 +28,14 @@ library gdash_record
         on error goto next
         f {file} = path
         if error then
-            return { ok: false, record: {}, errors: ["record file unreadable: " + path] }
+            return { ok: false, record: {}, errors: ["record file unreadable: " + path], warnings: [] }
         end if
         if not exists(f) then
-            return { ok: false, record: {}, errors: ["record file not found: " + path] }
+            return { ok: false, record: {}, errors: ["record file not found: " + path], warnings: [] }
         end if
         text = read(f)
         if error then
-            return { ok: false, record: {}, errors: ["record file unreadable: " + path] }
+            return { ok: false, record: {}, errors: ["record file unreadable: " + path], warnings: [] }
         end if
         ' try_decode reports failure as a VALUE: { ok, value, message,
         ' offset, line, column }. The decoded record is .value, and the
@@ -42,19 +43,57 @@ library gdash_record
         ' a hand-edited record is the normal authoring path (design §1).
         parsed = try_decode(text)
         if not parsed.ok then
-            return { ok: false, record: {}, errors: ["record is not valid JSON: " + path + " (" + string(parsed.message) + " at line " + string(parsed.line) + ", column " + string(parsed.column) + ")"] }
+            return { ok: false, record: {}, errors: ["record is not valid JSON: " + path + " (" + string(parsed.message) + " at line " + string(parsed.line) + ", column " + string(parsed.column) + ")"], warnings: [] }
         end if
         doc = parsed.value
         if type(doc) != "record" then
-            return { ok: false, record: {}, errors: ["record must be a JSON object: " + path] }
+            return { ok: false, record: {}, errors: ["record must be a JSON object: " + path], warnings: [] }
         end if
-        errs = validate(doc)
-        return { ok: count(errs) = 0, record: doc, errors: errs }
+        got = check(doc)
+        return { ok: count(got.errors) = 0, record: doc, errors: got.errors, warnings: got.warnings }
+    end function
+
+    function legal_space(v)
+        return contains(["between", "around", "evenly", "start", "end", "center"], v)
+    end function
+
+    ' `space` governs LEFTOVER room. When every child is weighted there is no
+    ' leftover room, so the setting does nothing -- design §2 calls for a
+    ' warning rather than a refusal, because the record is still renderable
+    ' and the author has only asked for something that cannot happen.
+    function _dead_space(node, kids, where, warnings)
+        sp = node["space"]
+        if is_unknown(sp) then
+            return warnings
+        end if
+        if count(kids) = 0 then
+            return warnings
+        end if
+        all_weighted = true
+        i = 0
+        while i < count(kids)
+            if is_unknown(kids[i]["weight"]) then
+                all_weighted = false
+            end if
+            i += 1
+        end while
+        if all_weighted then
+            return concat(warnings, [where + ": 'space' is ignored because every child is weighted, so there is no leftover room to distribute"])
+        end if
+        return warnings
     end function
 
     function _validate_layout(node, vis, ctl, errors, where)
         if is_unknown(node) or type(node) != "record" then
             return concat(errors, [where + ": layout node must be an object"])
+        end if
+        ' `weight` is a property of a CHILD, so it is checked on every node
+        ' rather than only on containers -- a weighted leaf is the common case.
+        wt = node["weight"]
+        if not is_unknown(wt) then
+            if type(wt) != "number" or wt <= 0 then
+                errors = concat(errors, [where + ": 'weight' must be a positive number"])
+            end if
         end if
         if _has(node, "vert") or _has(node, "horiz") then
             kids = node["vert"]
@@ -65,6 +104,18 @@ library gdash_record
             end if
             if type(kids) != "array" then
                 return concat(errors, [where + "." + label + " must be an array"])
+            end if
+            sp = node["space"]
+            if not is_unknown(sp) then
+                if not legal_space(sp) then
+                    errors = concat(errors, [where + ": 'space' is '" + string(sp) + "'; it must be between, around, evenly, start, end or center"])
+                end if
+            end if
+            gp = node["gap"]
+            if not is_unknown(gp) then
+                if type(gp) != "number" or gp < 0 then
+                    errors = concat(errors, [where + ": 'gap' must be a non-negative number"])
+                end if
             end if
             i = 0
             while i < count(kids)
@@ -91,7 +142,38 @@ library gdash_record
     end function
 
     function validate(rec)
+        return check(rec).errors
+    end function
+
+    function warnings_for(rec)
+        return check(rec).warnings
+    end function
+
+    function _walk_warnings(node, where, warnings)
+        if is_unknown(node) or type(node) != "record" then
+            return warnings
+        end if
+        kids = node["vert"]
+        label = "vert"
+        if is_unknown(kids) then
+            kids = node["horiz"]
+            label = "horiz"
+        end if
+        if is_unknown(kids) or type(kids) != "array" then
+            return warnings
+        end if
+        warnings = _dead_space(node, kids, where, warnings)
+        i = 0
+        while i < count(kids)
+            warnings = _walk_warnings(kids[i], where + "." + label + "[" + string(i) + "]", warnings)
+            i += 1
+        end while
+        return warnings
+    end function
+
+    function check(rec)
         errors = []
+        warnings = []
 
         if not _has(rec, "format") then
             errors = concat(errors, ["record has no 'format'"])
@@ -169,6 +251,12 @@ library gdash_record
                         else if sc < 0 or sc != round(sc, 0) then
                             errors = concat(errors, ["money column '" + dn + "." + cn[k] + "' has a non-integer or negative scale"])
                         end if
+                        cur = col["currency"]
+                        if not is_unknown(cur) then
+                            if not contains(gdash_format.supported_currencies(), cur) then
+                                errors = concat(errors, ["money column '" + dn + "." + cn[k] + "' names currency '" + string(cur) + "', which this build does not support"])
+                            end if
+                        end if
                     end if
                     k += 1
                 end while
@@ -212,15 +300,63 @@ library gdash_record
                 mk = enc["mark"]
                 if is_unknown(mk) then
                     errors = concat(errors, ["visual '" + vn + "' encoding has no 'mark'"])
-                else if mk != "bar" and mk != "value" then
-                    errors = concat(errors, ["visual '" + vn + "' uses mark '" + string(mk) + "'; this build renders 'bar' and 'value'"])
-                else if mk = "bar" then
+                else if not contains(["bar", "line", "value", "table"], mk) then
+                    errors = concat(errors, ["visual '" + vn + "' uses mark '" + string(mk) + "'; this build renders bar, line, value and table"])
+                else if mk = "bar" or mk = "line" then
                     if is_unknown(enc["x"]) or is_unknown(enc["y"]) then
-                        errors = concat(errors, ["visual '" + vn + "' mark 'bar' needs both 'x' and 'y' channels"])
+                        errors = concat(errors, ["visual '" + vn + "' mark '" + string(mk) + "' needs both 'x' and 'y' channels"])
                     end if
                 else if mk = "value" then
                     if is_unknown(enc["value"]) then
                         errors = concat(errors, ["visual '" + vn + "' mark 'value' needs a 'value' channel"])
+                    end if
+                else if mk = "table" then
+                    ' A table takes no positional channels: the SQL decides
+                    ' shape, so x/y/series on a table is a misunderstanding
+                    ' worth naming rather than ignoring.
+                    if not is_unknown(enc["x"]) or not is_unknown(enc["y"]) or not is_unknown(enc["series"]) then
+                        errors = concat(errors, ["visual '" + vn + "' mark 'table' takes no x, y or series channel; it renders result columns in SELECT order"])
+                    end if
+                end if
+
+                ' 'series' belongs only to marks that can fan out.
+                if not is_unknown(enc["series"]) then
+                    if not contains(["bar", "line"], mk) then
+                        errors = concat(errors, ["visual '" + vn + "' sets 'series', which only mark 'bar' or 'line' uses"])
+                    end if
+                end if
+
+                ' format names must be ones this build renders.
+                if not is_unknown(enc["format"]) then
+                    if not gdash_format.known(enc["format"]) then
+                        errors = concat(errors, ["visual '" + vn + "' uses format '" + string(enc["format"]) + "'; this build renders currency, number, percent and text"])
+                    end if
+                end if
+                fmts = enc["formats"]
+                if not is_unknown(fmts) then
+                    if mk != "table" then
+                        errors = concat(errors, ["visual '" + vn + "' sets 'formats', which only mark 'table' uses"])
+                    end if
+                    fc = keys(fmts)
+                    k = 0
+                    while k < count(fc)
+                        entry = fmts[fc[k]]
+                        if type(entry) = "record" then
+                            fname = default(entry["name"], "text")
+                        else
+                            fname = string(entry)
+                        end if
+                        if not gdash_format.known(fname) then
+                            errors = concat(errors, ["visual '" + vn + "' formats column '" + fc[k] + "' as '" + fname + "'; this build renders currency, number, percent and text"])
+                        end if
+                        k += 1
+                    end while
+                end if
+
+                ' a currency must be one the build can construct
+                if not is_unknown(enc["currency"]) then
+                    if not contains(gdash_format.supported_currencies(), enc["currency"]) then
+                        errors = concat(errors, ["visual '" + vn + "' names currency '" + string(enc["currency"]) + "', which this build does not support"])
                     end if
                 end if
             end if
@@ -263,17 +399,21 @@ library gdash_record
             i = 0
             while i < count(tabs)
                 tb = tabs[i]
+                if is_unknown(tb["name"]) then
+                    errors = concat(errors, ["tab[" + string(i) + "] has no 'name'"])
+                end if
                 lay = tb["layout"]
                 if is_unknown(lay) then
                     errors = concat(errors, ["tab[" + string(i) + "] has no 'layout'"])
                 else
                     errors = _validate_layout(lay, vis_names, ctl_names, errors, "tab[" + string(i) + "].layout")
+                    warnings = _walk_warnings(lay, "tab[" + string(i) + "].layout", warnings)
                 end if
                 i += 1
             end while
         end if
 
-        return errors
+        return { errors: errors, warnings: warnings }
     end function
 
     ' The dependency graph, derived: which visuals re-run when `param` changes

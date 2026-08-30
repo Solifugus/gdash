@@ -58,6 +58,19 @@ has "$page" "<option" "slicer options came from a query over the dataset"
 has "$page" "north" "slicer lists a value only the data knows"
 has "$page" "EventSource" "page opens an SSE stream"
 
+echo "--- tabs and the table mark (GDASH-1) ---"
+has "$page" 'class="gdash-tabs"' "multi-tab record renders a tab bar"
+has "$page" 'data-tab="2"' "all three tabs are present"
+has "$page" 'data-pane="1" hidden' "non-active panes start hidden"
+has "$page" "<table>" "the table mark rendered"
+has "$page" "gdashTab" "tab switching is client-side"
+# every tab renders server-side in ONE response -- the Trend tab's line chart
+# is in the page even though the Overview tab is showing.
+has "$page" "trend_by_region" "a hidden tab's visual is already rendered"
+has "$page" "justify-content:space-between" "space maps to flex justification"
+has "$page" "flex:2 1 0" "a weighted child flexes"
+has "$page" "gap:16px" "gap is applied"
+
 echo "--- access fails closed (design §8) ---"
 code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/d/private")"
 ok "record without access:open is refused" "$code" "403"
