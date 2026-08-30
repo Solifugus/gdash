@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Publish three dashboards the way GDASH-3 eventually will.
+"""Write three dashboard drafts for the end-to-end run.
 
-GDASH-2 implements only the READ side of design §7's `current` pointer, so the
-end-to-end run has to write the pointer and the snapshot itself. That is
-deliberate and named in the brief (§2.4): without a published dashboard the
-scheduler has nothing to schedule and the phase's whole deliverable is
-untestable. When GDASH-3 ships publish, this file is what it replaces.
+Authoring is file editing (design §10), so writing a draft is what an author
+does and this file does only that. Publishing them is `gdash publish`, run by
+the e2e script itself -- GDASH-3 replaced the hand-written `current` pointer
+this file used to produce, and there is deliberately no second way to publish.
 """
 import json, os, sys
 
@@ -13,17 +12,13 @@ root = sys.argv[1]
 base = json.load(open("dashboards/sales/draft.json"))
 
 
-def publish(name, mutate):
+def draft(name, mutate):
     d = json.loads(json.dumps(base))
     d["name"] = name
     mutate(d)
     home = f"{root}/lib/dashboards/{name}"
-    os.makedirs(f"{home}/snapshots", exist_ok=True)
-    json.dump(d, open(f"{home}/snapshots/0001.json", "w"), indent=2)
-    # The draft stays beside it, and must never be what a published dashboard
-    # serves or refreshes.
+    os.makedirs(home, exist_ok=True)
     json.dump(d, open(f"{home}/draft.json", "w"), indent=2)
-    open(f"{home}/current", "w").write("0001.json\n")
 
 
 def single_dataset(d):
@@ -54,6 +49,6 @@ def down(d):
     d["datasets"]["orders"]["profile"] = "flaky"
 
 
-publish("timed", timed)
-publish("opened", opened)
-publish("down", down)
+draft("timed", timed)
+draft("opened", opened)
+draft("down", down)

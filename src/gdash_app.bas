@@ -11,6 +11,8 @@ library gdash_app
     load gdash_render from "gdash_render.bas"
     load gdash_refresh from "gdash_refresh.bas"
     load gdash_sched from "gdash_sched.bas"
+    load gdash_publish from "gdash_publish.bas"
+    load gdash_diff from "gdash_diff.bas"
 
     function _root_of(req)
         return default(env("GDASH_ROOT"), "")
@@ -49,27 +51,45 @@ library gdash_app
         return rec["access"] = "open"
     end function
 
-    ' Returns { ok, rec, p, mode, response } -- response set only when
-    ' refusing. A published dashboard serves its snapshot and its published
-    ' data; one that has never been published serves the draft, which is
-    ' every dashboard until GDASH-3 ships publish.
+    ' The snapshot this viewer is pinned to, from their cookie. Empty when
+    ' they have none, which is every first visit.
+    function _pin_of(req)
+        c = req["cookies"]
+        if is_unknown(c) then
+            return ""
+        end if
+        return string(default(c["gdash_pin"], ""))
+    end function
+
+    ' Scoped to this dashboard's own path, so one cookie name serves every
+    ' dashboard without a map. No Max-Age: it is a SESSION cookie, and design
+    ' §7 pins a snapshot for a session -- closing the browser is what ends it.
+    function _pin_cookie(name, leaf)
+        return "gdash_pin=" + leaf + "; Path=/d/" + name + "; HttpOnly; SameSite=Lax"
+    end function
+
+    ' Returns { ok, rec, p, mode, snapshot, pin_was, response } -- response set
+    ' only when refusing. A published dashboard serves the snapshot this
+    ' viewer pinned at session open, or `current` if they have not pinned one;
+    ' an unpublished dashboard serves the draft.
     function _load_dashboard(req, name)
         p = paths_for(req)
         if contains(name, "/") then
-            return { ok: false, rec: {}, p: p, mode: "draft", response: _refuse(400, "bad dashboard name") }
+            return { ok: false, rec: {}, p: p, mode: "draft", snapshot: "", pin_was: "", response: _refuse(400, "bad dashboard name") }
         end if
-        pub = gdash_paths.publication(p, name)
+        pin = _pin_of(req)
+        pub = gdash_paths.pinned(p, name, pin)
         loaded = gdash_record.load_file(pub.record_file)
         if not loaded.ok then
             if contains(join(loaded.errors, "|"), "not found") then
-                return { ok: false, rec: {}, p: p, mode: pub.mode, response: _refuse(404, "no such dashboard: " + name) }
+                return { ok: false, rec: {}, p: p, mode: pub.mode, snapshot: pub.snapshot, pin_was: pin, response: _refuse(404, "no such dashboard: " + name) }
             end if
-            return { ok: false, rec: {}, p: p, mode: pub.mode, response: _refuse(500, "dashboard is invalid: " + join(loaded.errors, "; ")) }
+            return { ok: false, rec: {}, p: p, mode: pub.mode, snapshot: pub.snapshot, pin_was: pin, response: _refuse(500, "dashboard is invalid: " + join(loaded.errors, "; ")) }
         end if
         if not _access_ok(loaded.record) then
-            return { ok: false, rec: {}, p: p, mode: pub.mode, response: _refuse(403, "this dashboard does not grant open access") }
+            return { ok: false, rec: {}, p: p, mode: pub.mode, snapshot: pub.snapshot, pin_was: pin, response: _refuse(403, "this dashboard does not grant open access") }
         end if
-        return { ok: true, rec: loaded.record, p: p, mode: pub.mode, response: {} }
+        return { ok: true, rec: loaded.record, p: p, mode: pub.mode, snapshot: pub.snapshot, pin_was: pin, response: {} }
     end function
 
     ' Every OTHER dataset of this dashboard that exists on disk, so a visual
@@ -232,6 +252,13 @@ library gdash_app
             st = gdash_sched.read_state(gdash_paths.dataset_state(p, name, mode, ds[i]))
             line = _html_escape(ds[i]) + ": data as of " + _html_escape(_when(st.last_success))
             cls = "gdash-stale-ok"
+            ' A published record can be rolled back to a version whose dataset
+            ' asks a different question than the one that produced the file on
+            ' disk. Saying so is the whole point: the data is not merely old.
+            if gdash_sched.definition_stale(rec["datasets"][ds[i]], st) then
+                cls = "gdash-stale-bad"
+                line = line + " — the dataset definition changed since this was fetched"
+            end if
             if st.last_error != "" then
                 cls = "gdash-stale-bad"
                 line = line + " — last refresh failed: " + _html_escape(st.last_error)
@@ -277,8 +304,12 @@ library gdash_app
         js = js + "function gdashTab(b){var i=b.getAttribute('data-tab');"
         js = js + "var ts=document.querySelectorAll('.gdash-tab');for(var j=0;j<ts.length;j++){ts[j].classList.toggle('gdash-tab-active',ts[j]===b)}"
         js = js + "var ps=document.querySelectorAll('.gdash-pane');for(var k=0;k<ps.length;k++){ps[k].hidden=(ps[k].getAttribute('data-pane')!==i)}}"
+        js = js + "function gdashNotice(){var b=document.getElementById('gdash-notice');if(b){b.hidden=false}}"
         js = js + "var es=new EventSource(location.pathname+'/events');"
-        js = js + "es.onmessage=function(e){if(e.data==='refresh'){location.reload()}};"
+        js = js + "es.onmessage=function(e){"
+        js = js + "if(e.data==='refresh'){location.reload()}"
+        js = js + "else if(e.data==='publish'){gdashNotice()}"
+        js = js + "};"
         return js
     end function
 
@@ -295,6 +326,7 @@ library gdash_app
         s = s + ".gdash-empty{color:#666;font-style:italic;padding:8px}"
         s = s + ".gdash-stale{color:#666;font-size:12px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:16px}"
         s = s + ".gdash-stale-bad{color:#a00}"
+        s = s + ".gdash-notice{border:1px solid #c90;background:#fffbe6;border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:13px}"
         s = s + ".gdash-tabs{display:flex;gap:4px;border-bottom:1px solid #ddd;margin-bottom:16px}"
         s = s + ".gdash-tab{border:0;background:none;padding:8px 14px;cursor:pointer;font-size:14px;color:#555;border-bottom:2px solid transparent}"
         s = s + ".gdash-tab-active{color:#111;border-bottom-color:#333;font-weight:600}"
@@ -345,9 +377,18 @@ library gdash_app
         html = "<!doctype html><html><head><meta charset=" + q + "utf-8" + q + "><title>" + string(default(rec["title"], name)) + "</title><style>" + _style() + "</style></head><body>"
         html = html + "<h1>" + string(default(rec["title"], name)) + "</h1>"
         html = html + "<div class=" + q + "gdash-stale" + q + ">" + _status_block(p, name, mode, rec) + "</div>"
+        ' Hidden until a publish is observed. The viewer decides when to move.
+        html = html + "<div id=" + q + "gdash-notice" + q + " class=" + q + "gdash-notice" + q + " hidden>A new version of this dashboard has been published. <a href=" + q + "" + q + " onclick=" + q + "location.reload();return false" + q + ">Reload to see it.</a></div>"
         html = html + body
         html = html + "<script>" + _shim() + "</script>"
         html = html + "</body></html>"
+
+        ' Pin at session open (design §7). Re-set only when the browser is not
+        ' already holding the snapshot we served -- a first visit, or a pin
+        ' whose snapshot is gone and fell back to `current`.
+        if got.snapshot != "" and got.pin_was != got.snapshot then
+            return { body: html, headers: { "content-type": "text/html; charset=utf-8" }, cookies: [_pin_cookie(name, got.snapshot)] }
+        end if
         return _html(html)
     end function
 
@@ -427,6 +468,57 @@ library gdash_app
         return _json({ refreshed: done })
     end function
 
+    ' The two texts and the diff between them. Design §7's "what changed
+    ' between the numbers the CFO saw Tuesday and today" -- the endpoint hands
+    ' back both records as well as the diff, because a reader who disagrees
+    ' with the diff should be able to check it against the sources.
+    '
+    ' Access is the dashboard's: a snapshot is a version of a dashboard, so
+    ' whoever may not see the dashboard may not see its history either.
+    function diff(req, name)
+        got = _load_dashboard(req, name)
+        if not got.ok then
+            return got.response
+        end if
+        p = got.p
+        have = gdash_publish.snapshots(p, name)
+        if count(have) = 0 then
+            return _refuse(404, "dashboard '" + name + "' has never been published")
+        end if
+
+        q = req["query"]
+        if is_unknown(q) then
+            q = {}
+        end if
+        to_leaf = string(default(q["to"], gdash_paths.read_pointer(p, name)))
+        if to_leaf = "" then
+            to_leaf = have[count(have) - 1]
+        end if
+        from_leaf = string(default(q["from"], ""))
+        if from_leaf = "" then
+            k = 0
+            while k < count(have)
+                if have[k] = to_leaf and k > 0 then
+                    from_leaf = have[k - 1]
+                end if
+                k += 1
+            end while
+        end if
+        if from_leaf = "" then
+            return _refuse(400, "dashboard '" + name + "' has only one snapshot; there is nothing to compare it with")
+        end if
+
+        a = gdash_publish.snapshot_text(p, name, from_leaf)
+        if is_unknown(a) then
+            return _refuse(404, "no such snapshot: " + from_leaf)
+        end if
+        b = gdash_publish.snapshot_text(p, name, to_leaf)
+        if is_unknown(b) then
+            return _refuse(404, "no such snapshot: " + to_leaf)
+        end if
+        return _json({ from: from_leaf, to: to_leaf, changed: gdash_diff.changed(string(a), string(b)), diff: gdash_diff.unified(string(a), string(b), from_leaf, to_leaf, 3), from_text: string(a), to_text: string(b) })
+    end function
+
     ' Each stream body polls the per-dashboard version file and emits on
     ' change. The rename-swap guarantees a notified reader sees complete data.
     function events(req, name)
@@ -437,6 +529,9 @@ library gdash_app
         p = got.p
         vfile = gdash_paths.version_file(p, name, got.mode)
         seen = gdash_store.read_version(vfile)
+        ' `current` is polled alongside the data version, so publish needs no
+        ' file of its own and a cache wipe cannot lose the signal.
+        seen_pub = gdash_paths.read_pointer(p, name)
 
         alive = emit(req, "event: hello" + chr(10) + "data: " + string(seen) + chr(10) + chr(10))
         ticks = 0
@@ -449,9 +544,17 @@ library gdash_app
         while alive and ticks < 7200
             sleep(0.5)
             now_v = gdash_store.read_version(vfile)
+            now_pub = gdash_paths.read_pointer(p, name)
             if now_v != seen then
                 seen = now_v
                 alive = emit(req, "data: refresh" + chr(10) + chr(10))
+            else if now_pub != seen_pub then
+                ' A NOTICE, not a reload. Yanking the page out from under a
+                ' pinned viewer is the thing pinning exists to prevent
+                ' (design §7): new versions arrive on next open, or when the
+                ' viewer decides.
+                seen_pub = now_pub
+                alive = emit(req, "data: publish" + chr(10) + chr(10))
             else if mod(ticks, 10) = 0 then
                 alive = emit(req, ": ping" + chr(10) + chr(10))
             end if

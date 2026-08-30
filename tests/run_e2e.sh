@@ -135,7 +135,11 @@ has "$page2" "configured to fail" "naming what the source said"
 # a snapshot by hand -- the read side is what GDASH-2 implements (brief §2.4).
 # ---------------------------------------------------------------------------
 echo "--- policy refresh needs a published dashboard (design §3) ---"
-python3 "$HERE/e2e_publish.py" "$ROOT"
+python3 "$HERE/e2e_drafts.py" "$ROOT"
+for d in timed opened down; do
+    out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" publish "$d" 2>&1)"
+    has "$out" "published $d as 0001.json" "publish $d"
+done
 repoint fixtures/orders.json
 
 out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" schedule 2>&1)"
@@ -192,6 +196,115 @@ kill $SCH 2>/dev/null; wait $SCH 2>/dev/null
 kill $SSE2 2>/dev/null; wait $SSE2 2>/dev/null
 has "$(cat "$SCRATCH/sched.log")" "timed.orders: refreshed" "the scheduler picked up the changed data by itself"
 has "$(cat "$SCRATCH/sse2.txt")" "data: refresh" "and every open tab was told over SSE, with no one pressing anything"
+
+# ---------------------------------------------------------------------------
+# The §7 lifecycle over HTTP.
+# ---------------------------------------------------------------------------
+echo "--- a viewer is pinned to the snapshot they opened (design §7) ---"
+jar="$SCRATCH/cookies.txt"
+rm -f "$jar"
+page="$(curl -s -c "$jar" --max-time 10 "http://127.0.0.1:$PORT/d/timed")"
+has "$page" "Sales" "the published dashboard renders"
+has "$(cat "$jar")" "gdash_pin" "opening it pins the snapshot in a session cookie"
+has "$(cat "$jar")" "0001.json" "naming the snapshot that was served"
+
+# Publish a second version while that viewer is holding the first.
+python3 - "$ROOT" <<'PYEOF'
+import json,sys
+p=sys.argv[1]+'/lib/dashboards/timed/draft.json'
+d=json.load(open(p)); d['title']='Sales, second edition'
+json.dump(d,open(p,'w'),indent=2)
+PYEOF
+out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" publish timed 2>&1)"
+has "$out" "0002.json" "a second version is published"
+
+pinned="$(curl -s -b "$jar" --max-time 10 "http://127.0.0.1:$PORT/d/timed")"
+hasnt "$pinned" "second edition" "the pinned viewer still sees the version they opened"
+fresh="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/timed")"
+has "$fresh" "second edition" "a viewer arriving now gets the new one"
+
+# A pin naming a snapshot that is gone falls back rather than failing.
+gone="$(curl -s -b "gdash_pin=8888.json" --max-time 10 "http://127.0.0.1:$PORT/d/timed")"
+has "$gone" "second edition" "a pin whose snapshot is gone falls back to current"
+
+echo "--- publish nudges; it does not yank the page away ---"
+curl -s -N --max-time 8 "http://127.0.0.1:$PORT/d/timed/events" > "$SCRATCH/sse3.txt" &
+SSE3=$!
+sleep 1
+"$GBASIC" src/gdash_cli.bas --root "$ROOT" publish timed >/dev/null 2>&1
+sleep 2.5
+kill $SSE3 2>/dev/null; wait $SSE3 2>/dev/null
+has "$(cat "$SCRATCH/sse3.txt")" "data: publish" "a publish is announced over SSE"
+hasnt "$(cat "$SCRATCH/sse3.txt")" "data: refresh" "and is NOT announced as a data refresh"
+has "$fresh" "gdash-notice" "the page carries the banner the notice reveals"
+has "$fresh" "hidden" "hidden until there is something to say"
+
+echo "--- rollback, and data that no longer answers the record's question ---"
+out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" snapshots timed 2>&1)"
+has "$out" "0001.json" "snapshots lists every version"
+has "$out" "* 0003.json" "marking the one in force"
+
+# Publish a version whose dataset asks a DIFFERENT question. The data on disk
+# was fetched for the old query, so it now answers a question nobody is asking.
+python3 - "$ROOT" <<'PYEOF'
+import json,sys
+p=sys.argv[1]+'/lib/dashboards/timed/draft.json'
+d=json.load(open(p))
+d['datasets']['orders']['sql']="select region, month, amount from sales.orders where region <> 'nowhere'"
+d['datasets']['orders']['refresh']='manual'
+del d['datasets']['orders']['every']
+json.dump(d,open(p,'w'),indent=2)
+PYEOF
+out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" publish timed 2>&1)"
+has "$out" "published timed as 0004.json" "a version with a different query is published"
+
+changed_page="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/timed")"
+has "$changed_page" "definition changed" "the page says the data predates the record now serving it"
+has "$changed_page" "<svg" "while every visual keeps rendering the data there is"
+
+# The dataset is `manual`, so the scheduler must NOT go behind the author's
+# back however stale the definition is.
+out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" schedule 2>&1)"
+hasnt "$out" "timed.orders" "a manual dataset is not refreshed by the scheduler, stale definition or not"
+still="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/timed")"
+has "$still" "definition changed" "so it still says so"
+
+# A person asking refreshes what the dashboard SERVES -- the published data,
+# not the draft, which is the only way a published manual dataset ever moves.
+out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh timed 2>&1)"
+# The new query returns the same rows, so the CONTENT is unchanged even though
+# the definition is not: no swap, no version bump, no reload for anyone -- and
+# the definition is recorded anyway, which is what clears the warning.
+has "$out" "unchanged timed.orders" "a person can refresh a published manual dataset"
+settled="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/timed")"
+hasnt "$settled" "definition changed" "and the record and its data agree again"
+
+# Rolling back puts the OLDER query back in force, and the data on disk was
+# fetched for the newer one. The same rule catches it from the other side.
+out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" rollback timed 0003.json 2>&1)"
+has "$out" "rolled timed back to 0003.json" "rollback moves current"
+after_roll="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/timed")"
+has "$after_roll" "definition changed" "and a rollback is caught by the same rule, from the other side"
+has "$after_roll" "<svg" "with the dashboard still rendering throughout"
+
+echo "--- the diff endpoint (design §7) ---"
+d1="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/timed/diff?from=0001.json&to=0002.json")"
+has "$d1" '"changed":true' "two different snapshots differ"
+has "$d1" "second edition" "and the diff names what changed"
+d2="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/timed/diff?from=0002.json&to=0002.json")"
+has "$d2" '"changed":false' "a snapshot does not differ from itself"
+code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/d/timed/diff?from=9999.json")"
+ok "a snapshot that does not exist is 404" "$code" "404"
+code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/d/private/diff")"
+ok "history follows the dashboard's own access rule" "$code" "403"
+
+echo "--- an invalid draft cannot be published ---"
+printf '{ "format": 1 }' > "$ROOT/lib/dashboards/timed/draft.json"
+before_ptr="$(cat "$ROOT/lib/dashboards/timed/current")"
+out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" publish timed 2>&1)"
+ok "publishing an invalid draft exits nonzero" "$?" "1"
+has "$out" "nothing was published" "and says nothing was published"
+ok "current did not move" "$(cat "$ROOT/lib/dashboards/timed/current")" "$before_ptr"
 
 kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
 rm -rf "$SCRATCH"

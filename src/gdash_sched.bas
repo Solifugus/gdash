@@ -15,10 +15,11 @@
 
 library gdash_sched
 
+    load crypto
     load gdash_paths from "gdash_paths.bas"
 
     function state_defaults()
-        return { format: 1, last_attempt: 0, last_success: 0, last_error: "", rows: 0, hash: "", requested: 0 }
+        return { format: 1, last_attempt: 0, last_success: 0, last_error: "", rows: 0, hash: "", requested: 0, definition: "" }
     end function
 
     function _num(v, fallback)
@@ -53,7 +54,7 @@ library gdash_sched
             return d
         end if
         v = parsed.value
-        return { format: 1, last_attempt: _num(v["last_attempt"], 0), last_success: _num(v["last_success"], 0), last_error: _txt(v["last_error"]), rows: _num(v["rows"], 0), hash: _txt(v["hash"]), requested: _num(v["requested"], 0) }
+        return { format: 1, last_attempt: _num(v["last_attempt"], 0), last_success: _num(v["last_success"], 0), last_error: _txt(v["last_error"]), rows: _num(v["rows"], 0), hash: _txt(v["hash"]), requested: _num(v["requested"], 0), definition: _txt(v["definition"]) }
     end function
 
     ' tmp-then-rename, like every other JSON store gdash writes (design §6).
@@ -101,6 +102,27 @@ library gdash_sched
         return st.last_success
     end function
 
+    ' What produced the data now on disk: the fetch query and the profile it
+    ' came from. A published record can be rolled back to a version whose
+    ' dataset asks a different question, and then the file on disk is the
+    ' answer to a question nobody is asking any more (GDASH-3 brief §2.3).
+    function definition_of(ds)
+        return crypto.sha256_hex(string(ds["profile"]) + chr(31) + string(ds["sql"]))
+    end function
+
+    ' True when there IS data and it predates the definition now in force. A
+    ' dataset that has never refreshed is not stale, it is empty, and the page
+    ' already says so.
+    function definition_stale(ds, st)
+        if st.last_success = 0 then
+            return false
+        end if
+        if st.definition = "" then
+            return false
+        end if
+        return st.definition != definition_of(ds)
+    end function
+
     ' Returns { due, reason }. `trigger` is "manual" or "policy".
     function due(ds, st, now, trigger)
         if trigger = "manual" then
@@ -108,7 +130,15 @@ library gdash_sched
         end if
         pol = policy_of(ds)
         if pol = "manual" then
+            ' A manual dataset waiting for a person is the whole meaning of
+            ' manual, stale definition or not. The page says the definition
+            ' changed; it does not go behind the author's back.
             return { due: false, reason: "policy is manual" }
+        end if
+        ' A changed definition outranks an unelapsed interval: the data is not
+        ' merely old, it answers the wrong question.
+        if definition_stale(ds, st) then
+            return { due: true, reason: "the dataset definition changed since this data was fetched" }
         end if
         if pol = "on_open" then
             if st.requested > 0 then
@@ -149,26 +179,30 @@ library gdash_sched
     end function
 
     function with_request(st, now)
-        return { format: 1, last_attempt: st.last_attempt, last_success: st.last_success, last_error: st.last_error, rows: st.rows, hash: st.hash, requested: now }
+        return { format: 1, last_attempt: st.last_attempt, last_success: st.last_success, last_error: st.last_error, rows: st.rows, hash: st.hash, requested: now, definition: st.definition }
     end function
 
     ' A refresh that failed CLEARS the pending request rather than leaving it
     ' to be retried on every tick. The next page open files a new one, so the
     ' retry rate is bounded by people rather than by a constant this module
     ' would otherwise have to invent.
-    function after_attempt(st, now, ok, message, rows, hash)
+    function after_attempt(st, now, ok, message, rows, hash, definition)
         e = ""
         succeeded = st.last_success
         r = st.rows
         h = st.hash
+        ' A failed attempt leaves the definition alone with the data it
+        ' describes: what is on disk still came from the old query.
+        d = st.definition
         if ok then
             succeeded = now
             r = rows
             h = hash
+            d = definition
         else
             e = message
         end if
-        return { format: 1, last_attempt: now, last_success: succeeded, last_error: e, rows: r, hash: h, requested: 0 }
+        return { format: 1, last_attempt: now, last_success: succeeded, last_error: e, rows: r, hash: h, requested: 0, definition: d }
     end function
 
 end library

@@ -95,7 +95,7 @@ library gdash_refresh
     end function
 
     function _fail(p, dashboard, mode, dataset, st, now, message, vfile, statepath)
-        after = gdash_sched.after_attempt(st, now, false, message, 0, "")
+        after = gdash_sched.after_attempt(st, now, false, message, 0, "", "")
         wrote = gdash_sched.write_state(statepath, after)
         logged = gdash_audit.event(p, "refresh.failed", { dashboard: dashboard, mode: mode, dataset: dataset, reason: message })
         return { ok: false, message: message, version: gdash_store.read_version(vfile), rows: 0, unchanged: false, skipped: false }
@@ -172,7 +172,7 @@ library gdash_refresh
         ' show them the same numbers.
         if said.hash != "" and said.hash = st.hash and gdash_paths.path_exists(live) then
             cleared = _discard_staging(staging)
-            after = gdash_sched.after_attempt(st, now, true, "", said.rows, said.hash)
+            after = gdash_sched.after_attempt(st, now, true, "", said.rows, said.hash, gdash_sched.definition_of(ds))
             wrote = gdash_sched.write_state(statepath, after)
             logged = gdash_audit.event(p, "refresh.unchanged", { dashboard: dashboard, mode: mode, dataset: dataset, rows: said.rows })
             return { ok: true, message: "", version: gdash_store.read_version(vfile), rows: said.rows, unchanged: true, skipped: false }
@@ -187,7 +187,7 @@ library gdash_refresh
         end if
         v = gdash_store.bump_version(vfile, vfile + ".tmp")
 
-        after = gdash_sched.after_attempt(st, now, true, "", said.rows, said.hash)
+        after = gdash_sched.after_attempt(st, now, true, "", said.rows, said.hash, gdash_sched.definition_of(ds))
         wrote = gdash_sched.write_state(statepath, after)
         logged = gdash_audit.event(p, "refresh.ok", { dashboard: dashboard, mode: mode, dataset: dataset, rows: said.rows, version: v })
         return { ok: true, message: "", version: v, rows: said.rows, unchanged: false, skipped: false }

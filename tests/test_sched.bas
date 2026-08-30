@@ -33,7 +33,7 @@ program main(args)
     s = gdash_test.eq(s, d.reason, "never refreshed", "and says why")
 
     ' interval boundaries, exactly.
-    at700 = gdash_sched.after_attempt(fresh, 700, true, "", 10, "h")
+    at700 = gdash_sched.after_attempt(fresh, 700, true, "", 10, "h", "")
     s = gdash_test.ok(s, not gdash_sched.due(every5, at700, 999, "policy").due, "one second before the interval: not due")
     s = gdash_test.ok(s, gdash_sched.due(every5, at700, 1000, "policy").due, "exactly at the interval: due")
     s = gdash_test.ok(s, gdash_sched.due(every5, at700, 1001, "policy").due, "past the interval: due")
@@ -41,7 +41,7 @@ program main(args)
 
     ' A failed attempt counts as an attempt, so a dead source is retried on
     ' its own cadence and not at the scheduler's tick rate.
-    failed = gdash_sched.after_attempt(at700, 900, false, "source refused", 0, "")
+    failed = gdash_sched.after_attempt(at700, 900, false, "source refused", 0, "", "")
     s = gdash_test.ok(s, not gdash_sched.due(every5, failed, 1000, "policy").due, "a failure does not make the next tick due")
     s = gdash_test.ok(s, gdash_sched.due(every5, failed, 1200, "policy").due, "a failure retries one interval later")
     s = gdash_test.eq(s, failed.last_error, "source refused", "the failure is remembered")
@@ -60,15 +60,50 @@ program main(args)
     s = gdash_test.ok(s, not gdash_sched.should_request(every5, fresh, 1000), "an interval dataset never requests")
 
     ' min_age suppresses the request while the data is young.
-    young = gdash_sched.after_attempt(fresh, 980, true, "", 3, "h")
+    young = gdash_sched.after_attempt(fresh, 980, true, "", 3, "h", "")
     s = gdash_test.ok(s, not gdash_sched.should_request(gated, young, 1000), "min_age suppresses a request on young data")
     s = gdash_test.ok(s, gdash_sched.should_request(gated, young, 1040), "min_age lets the request through once the data ages")
 
     ' A completed attempt clears the request, so it is not retried forever.
-    served = gdash_sched.after_attempt(asked, 1010, true, "", 5, "abc")
+    served = gdash_sched.after_attempt(asked, 1010, true, "", 5, "abc", "")
     s = gdash_test.eq(s, served.requested, 0, "success clears the pending request")
-    failed2 = gdash_sched.after_attempt(asked, 1010, false, "down", 0, "")
+    failed2 = gdash_sched.after_attempt(asked, 1010, false, "down", 0, "", "")
     s = gdash_test.eq(s, failed2.requested, 0, "failure clears the pending request too")
+
+    ' --- a changed dataset definition (GDASH-3 §2.3) ---
+    ' A rollback can put a record back in force whose dataset asks a different
+    ' question than the one that produced the file on disk.
+    q1 = { refresh: "interval", every: 300, profile: "w", sql: "select a from t" }
+    q2 = { refresh: "interval", every: 300, profile: "w", sql: "select a, b from t" }
+    p2 = { refresh: "interval", every: 300, profile: "other", sql: "select a from t" }
+    dh = gdash_sched.definition_of(q1)
+    settled = gdash_sched.after_attempt(fresh, 700, true, "", 4, "h", dh)
+
+    s = gdash_test.ok(s, not gdash_sched.definition_stale(q1, settled), "matching definition is not stale")
+    s = gdash_test.ok(s, gdash_sched.definition_stale(q2, settled), "changed sql is stale")
+    s = gdash_test.ok(s, gdash_sched.definition_stale(p2, settled), "a changed profile is stale too")
+    s = gdash_test.ok(s, not gdash_sched.definition_stale(q2, fresh), "a dataset that never refreshed is empty, not stale")
+
+    ' A changed definition outranks an unelapsed interval: the data is not
+    ' merely old, it answers the wrong question.
+    d = gdash_sched.due(q2, settled, 701, "policy")
+    s = gdash_test.ok(s, d.due, "a changed definition is due immediately")
+    s = gdash_test.contains_text(s, d.reason, "definition changed", "and says why")
+    s = gdash_test.ok(s, not gdash_sched.due(q1, settled, 701, "policy").due, "an unchanged one still waits for its interval")
+
+    ' A manual dataset is NOT refreshed behind the author's back, however
+    ' stale its definition. The page says so; the scheduler does not act.
+    mq = { refresh: "manual", profile: "w", sql: "select a, b from t" }
+    s = gdash_test.ok(s, gdash_sched.definition_stale(mq, settled), "a manual dataset can have a stale definition")
+    s = gdash_test.ok(s, not gdash_sched.due(mq, settled, 9999, "policy").due, "and is still not refreshed by the scheduler")
+
+    ' on_open with a changed definition does not wait for someone to open it.
+    oq = { refresh: "on_open", profile: "w", sql: "select a, b from t" }
+    s = gdash_test.ok(s, gdash_sched.due(oq, settled, 701, "policy").due, "on_open with a changed definition is due without a request")
+
+    ' A failed attempt leaves the definition with the data it describes.
+    broke = gdash_sched.after_attempt(settled, 800, false, "down", 0, "", "")
+    s = gdash_test.eq(s, broke.definition, dh, "a failure does not clear the definition of the data on disk")
 
     ' An unknown policy refuses to guess.
     s = gdash_test.ok(s, not gdash_sched.due({ refresh: "hourly" }, fresh, 1000, "policy").due, "an unknown policy is never due")

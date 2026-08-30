@@ -125,32 +125,64 @@ library gdash_paths
         return _join(snapshot_dir(p, name), leaf)
     end function
 
-    ' Which record is served, and therefore which data directory applies.
-    ' Returns { mode, record_file, published }. A dashboard with no `current`
-    ' is a draft: that is the state of every dashboard until GDASH-3 ships,
-    ' and it is also the honest answer for one that has never been published.
-    function publication(p, name)
+    ' A snapshot leaf resolved to a real file, or "" when it is not one.
+    '
+    ' The leaf names a snapshot inside the dashboard's own snapshot directory.
+    ' It never names a path: a `current` -- or a viewer's pin cookie -- holding
+    ' "../../etc/gdash/connections.json" would otherwise read credentials as a
+    ' record. Both callers go through here so neither can forget.
+    function resolve_snapshot(p, name, leaf)
+        if leaf = "" then
+            return ""
+        end if
+        if contains(leaf, "/") then
+            return ""
+        end if
+        snap = snapshot_file(p, name, leaf)
+        if not path_exists(snap) then
+            return ""
+        end if
+        return snap
+    end function
+
+    function read_pointer(p, name)
         ptr = current_pointer(p, name)
         if not path_exists(ptr) then
-            return { mode: "draft", record_file: record_file(p, name), published: false }
+            return ""
         end if
         on error goto next
         cf {file} = ptr
         leaf = trim(read(cf))
-        if error or leaf = "" then
-            return { mode: "draft", record_file: record_file(p, name), published: false }
+        if error then
+            return ""
         end if
-        ' The pointer names a snapshot inside the dashboard's own snapshot
-        ' directory. It never names a path: a `current` holding "../../etc"
-        ' would otherwise read a file outside the dashboard entirely.
-        if contains(leaf, "/") then
-            return { mode: "draft", record_file: record_file(p, name), published: false }
+        return leaf
+    end function
+
+    ' Which record is served, and therefore which data directory applies.
+    ' Returns { mode, record_file, published, snapshot }. A dashboard with no
+    ' `current` is a draft, which is the honest answer for one that has never
+    ' been published.
+    function publication(p, name)
+        leaf = read_pointer(p, name)
+        snap = resolve_snapshot(p, name, leaf)
+        if snap = "" then
+            return { mode: "draft", record_file: record_file(p, name), published: false, snapshot: "" }
         end if
-        snap = snapshot_file(p, name, leaf)
-        if not path_exists(snap) then
-            return { mode: "draft", record_file: record_file(p, name), published: false }
+        return { mode: "published", record_file: snap, published: true, snapshot: leaf }
+    end function
+
+    ' A viewer resolves `current` at session open and PINS that snapshot for
+    ' the session (design §7): publish never coordinates with live sessions,
+    ' and no one sees a half-updated dashboard. A pin naming a snapshot that
+    ' is no longer there falls back to `current` rather than failing -- the
+    ' viewer asked for a coherent read, not for that exact file.
+    function pinned(p, name, leaf)
+        snap = resolve_snapshot(p, name, leaf)
+        if snap = "" then
+            return publication(p, name)
         end if
-        return { mode: "published", record_file: snap, published: true }
+        return { mode: "published", record_file: snap, published: true, snapshot: leaf }
     end function
 
     ' Disposable cache: may be deleted whenever the service is stopped. Draft

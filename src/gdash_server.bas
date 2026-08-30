@@ -34,11 +34,17 @@ server gdash_web( port: 8780 )
         return gdash_app.params_changed(req, req.params.name)
     end post
 
-    ' Manual refresh -- the only policy this build implements.
+    ' A person asking, whatever the dataset's policy says (design §3).
     post "/d/{name}/refresh"( req )
         load gdash_app from "gdash_app.bas"
         return gdash_app.refresh(req, req.params.name)
     end post
+
+    ' The version history, as text and as a diff (design §7).
+    get "/d/{name}/diff"( req )
+        load gdash_app from "gdash_app.bas"
+        return gdash_app.diff(req, req.params.name)
+    end get
 
     ' Global events only. The body polls the version file, so a refresh
     ' performed by any worker (or by the CLI) is seen by all of them.
