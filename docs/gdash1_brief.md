@@ -1,6 +1,7 @@
 # GDASH-1 — Record format completion: phase brief
 
-**Status:** step-0 verification below; implementation follows.
+**Status:** COMPLETE. All six §5 criteria met; at the review boundary.
+Findings in `gdash1_findings.md`; DONE note in §7.
 **Narrows:** the GDASH-1 paragraph of `gdash_development_plan.md`.
 **Authority:** `gdash_design.md` outranks this brief. GDASH-0's findings
 (`gdash0_findings.md`) are inputs, not open questions.
@@ -163,3 +164,47 @@ locale grouping; systemd and FHS install (GDASH-7).
 
 Load-time channel validation remains impossible until `sqlite.columns` ships;
 the first-refresh fallback is pinned here as the ruling behaviour.
+
+
+---
+
+## 7. DONE note
+
+All six §5 criteria met. The hermetic suite is 12 suites — 222 in-process
+assertions plus 31 end-to-end — green from a clean checkout with no services
+running, ending scratch-clean; the opt-in live-Postgres runner passes 5/5.
+
+**Built:** the format map (`currency` delegating to the platform money type,
+plus `number`, `percent`, `text`); the `line` and `table` marks; the `series`
+channel on `bar` and `line`; full `space`/`gap`/`weight` semantics with the
+dead-`space` warning; multiple tabs rendered server-side and switched on the
+client; the validation catalog pinned as 45 golden cases; and
+`docs/gdash_record_format.md` documenting `format: 1` with its refusal
+appendix generated from the golden.
+
+**Removed, not kept beside:** `gdash_store.from_minor` and
+`gdash_render.format_currency`. Two implementations of money formatting was
+the duplication the consolidation existed to end.
+
+**Deliberately not built** — §6 stands, with these to record:
+
+- **Currency support is eight codes**, not all 178 the platform now carries.
+  `load` takes a compile-time literal and the currency modifier is a literal
+  too, so each supported code is an explicit branch. Widening it is mechanical;
+  doing it for 178 codes wants generation rather than typing, which is not this
+  phase's business.
+- **Format options stop at `decimals`.** No locale grouping, no date or time
+  formats, no per-format alignment. `currency`, `number`, `percent` and `text`
+  are what a business table needs to be readable.
+- **`series` colours come from the chart library's categorical palette.**
+  Per-series override is named in design §10 as the first styling knob to add
+  later, and it is still later.
+- **A table paginates nothing.** A visual query returning ten thousand rows
+  renders ten thousand rows. Downsampling is SQL's job (design §5); a row cap
+  belongs with the theme and table options GDASH-6 will want.
+- **Tab state is not addressable.** Reloading returns to the first tab; there
+  is no `#tab=2`. Session pinning of any kind belongs to GDASH-3.
+
+**Design edits still owed** (unchanged, both the maintainer's): §4's money
+headroom figure, and §4's stated render path — now more precisely, that
+formatting goes through the money type but is bounded by its storage scale.
