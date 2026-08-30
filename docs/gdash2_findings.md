@@ -127,3 +127,111 @@ reason. It only bites when the distinction matters.
 Documentation finding for the gbasic repo's own process. gdash keeps its own
 `path_exists` rather than switching on the strength of a documented return
 value that is not the actual one.
+
+---
+
+## G2-8 — I reported the override sweep as built, and it was not
+
+GDASH-1's findings recorded F6 recurring inside gdash (G1-2) and said the
+suite had gained a sweep for override warnings. It had not. There is no such
+check anywhere in `ca9311b`; `grep -ri override tests/ scripts/` at the start
+of this phase returned one unrelated line about a param default.
+
+I wrote it in the report because it was the obvious remedy and I had decided
+to do it, which is not the same as having done it. The finding is not that a
+mechanism was missing — it is that a report said a mechanism existed on the
+strength of an intention. That is the same failure as F5 in GDASH-0, where I
+described the money type from the design rather than from `eval.c`, and it is
+worth naming twice because it is evidently the shape my errors take.
+
+Built here, for real: `tests/overrides_probe.bas` loads every gdash module
+alongside `web`, `sqlite`, `crypto` and `chart`, and `run_tests.sh` fails the
+suite if the interpreter says anything about an override. It currently passes.
+
+## G2-9 — "data as of" was a single line, and became a lie at two datasets
+
+GDASH-0's status line took `file_mtime` of *the first dataset* and labelled it
+the dashboard's. With one dataset that is correct. With two it is a statement
+about whichever dataset `keys()` happened to return first, and it stops being
+true exactly when the datasets diverge — which is when a viewer most needs it.
+
+No test caught it, and no test could have: every fixture, every test record
+and the reference dashboard itself had exactly one dataset. The suite was
+green over a monoculture. The reference record now carries two, so the case
+exists to be tested at all, and the page carries one status line per dataset.
+
+Recorded because the mechanism is general: a reference fixture that only ever
+exercises the singular case makes a whole class of plural bugs invisible, and
+the suite reports full health throughout.
+
+## G2-10 — the content-hash dedupe I built is not the one the design names
+
+Design §2 says the server MAY dedupe refresh work by content-hashing
+**(source, query)** — sharing one fetch between two dashboards that ask for
+the same thing. That is not what this phase built and the two should not be
+confused.
+
+What is built: the fetched **result** is hashed, and a refresh whose result
+matches the stored hash discards its staging file, skips the swap, and does
+not bump the version. It saves a rename and a broadcast, not a fetch. It earns
+its place because every open tab reloads on a version bump, so a five-minute
+interval over static data was reloading every viewer twelve times an hour to
+show them the same numbers.
+
+What is not built: sharing fetch work between dashboards. It needs a
+cross-dashboard registry keyed on (profile, SQL), and dataset sharing is
+deferred by name in design §10. Deferred with it.
+
+The suite noticed the change immediately and correctly: the end-to-end SSE
+test had been driving its notification by re-refreshing identical data, which
+stopped bumping the version the moment the hash landed. It now refreshes data
+that has actually moved, which is what it should have been doing anyway.
+
+## G2-11 — the refresh state file went to `gdash_sched`, not `gdash_store`
+
+The brief (§3) said the state file would go through `gdash_store`, since the
+plan has that module's boundary hardening in this phase. It did not, and the
+brief was wrong rather than the code.
+
+`gdash_store` is the **staging store**: SQLite files, the money boundary, the
+swap. Design §3 contains it so that a future backend swap is one module's
+rewrite. The refresh state is a small JSON file about *scheduling*, and it is
+read by the page, the scheduler and the supervisor alike; putting it in
+`gdash_store` would have widened that module's contract from "the staging
+backend" to "anything stored", which is the containment the design ruling
+exists to prevent.
+
+What did harden in `gdash_store`, as the plan intended: attachment, every
+schema-qualified metadata read, and the content hash. No caller opens a SQLite
+connection or spells a schema name.
+
+## G2-12 — the end-to-end run writes GDASH-3's `current` pointer by hand
+
+`tests/e2e_publish.py` writes `snapshots/0001.json` and a `current` pointer for
+three dashboards, because a policy refresh only applies to a published
+dashboard (design §3) and GDASH-3 owns publish.
+
+Named rather than buried: it is a test reaching into the next phase's format.
+It is also the minimum that makes this phase's central deliverable testable at
+all — without it the scheduler has nothing to schedule and `interval`,
+`on_open`, the published data directory and draft-manual-only are all
+unexercised. The read side is one function (`gdash_paths.publication`) and the
+write side is one file, so if GDASH-3 rules the pointer differently, both move
+together and neither is load-bearing anywhere else.
+
+## G2-13 — with no scheduler running, a policy is silent
+
+The consequence of G2-1, stated as its own finding because an operator will
+meet it. `gdash_server.bas` neither spawns nor supervises the scheduler, so a
+deployment that starts only the server has dashboards whose records say
+`interval` and whose data never moves. Nothing is broken; nothing happens.
+
+Mitigated rather than solved: the per-dataset status line says when each
+dataset last refreshed, so "never" and "four days ago" are visible on the
+dashboard itself rather than only in a log nobody reads. The format doc says
+plainly that policies need a scheduler. GDASH-7 owns the unit file that makes
+this the default rather than a thing to remember.
+
+The alternative — the server spawning it — is what G2-1 rules out: it would be
+spawned once per worker plus one, and the count would change silently whenever
+an operator tuned `workers` in `server.json`.
