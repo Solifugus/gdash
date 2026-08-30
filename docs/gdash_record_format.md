@@ -16,7 +16,7 @@ server-level and live in `/etc/gdash/connections.json` (0600).
 | `format` | yes | Format version. Must be `1`. |
 | `name` | yes | Identifier for the dashboard. |
 | `title` | no | Shown as the page heading. Defaults to `name`. |
-| `access` | no | `open` is the only value this build understands. **Absent means closed** — see §7. |
+| `access` | no | `open` is the only value this build understands. **Absent means closed** — see §8. |
 | `datasets` | yes | Object of dataset name → dataset. |
 | `params` | no | Object of param name → `{ default }`. |
 | `controls` | no | Object of control name → control. |
@@ -32,12 +32,51 @@ becomes a table name, so it must be a legal SQL identifier.
 |---|---|---|
 | `profile` | yes | Names a server-level connection profile. |
 | `sql` | yes | The fetch query, in the **source's** dialect. |
-| `refresh` | no | `manual` only in this build. |
+| `refresh` | no | `manual` (default), `on_open`, or `interval`. |
+| `every` | with `interval` | Seconds between refreshes. A whole number, at least 1. Refused with any other policy. |
+| `min_age` | `on_open` only | Seconds. Suppresses the request while the data is younger than this. Refused with any other policy. |
 | `columns` | no | Column name → `{ type, scale, currency }`. |
 
 **Params may not appear in a dataset query.** A param there would make a slicer
 change re-fetch from the source, silently reintroducing pass-through cost
 (design §2). This is enforced at load time.
+
+**A dashboard may name at most eleven datasets.** A visual query attaches every
+sibling dataset so it can be named unqualified (§4), and SQLite attaches at most
+ten databases beside the one being queried. The twelfth is refused at load
+rather than at render.
+
+### Refresh policies
+
+`refresh` is a string, and its companions are sibling keys rather than a nested
+object, because `format: 1` published it as a string.
+
+- **`manual`** — refreshes only when a person asks: the CLI's `refresh` verb or
+  the dashboard's refresh button.
+- **`on_open`** — opening the dashboard *requests* a refresh; the scheduler
+  performs it. The page does **not** wait: it renders the data it has, and the
+  open tabs are told over SSE when the new data lands. Twenty people opening one
+  dashboard file one request between them, because a request already pending is
+  not duplicated.
+- **`interval`** — refreshed every `every` seconds. A failed attempt counts as
+  an attempt, so a source that is down is retried on the dataset's own cadence
+  rather than at whatever rate the scheduler ticks.
+
+Two things bound what a policy can do:
+
+- **Draft datasets refresh manually only** (design §3). A policy applies to a
+  dashboard that has been published; a draft's `interval` is inert until then,
+  and a policy-triggered refresh against a draft is refused by name.
+- **Policies need a scheduler running.** There is no timer inside the server —
+  the platform's `server` block has one hook and it is `on drain` — so
+  `gdash_scheduler.bas` (or `gdash schedule` from cron) is what makes `on_open`
+  and `interval` mean anything. With none running, every dataset behaves as
+  `manual`: the dashboard serves the data it has and says how old it is.
+
+**An unchanged refresh does not bump the version.** The fetched content is
+hashed; when it matches what is already stored, the staging file is discarded
+and no reload is broadcast. Otherwise a five-minute interval over static data
+would reload every open tab twelve times an hour to show the same numbers.
 
 ### Money columns
 
@@ -83,6 +122,13 @@ materialized dataset) + an encoding.
 | `dataset` | yes | Which dataset to query. |
 | `sql` | yes | The visual query. May bind `:params`. |
 | `encoding` | yes | Mark plus channel mapping. |
+
+**A visual query may name any dataset of its dashboard, unqualified.** The
+named `dataset` is opened directly and every sibling is attached under its own
+name, so `from orders join regions on ...` works with no prefix and no wiring —
+the cross-source join of design §3, arriving as ordinary SQL. A sibling that has
+never refreshed is not attached, and a query naming it fails with SQLite's own
+message, shown in place of that one visual.
 
 ### Marks and their channels
 
@@ -159,7 +205,25 @@ Until it does, a channel naming a column the query does not return is caught
 rather than refusing the record. This is design §2's stated fallback, and it is
 the one respect in which load-time red/green is partial.
 
-## 7. Access
+**A cross-dataset query is not checked at load time either**, for the same
+reason and one more: whether a sibling dataset's table exists depends on
+whether that dataset has ever refreshed, which is a fact about the cache and
+not about the record. A join against a dataset that has never refreshed fails
+in that visual's cell and nowhere else.
+
+## 7. What a viewer is told about the data
+
+Every dashboard carries one status line **per dataset**: when that dataset last
+refreshed successfully, and — when the most recent attempt failed — what the
+source said. One line for a whole dashboard stops being true the moment two
+datasets diverge, which is exactly when a viewer needs it.
+
+A failed refresh never disturbs the data. The old dataset file is untouched,
+every visual keeps rendering, and the status line says the last refresh failed.
+Stale-but-coherent beats broken (design §3) — but only if the viewer is told,
+which is what this line is for.
+
+## 8. Access
 
 `access: open` is a **per-dashboard opt-in, never a server default**. A record
 with no `access` key is refused with 403. A half-configured server fails
