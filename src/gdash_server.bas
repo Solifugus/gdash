@@ -25,7 +25,7 @@ server gdash_web( port: 8780 )
     ' The shell: renders every visual and control once, server-side.
     get "/d/{name}"( req )
         load gdash_app from "gdash_app.bas"
-        return gdash_app.page(req, req.params.name)
+        return gdash_app.dashboard_page(req, req.params.name)
     end get
 
     ' A slicer publishes a param; exactly the visuals binding it re-run.

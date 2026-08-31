@@ -22,14 +22,6 @@ library gdash_app
         return gdash_paths.roles(_root_of(req))
     end function
 
-    function _html_escape(text)
-        t = replace(string(text), "&", "&amp;")
-        t = replace(t, "<", "&lt;")
-        t = replace(t, ">", "&gt;")
-        t = replace(t, chr(34), "&quot;")
-        return t
-    end function
-
     function _html(body)
         return { body: body, headers: { "content-type": "text/html; charset=utf-8" } }
     end function
@@ -250,7 +242,7 @@ library gdash_app
         i = 0
         while i < count(ds)
             st = gdash_sched.read_state(gdash_paths.dataset_state(p, name, mode, ds[i]))
-            line = _html_escape(ds[i]) + ": data as of " + _html_escape(_when(st.last_success))
+            line = gdash_render.html_escape(ds[i]) + ": data as of " + gdash_render.html_escape(_when(st.last_success))
             cls = "gdash-stale-ok"
             ' A published record can be rolled back to a version whose dataset
             ' asks a different question than the one that produced the file on
@@ -261,7 +253,7 @@ library gdash_app
             end if
             if st.last_error != "" then
                 cls = "gdash-stale-bad"
-                line = line + " — last refresh failed: " + _html_escape(st.last_error)
+                line = line + " — last refresh failed: " + gdash_render.html_escape(st.last_error)
             end if
             rows = concat(rows, ["<span class=" + chr(34) + cls + chr(34) + ">" + line + "</span>"])
             i += 1
@@ -337,7 +329,7 @@ library gdash_app
         return s
     end function
 
-    function page(req, name)
+    function dashboard_page(req, name)
         got = _load_dashboard(req, name)
         if not got.ok then
             return got.response
@@ -364,7 +356,7 @@ library gdash_app
                 sel = " gdash-tab-active"
                 hidden = ""
             end if
-            navs = concat(navs, ["<button class=" + chr(34) + "gdash-tab" + sel + chr(34) + " data-tab=" + chr(34) + string(ti) + chr(34) + " onclick=" + chr(34) + "gdashTab(this)" + chr(34) + ">" + _html_escape(tname) + "</button>"])
+            navs = concat(navs, ["<button class=" + chr(34) + "gdash-tab" + sel + chr(34) + " data-tab=" + chr(34) + string(ti) + chr(34) + " onclick=" + chr(34) + "gdashTab(this)" + chr(34) + ">" + gdash_render.html_escape(tname) + "</button>"])
             panes = concat(panes, ["<div class=" + chr(34) + "gdash-pane" + chr(34) + " data-pane=" + chr(34) + string(ti) + chr(34) + hidden + ">" + _layout(p, name, mode, rec, tabs[ti]["layout"], values) + "</div>"])
             ti += 1
         end while

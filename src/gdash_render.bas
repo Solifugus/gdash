@@ -24,7 +24,10 @@ library gdash_render
     load gdash_store from "gdash_store.bas"
     load gdash_format from "gdash_format.bas"
 
-    function _html_escape(text)
+    ' The one HTML escaper in gdash. gdash_app had a byte-identical copy until
+    ' library_collisions() reported the pair; two implementations of escaping
+    ' is how one of them ends up missing a case.
+    function html_escape(text)
         t = replace(string(text), "&", "&amp;")
         t = replace(t, "<", "&lt;")
         t = replace(t, ">", "&gt;")
@@ -62,7 +65,7 @@ library gdash_render
     end function
 
     function _err(message)
-        return "<div class=" + chr(34) + "gdash-error" + chr(34) + ">" + _html_escape(message) + "</div>"
+        return "<div class=" + chr(34) + "gdash-error" + chr(34) + ">" + html_escape(message) + "</div>"
     end function
 
     ' Channel validation happens here, against a real result set, because
@@ -183,7 +186,7 @@ library gdash_render
                 shown = string(row0[ch])
             end if
             title = default(enc["title"], "")
-            return "<div class=" + chr(34) + "gdash-value" + chr(34) + "><div class=" + chr(34) + "gdash-value-title" + chr(34) + ">" + _html_escape(title) + "</div><div class=" + chr(34) + "gdash-value-number" + chr(34) + ">" + _html_escape(shown) + "</div></div>"
+            return "<div class=" + chr(34) + "gdash-value" + chr(34) + "><div class=" + chr(34) + "gdash-value-title" + chr(34) + ">" + html_escape(title) + "</div><div class=" + chr(34) + "gdash-value-number" + chr(34) + ">" + html_escape(shown) + "</div></div>"
         end if
 
         if mark = "bar" or mark = "line" then
@@ -240,7 +243,7 @@ library gdash_render
             head = []
             i = 0
             while i < count(cols)
-                head = concat(head, ["<th>" + _html_escape(cols[i]) + "</th>"])
+                head = concat(head, ["<th>" + html_escape(cols[i]) + "</th>"])
                 i += 1
             end while
 
@@ -258,7 +261,7 @@ library gdash_render
                         spec = format_spec(entry, scale, currency_of(visual))
                         shown = gdash_format.apply(spec, rows[r][cn], rows[r][cn + "__text"])
                     end if
-                    cells = concat(cells, ["<td>" + _html_escape(shown) + "</td>"])
+                    cells = concat(cells, ["<td>" + html_escape(shown) + "</td>"])
                     c += 1
                 end while
                 body = concat(body, ["<tr>" + join(cells, "") + "</tr>"])
@@ -266,7 +269,7 @@ library gdash_render
             end while
 
             title = default(enc["title"], "")
-            return "<div class=" + chr(34) + "gdash-table" + chr(34) + "><div class=" + chr(34) + "gdash-table-title" + chr(34) + ">" + _html_escape(title) + "</div><table><thead><tr>" + join(head, "") + "</tr></thead><tbody>" + join(body, "") + "</tbody></table></div>"
+            return "<div class=" + chr(34) + "gdash-table" + chr(34) + "><div class=" + chr(34) + "gdash-table-title" + chr(34) + ">" + html_escape(title) + "</div><table><thead><tr>" + join(head, "") + "</tr></thead><tbody>" + join(body, "") + "</tbody></table></div>"
         end if
 
         return _err("visual '" + name + "' uses mark '" + string(mark) + "', which this build does not render")
@@ -338,11 +341,11 @@ library gdash_render
             if v = string(current) then
                 sel = " selected"
             end if
-            opts = concat(opts, ["<option value=" + chr(34) + _html_escape(v) + chr(34) + sel + ">" + _html_escape(v) + "</option>"])
+            opts = concat(opts, ["<option value=" + chr(34) + html_escape(v) + chr(34) + sel + ">" + html_escape(v) + "</option>"])
             i += 1
         end while
         label = default(control["label"], name)
-        return "<label class=" + chr(34) + "gdash-control" + chr(34) + ">" + _html_escape(label) + " <select data-param=" + chr(34) + _html_escape(control["param"]) + chr(34) + " onchange=" + chr(34) + "gdashParam(this)" + chr(34) + ">" + join(opts, "") + "</select></label>"
+        return "<label class=" + chr(34) + "gdash-control" + chr(34) + ">" + html_escape(label) + " <select data-param=" + chr(34) + html_escape(control["param"]) + chr(34) + " onchange=" + chr(34) + "gdashParam(this)" + chr(34) + ">" + join(opts, "") + "</select></label>"
     end function
 
 end library

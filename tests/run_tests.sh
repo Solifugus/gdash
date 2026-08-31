@@ -46,16 +46,17 @@ for testfile in "$HERE"/test_*.bas; do
     fi
 done
 
-# The library-namespace sweep. gBASIC function names are global and a second
-# definition silently overrides the first, warning only on stderr (F6). This
-# has now bitten twice, so it is checked rather than remembered.
+# The library-namespace audit. gBASIC function names are global and a second
+# definition silently wins (F6). Two checks, because neither covers the other:
+# library_collisions() reports the latent library-vs-library state, and stderr
+# carries the call-triggered warning for a library shadowing a BUILT-IN.
 echo "--- library namespace ---"
 ran=$((ran + 1))
 sweep="$SCRATCH/overrides.err"
-if "$GBASIC" "$HERE/overrides_probe.bas" >/dev/null 2>"$sweep" && ! grep -qi "override" "$sweep"; then
-    echo "ok   no library overrides across every gdash module and the stdlib it touches"
+if "$GBASIC" "$HERE/overrides_probe.bas" >/dev/null 2>"$sweep" && ! grep -qi "override\|same name as a built-in" "$sweep"; then
+    echo "ok   no unaccepted name collisions, library or built-in"
 else
-    echo "FAIL library overrides (or the probe would not load):"
+    echo "FAIL namespace audit (or the probe would not load):"
     cat "$sweep"
     failed=$((failed + 1))
 fi

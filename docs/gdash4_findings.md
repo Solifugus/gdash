@@ -1,8 +1,9 @@
 # GDASH-4 — Findings
 
 **Status:** phase opening; step-0 complete.
-**Platform:** gBASIC `e8b3549`. Everything here was probed against the real
-binary, not read out of the design.
+**Platform:** gBASIC `79e8939` (step-0 was run against `e8b3549`; the
+platform answered mid-phase and three items below are updated in place).
+Everything here was probed against the real binary, not read out of the design.
 
 Platform items are findings for this report and candidates for gbasic's
 DOGFOOD.md, filed only through that repo's own process (CLAUDE.md).
@@ -29,6 +30,13 @@ platform's rather than gdash's. **This is a design edit owed to the
 maintainer**, not a contradiction to work around — the design named the
 mechanism it had; a better one shipped.
 
+**`password_hash_cost()` now reports this rather than leaving it to be
+measured.** It returns `{ ms, prefix }` by performing one real hash — here
+`{ ms: 11.3, prefix: "$y$j9T$" }` — where `prefix` is the parameter field
+alone, so two deployments can compare what they are actually running. It does
+not let gdash tune the cost; it lets gdash *state* its posture instead of
+assuming it. It costs a hash, so it is a diagnostic and not a per-request call.
+
 **The number worth knowing: a hash costs ~12ms and a verify ~9.5ms.** That is
 comfortable in a request handler — a login pins a worker for a hundredth of a
 second — but it is *fast* for a password KDF, and gdash cannot tune it: the
@@ -51,7 +59,7 @@ The session id being base64url matters downstream: it contains `-` and `_` and
 no `/` or `.`, which is what makes it safe to use as a filename (§2 of the
 brief) once validated.
 
-## G4-3 — there is no form-body decoder
+## G4-3 — there was no form-body decoder; now there is
 
 `req` carries `id, method, path, query, headers, cookies, body, scheme,
 remote_ip, remote_port, timestamp, server, params`. `req.query` is
@@ -67,6 +75,19 @@ write the same thirty lines. It is therefore part of the extraction question
 Not a defect: the platform decodes the query string because a route needs it,
 and declines to guess a body's encoding, which is defensible. It is a gap in
 what a web application can assume.
+
+**Closed by the platform.** `req.form` now sits beside `req.cookies`, decoding
+`application/x-www-form-urlencoded` through the same parser as the query
+string — `+` is a space, and `pass=p%40ss%26word` yields `p@ss&word` with the
+encoded separator intact. Only a form content type is decoded: JSON or
+multipart yields an empty record rather than a field named `{"a` holding `1`,
+which is the failure a naive splitter would produce. Multipart and file upload
+are deliberately not handled.
+
+So gdash writes no percent-decoder, and the thirty lines that every gBASIC web
+application would otherwise have written independently — and got subtly
+differently wrong — are the platform's. This was the piece of the extraction
+ask worth having wherever it lived.
 
 ## G4-4 — there is no session store, and the second consumer's is Postgres
 
@@ -104,30 +125,53 @@ deployment is typical and TLS is recommended rather than hard-required. A
 hardcoded `Secure` would silently break login on the deployments the design
 expects; omitting it always would weaken the ones that did the right thing.
 
-## G4-6 — a real library-vs-library name collision produced NO warning
+## G4-6 — the override warning is call-triggered, so it cannot be an audit
 
 `persist.bas` defines `ensure_dir`. So does `gdash_paths`. Loading both, in
-either order, produces **no override warning at all** — verified twice, and
-both libraries genuinely load (a `persist.read_status` call answers, so this is
-not a `load` that quietly did nothing).
+either order, produced **no override warning at all** — verified twice, with
+both libraries genuinely loading. That contradicted F6, where
+`gdash_paths.resolve` shadowing `web.resolve` *did* warn, with the message
+`eval.c:6843` emits for exactly this case. Same shape, one warned and one did
+not. I recorded the observation and refused to guess at the cause, because
+guessing instead of reading is how F5 went wrong.
 
-That contradicts F6, where `gdash_paths.resolve` shadowing `web.resolve` *did*
-warn, with the message `eval.c:6843` emits for exactly this case: *"function
-'%s' from library '%s' overrides function from library '%s'"*. Same shape, one
-warns and one does not. I could not determine the mechanism from outside and
-am not going to guess at it — guessing at a cause instead of reading it is how
-F5 went wrong.
+**Diagnosed by the platform, and the answer is the useful one.** The warning
+lives in the *unqualified-lookup* path, not at registration. It is
+call-triggered: two libraries sharing a name are silent for as long as every
+call is qualified, and it fires the first time a bare name has to choose. So
+`persist`/`gdash_paths` was silent because nothing called `ensure_dir` bare,
+and `resolve` warned because something called it bare. One code path, two
+outcomes, no inconsistency.
 
-**This matters to gdash specifically.** GDASH-2 built a namespace sweep
-(G2-8) whose entire assertion is "the interpreter said nothing about an
-override". Here is a collision it would not report. The sweep is still worth
-having — it caught `gdash_diff.lines` on its first run (G3-1) — but it is now
-known to be a partial check, and this finding is the note that keeps anyone
-from reading a green sweep as proof.
+The conclusion stands and is now in gbasic's `docs/ai/UNLEARN.md`: **the
+warning cannot serve as a namespace audit**, and a sweep resting on it is a
+partial check. GDASH-2's sweep was exactly such a sweep.
 
-gdash does not load `persist` and will not. Practical rule for this phase and
-after: a new public name is checked by **reading** the stdlib, with the sweep
-as a backstop rather than the authority.
+**`library_collisions()` now exists** — every public name defined by more than
+one loaded library, reported as `[{ name, libraries }]`, latent state and all,
+before anyone writes the call that makes it live.
+
+Wired in immediately, and it found two collisions in gdash that three phases of
+stderr-watching never saw:
+
+- **`page` — `chart` and `gdash_app`.** `gdash_app.page` was the main page
+  handler. Nothing inside `chart` calls `page` bare today, so nothing was
+  broken; but this is F6's exact shape, sitting in the most consequential
+  function in the application, waiting for either side to write one unqualified
+  call. Renamed to `dashboard_page`.
+- **`_html_escape` — `gdash_render` and `gdash_app`.** Two byte-identical
+  copies, which is how one of them ends up missing a case. Collapsed to one
+  public `gdash_render.html_escape`.
+
+Neither would have been reported by the old sweep, and neither had symptoms.
+That is the whole argument for a latent-state audit over a call-triggered
+warning, demonstrated on the first run.
+
+**Do not assert the list is empty.** The stdlib itself carries benign shared
+names — loading `dates` and `frame` legitimately reports `select` — so the
+audit takes an allowlist, and a name lands there with a sentence saying why the
+collision is harmless. gdash's allowlist is currently empty, which is a fact
+about gdash rather than a target.
 
 ## G4-7 — `load <name>` reaches the INSTALLED stdlib, not the repo's
 
@@ -145,3 +189,27 @@ Recorded rather than acted on: pinning every load to the repo would make an
 *installed* gdash unbuildable, which is worse. The right note is the one for
 whoever next reports "gbasic fixed it and gdash still misbehaves": check
 `/usr/local/share/gbasic/stdlib` before reopening the finding.
+
+## G4-8 — the extraction is approved, with the sequencing gdash proposed
+
+The gbasic repo's answer to `gdash4_platform_ask_session.md`: **yes**, build
+`gdash_session` and `gdash_users` locally first, then extract. A seam designed
+from one real implementation beats one designed from two hypotheticals, and
+gdash's storage calls are already isolated behind four or five functions, so
+extraction stays a move rather than a rewrite.
+
+Two requirements came back for the eventual shared component, both of which
+gdash builds to now rather than later:
+
+- **Session-id regeneration on privilege change.** The session-fixation
+  defence: the id a viewer held before authenticating must not be the id they
+  hold after. It was not in the ask's list of what the library would own, and
+  it is named as the most commonly omitted rule in hand-rolled session code —
+  which is the argument for a shared component owning it, so that nobody has to
+  remember. gdash regenerates on login and on logout.
+- **The storage seam is a record of function values** — `{ put: files.put,
+  get: files.get, … }` — rather than a record carrying state and functions
+  together, invoked as a method, which would drag private wiring into the
+  caller. Worth recording that this only became expressible in August, when
+  `lib.fn` became a first-class function value: the clean shape is newer than
+  the problem.
