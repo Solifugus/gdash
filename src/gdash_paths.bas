@@ -225,6 +225,41 @@ library gdash_paths
         return _join(p.log_dir, "audit.log")
     end function
 
+    ' No chmod builtin exists, so the mode is set by calling out. Lives here
+    ' because gdash_refresh and gdash_users both need it and two copies of a
+    ' permission-setting call is two places for one of them to be forgotten.
+    function restrict(path)
+        on error goto next
+        r = process.run({ command: "chmod", args: ["600", path] })
+        if error then
+            return false
+        end if
+        return r.exit_code = 0
+    end function
+
+    ' Runtime state: /run is cleared on reboot, which is the correct lifetime
+    ' for a session (design §6 puts pid and control socket here for the same
+    ' reason).
+    function session_dir(p)
+        return _join(p.run_dir, "sessions")
+    end function
+
+    function session_file(p, id)
+        return _join(session_dir(p), id + ".json")
+    end function
+
+    ' 0600, and never in a record, a commit or a test fixture (CLAUDE.md).
+    function users_file(p)
+        return _join(p.config_dir, "users.json")
+    end function
+
+    ' The CSRF secret. Server-level and generated at first use: a fixed secret
+    ' in the source would make every deployment's tokens forgeable by anyone
+    ' who read the source.
+    function secret_file(p)
+        return _join(p.config_dir, "secret")
+    end function
+
     ' Credentials reach a refresh child through a 0600 file, never argv
     ' (design §3).
     function job_file(p, token)

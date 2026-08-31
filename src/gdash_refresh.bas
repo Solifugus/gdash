@@ -31,19 +31,6 @@ library gdash_refresh
         return default(env("GDASH_SRC"), "src") + "/gdash_refresh_child.bas"
     end function
 
-    ' No chmod builtin exists, so the mode is set by calling out. The job file
-    ' is created and then restricted; it is written under run_dir, which is
-    ' itself restricted at startup, so the file is never world-readable in a
-    ' directory anyone can traverse.
-    function _restrict(path)
-        on error goto next
-        r = process.run({ command: "chmod", args: ["600", path] })
-        if error then
-            return false
-        end if
-        return r.exit_code = 0
-    end function
-
     function _discard_staging(staging)
         if not gdash_paths.path_exists(staging) then
             return true
@@ -125,7 +112,10 @@ library gdash_refresh
         if error then
             return _fail(p, dashboard, mode, dataset, st, now, "cannot write job file", vfile, statepath)
         end if
-        locked = _restrict(jobpath)
+        ' The job file carries credentials and is written under run_dir, which
+        ' is itself restricted at startup, so it is never world-readable in a
+        ' directory anyone can traverse.
+        locked = gdash_paths.restrict(jobpath)
 
         h = process.start({ command: _interpreter(), args: [_child_script(), jobpath] })
         if error then

@@ -40,6 +40,9 @@ program main(args)
     load gdash_publish from "../src/gdash_publish.bas"
     load gdash_diff from "../src/gdash_diff.bas"
     load gdash_app from "../src/gdash_app.bas"
+    load gdash_session from "../src/gdash_session.bas"
+    load gdash_session_files from "../src/gdash_session_files.bas"
+    load gdash_users from "../src/gdash_users.bas"
     load gdash_source_fixture from "../src/gdash_source_fixture.bas"
 
     ' Nothing yet. When a name lands here it needs a sentence saying why the
