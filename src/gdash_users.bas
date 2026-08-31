@@ -97,7 +97,7 @@ library gdash_users
         if error or not good then
             return { ok: false, message: "that username and password do not match", user: {} }
         end if
-        return { ok: true, message: "", user: { name: username, groups: groups_of(u), admin: u["admin"] = true } }
+        return { ok: true, message: "", user: { name: username, email: email_of(u), groups: groups_of(u), admin: u["admin"] = true } }
     end function
 
     function groups_of(u)
@@ -108,15 +108,21 @@ library gdash_users
         return g
     end function
 
-    function upsert(db, username, password_hash, groups, admin, disabled)
+    function upsert(db, username, password_hash, email, groups, admin, disabled)
         users = db["users"]
         existing = users[username]
         ph = password_hash
+        ' An empty hash means "leave the password alone", so that changing a
+        ' user's groups cannot silently reset their password.
         if ph = "" and not is_unknown(existing) then
             ph = string(existing["password_hash"])
         end if
-        users[username] = { password_hash: ph, groups: groups, admin: admin, disabled: disabled }
+        users[username] = { password_hash: ph, email: email, groups: groups, admin: admin, disabled: disabled }
         return { format: 1, users: users }
+    end function
+
+    function email_of(u)
+        return string(default(u["email"], ""))
     end function
 
     function drop_user(db, username)
@@ -142,7 +148,7 @@ library gdash_users
         if u["disabled"] = true then
             return unknown
         end if
-        return { name: username, groups: groups_of(u), admin: u["admin"] = true }
+        return { name: username, email: email_of(u), groups: groups_of(u), admin: u["admin"] = true }
     end function
 
 end library

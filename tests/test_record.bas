@@ -18,13 +18,36 @@ program main(args)
     s = gdash_test.eq(s, count(gdash_record.visuals_binding(rec, "nosuch")), 0, "unknown param moves nothing")
 
     ' --- params resolve from defaults, overlaid by supplied values ---
-    d = gdash_record.resolve_params(rec, {})
+    d = gdash_record.resolve_params(rec, {}, unknown)
     s = gdash_test.eq(s, d["region"], "west", "default param value")
-    o = gdash_record.resolve_params(rec, { region: "east" })
+    o = gdash_record.resolve_params(rec, { region: "east" }, unknown)
     s = gdash_test.eq(s, o["region"], "east", "supplied value overrides default")
     ' An undeclared param is ignored rather than reaching SQL.
-    x = gdash_record.resolve_params(rec, { region: "east", injected: "1=1" })
+    x = gdash_record.resolve_params(rec, { region: "east", injected: "1=1" }, unknown)
     s = gdash_test.ok(s, is_unknown(x["injected"]), "undeclared param is dropped")
+
+    ' --- user_* is injected, never accepted (design §2) ---
+    ident = { name: "ada", email: "ada@example.invalid", groups: ["analysts", "finance"] }
+    u = gdash_record.resolve_params(rec, {}, ident)
+    s = gdash_test.eq(s, u["user_name"], "ada", "user_name is injected from the identity")
+    s = gdash_test.eq(s, u["user_email"], "ada@example.invalid", "so is user_email")
+    s = gdash_test.eq(s, u["user_groups"], "|analysts|finance|", "groups arrive delimited on both ends")
+
+    ' A group merely ENDING in another group's name must not match a `like`.
+    s = gdash_test.ok(s, contains(u["user_groups"], "|finance|"), "a whole group matches")
+    s = gdash_test.ok(s, not contains(gdash_record.resolve_params(rec, {}, { name: "x", email: "x", groups: ["cofinance"] })["user_groups"], "|finance|"), "and a group that merely ends in one does not")
+
+    ' The client cannot set them. This is the whole of design §5's claim that
+    ' a user-filtered dashboard over a shared dataset is genuinely secure.
+    spoofed = gdash_record.resolve_params(rec, { user_email: "someone.else@example.invalid", user_groups: "|admins|" }, ident)
+    s = gdash_test.eq(s, spoofed["user_email"], "ada@example.invalid", "a client-supplied user_email is ignored")
+    s = gdash_test.eq(s, spoofed["user_groups"], "|analysts|finance|", "and so are client-supplied groups")
+
+    ' An anonymous viewer gets empty strings, not missing bindings: a query
+    ' binding :user_email must still run, and match nothing.
+    anon = gdash_record.resolve_params(rec, {}, unknown)
+    s = gdash_test.eq(s, anon["user_email"], "", "an anonymous viewer has an empty user_email")
+    s = gdash_test.eq(s, anon["user_groups"], "||", "and no groups")
 
     ' --- refusals. GDASH-1 freezes these messages as goldens; this phase only
     '     pins that the right condition is caught. ---

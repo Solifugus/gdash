@@ -5,6 +5,7 @@
 
 library gdash_app
 
+    load crypto
     load gdash_paths from "gdash_paths.bas"
     load gdash_record from "gdash_record.bas"
     load gdash_store from "gdash_store.bas"
@@ -13,6 +14,10 @@ library gdash_app
     load gdash_sched from "gdash_sched.bas"
     load gdash_publish from "gdash_publish.bas"
     load gdash_diff from "gdash_diff.bas"
+    load gdash_session from "gdash_session.bas"
+    load gdash_session_files from "gdash_session_files.bas"
+    load gdash_users from "gdash_users.bas"
+    load gdash_audit from "gdash_audit.bas"
 
     function _root_of(req)
         return default(env("GDASH_ROOT"), "")
@@ -32,6 +37,126 @@ library gdash_app
 
     function _refuse(code, message)
         return { status: code, body: encode({ error: message }), headers: { "content-type": "application/json" } }
+    end function
+
+    function _store(p)
+        return gdash_session_files.store(p)
+    end function
+
+    ' Server-level, generated at first use. A fixed secret in the source would
+    ' make every deployment's CSRF tokens forgeable by anyone who read the
+    ' source, and a per-worker secret would make them forgeable by nobody --
+    ' including the worker that has to check them.
+    function secret_of(p)
+        path = gdash_paths.secret_file(p)
+        if gdash_paths.path_exists(path) then
+            on error goto next
+            f {file} = path
+            got = trim(read(f))
+            if not error and got != "" then
+                return got
+            end if
+        end if
+        made = gdash_paths.ensure_dir(p.config_dir)
+        fresh = crypto.random_token(32)
+        on error goto next
+        nf {file} = path
+        write(nf, fresh)
+        if error then
+            return fresh
+        end if
+        locked = gdash_paths.restrict(path)
+        return fresh
+    end function
+
+    ' HTTPS only. Design §6 expects intranet deployments where TLS is
+    ' recommended rather than required, so a hardcoded Secure would silently
+    ' break login on exactly the deployments the design describes.
+    function _secure(req)
+        return string(default(req["scheme"], "http")) = "https"
+    end function
+
+    function _sid(req)
+        c = req["cookies"]
+        if is_unknown(c) then
+            return ""
+        end if
+        return string(default(c["gdash_session"], ""))
+    end function
+
+    function anonymous()
+        return { authed: false, name: "", email: "", groups: [], admin: false, sid: "" }
+    end function
+
+    ' Who is asking. An expired session, a forged id and no cookie at all are
+    ' one answer -- anonymous -- because to everything downstream they are the
+    ' same fact.
+    function viewer_of(req, p)
+        sid = _sid(req)
+        if sid = "" then
+            return anonymous()
+        end if
+        got = gdash_session.active(_store(p), sid, epoch(), gdash_session.limits())
+        if not got.ok then
+            return anonymous()
+        end if
+        db = gdash_users.load_users(p)
+        if not db.ok then
+            ' A user file gdash cannot read is a user file gdash does not
+            ' trust. Everyone is anonymous until an operator fixes it.
+            return anonymous()
+        end if
+        ident = gdash_users.identity(db.db, string(got.session.user))
+        if is_unknown(ident) then
+            ' The account was removed or disabled while the session lived.
+            dropped = gdash_session.destroy(_store(p), sid)
+            return anonymous()
+        end if
+        return { authed: true, name: ident.name, email: ident.email, groups: ident.groups, admin: ident.admin, sid: sid }
+    end function
+
+    function identity_of(v)
+        if not v.authed then
+            return unknown
+        end if
+        return { name: v.name, email: v.email, groups: v.groups }
+    end function
+
+    function _in_any(groups, allowed)
+        if is_unknown(allowed) then
+            return false
+        end if
+        i = 0
+        while i < count(groups)
+            if contains(allowed, groups[i]) then
+                return true
+            end if
+            i += 1
+        end while
+        return false
+    end function
+
+    ' Coarse and per-dashboard (design §8). `need` is "view" or "edit".
+    '
+    ' Fails closed in every direction: a record naming no groups and no
+    ' `access` is admins-only, an unauthenticated viewer gets nothing that is
+    ' not explicitly open, and `edit` never falls back to `view`.
+    function allowed(rec, v, need)
+        if need = "view" and rec["access"] = "open" then
+            return true
+        end if
+        if not v.authed then
+            return false
+        end if
+        if v.admin then
+            return true
+        end if
+        if need = "edit" then
+            return _in_any(v.groups, rec["edit_groups"])
+        end if
+        ' An editor can always see what they may change; saying otherwise
+        ' would be a rule nobody could configure their way out of.
+        return _in_any(v.groups, rec["view_groups"]) or _in_any(v.groups, rec["edit_groups"])
     end function
 
     ' access is a per-dashboard opt-in and everything fails closed (design §8).
@@ -64,24 +189,34 @@ library gdash_app
     ' only when refusing. A published dashboard serves the snapshot this
     ' viewer pinned at session open, or `current` if they have not pinned one;
     ' an unpublished dashboard serves the draft.
-    function _load_dashboard(req, name)
+    function _load_dashboard(req, name, need)
         p = paths_for(req)
         if contains(name, "/") then
-            return { ok: false, rec: {}, p: p, mode: "draft", snapshot: "", pin_was: "", response: _refuse(400, "bad dashboard name") }
+            return { ok: false, rec: {}, p: p, mode: "draft", snapshot: "", pin_was: "", viewer: anonymous(), response: _refuse(400, "bad dashboard name") }
         end if
         pin = _pin_of(req)
         pub = gdash_paths.pinned(p, name, pin)
+        v = viewer_of(req, p)
         loaded = gdash_record.load_file(pub.record_file)
         if not loaded.ok then
             if contains(join(loaded.errors, "|"), "not found") then
-                return { ok: false, rec: {}, p: p, mode: pub.mode, snapshot: pub.snapshot, pin_was: pin, response: _refuse(404, "no such dashboard: " + name) }
+                return { ok: false, rec: {}, p: p, mode: pub.mode, snapshot: pub.snapshot, pin_was: pin, viewer: v, response: _refuse(404, "no such dashboard: " + name) }
             end if
-            return { ok: false, rec: {}, p: p, mode: pub.mode, snapshot: pub.snapshot, pin_was: pin, response: _refuse(500, "dashboard is invalid: " + join(loaded.errors, "; ")) }
+            return { ok: false, rec: {}, p: p, mode: pub.mode, snapshot: pub.snapshot, pin_was: pin, viewer: v, response: _refuse(500, "dashboard is invalid: " + join(loaded.errors, "; ")) }
         end if
-        if not _access_ok(loaded.record) then
-            return { ok: false, rec: {}, p: p, mode: pub.mode, snapshot: pub.snapshot, pin_was: pin, response: _refuse(403, "this dashboard does not grant open access") }
+        if not allowed(loaded.record, v, need) then
+            logged = gdash_audit.event(p, "access.denied", { dashboard: name, user: v.name, need: need })
+            ' 404 for an anonymous viewer, not 403: on an intranet, the
+            ' existence of a dashboard called "layoffs-q3" is itself
+            ' information. An authenticated viewer who simply lacks the group
+            ' gets 403, because for them the dashboard's existence is not the
+            ' secret -- their access to it is.
+            if not v.authed then
+                return { ok: false, rec: {}, p: p, mode: pub.mode, snapshot: pub.snapshot, pin_was: pin, viewer: v, response: _refuse(404, "no such dashboard: " + name) }
+            end if
+            return { ok: false, rec: {}, p: p, mode: pub.mode, snapshot: pub.snapshot, pin_was: pin, viewer: v, response: _refuse(403, "you are not in a group this dashboard is shared with") }
         end if
-        return { ok: true, rec: loaded.record, p: p, mode: pub.mode, snapshot: pub.snapshot, pin_was: pin, response: {} }
+        return { ok: true, rec: loaded.record, p: p, mode: pub.mode, snapshot: pub.snapshot, pin_was: pin, viewer: v, response: {} }
     end function
 
     ' Every OTHER dataset of this dashboard that exists on disk, so a visual
@@ -318,6 +453,10 @@ library gdash_app
         s = s + ".gdash-empty{color:#666;font-style:italic;padding:8px}"
         s = s + ".gdash-stale{color:#666;font-size:12px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:16px}"
         s = s + ".gdash-stale-bad{color:#a00}"
+        s = s + ".gdash-login{display:flex;flex-direction:column;gap:12px;max-width:320px}"
+        s = s + ".gdash-login input{padding:6px;font-size:14px;width:100%;box-sizing:border-box}"
+        s = s + ".gdash-login button{padding:8px;font-size:14px;cursor:pointer}"
+        s = s + ".gdash-who{float:right;font-size:12px;color:#666}"
         s = s + ".gdash-notice{border:1px solid #c90;background:#fffbe6;border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:13px}"
         s = s + ".gdash-tabs{display:flex;gap:4px;border-bottom:1px solid #ddd;margin-bottom:16px}"
         s = s + ".gdash-tab{border:0;background:none;padding:8px 14px;cursor:pointer;font-size:14px;color:#555;border-bottom:2px solid transparent}"
@@ -330,7 +469,7 @@ library gdash_app
     end function
 
     function dashboard_page(req, name)
-        got = _load_dashboard(req, name)
+        got = _load_dashboard(req, name, "view")
         if not got.ok then
             return got.response
         end if
@@ -338,7 +477,7 @@ library gdash_app
         p = got.p
         mode = got.mode
         asked = _request_opens(p, name, mode, rec)
-        values = gdash_record.resolve_params(rec, req.query)
+        values = gdash_record.resolve_params(rec, req.query, identity_of(got.viewer))
 
         tabs = rec["tabs"]
         ' Every tab renders server-side in one response and switches on the
@@ -388,7 +527,7 @@ library gdash_app
     ' (design §2). A visual that does not bind it is not in the response at
     ' all, so the browser leaves it alone.
     function params_changed(req, name)
-        got = _load_dashboard(req, name)
+        got = _load_dashboard(req, name, "view")
         if not got.ok then
             return got.response
         end if
@@ -396,11 +535,13 @@ library gdash_app
         p = got.p
         mode = got.mode
 
+        ' A param change is a read: it re-renders fragments and stores
+        ' nothing. It carries no CSRF token because it changes no state.
         supplied = req["json"]
         if is_unknown(supplied) then
             supplied = {}
         end if
-        values = gdash_record.resolve_params(rec, supplied)
+        values = gdash_record.resolve_params(rec, supplied, identity_of(got.viewer))
 
         changed = keys(supplied)
         moving = []
@@ -427,9 +568,12 @@ library gdash_app
     end function
 
     function refresh(req, name)
-        got = _load_dashboard(req, name)
+        got = _load_dashboard(req, name, "edit")
         if not got.ok then
             return got.response
+        end if
+        if not csrf_present(req, got.p, got.viewer) then
+            return _refuse(400, "missing or invalid CSRF token")
         end if
         rec = got.rec
         p = got.p
@@ -468,7 +612,7 @@ library gdash_app
     ' Access is the dashboard's: a snapshot is a version of a dashboard, so
     ' whoever may not see the dashboard may not see its history either.
     function diff(req, name)
-        got = _load_dashboard(req, name)
+        got = _load_dashboard(req, name, "view")
         if not got.ok then
             return got.response
         end if
@@ -511,10 +655,149 @@ library gdash_app
         return _json({ from: from_leaf, to: to_leaf, changed: gdash_diff.changed(string(a), string(b)), diff: gdash_diff.unified(string(a), string(b), from_leaf, to_leaf, 3), from_text: string(a), to_text: string(b) })
     end function
 
+    ' --- login, logout, and the CSRF gate ---------------------------------
+
+    ' Every state-changing route passes through here. A GET never does: if
+    ' that stops being true the route is wrong, not the check.
+    function csrf_present(req, p, v)
+        supplied = ""
+        f = req["form"]
+        if not is_unknown(f) then
+            supplied = string(default(f["csrf"], ""))
+        end if
+        if supplied = "" then
+            h = req["headers"]
+            if not is_unknown(h) then
+                supplied = string(default(h["x-gdash-csrf"], ""))
+            end if
+        end if
+        return gdash_session.csrf_ok(secret_of(p), v.sid, supplied)
+    end function
+
+    function _login_html(p, sid, message, target)
+        q = chr(34)
+        tok = gdash_session.csrf_for(secret_of(p), sid)
+        note = ""
+        if message != "" then
+            note = "<p class=" + q + "gdash-error" + q + ">" + gdash_render.html_escape(message) + "</p>"
+        end if
+        h = "<!doctype html><html><head><meta charset=" + q + "utf-8" + q + "><title>gdash — sign in</title><style>" + _style() + "</style></head><body>"
+        h = h + "<h1>Sign in</h1>" + note
+        h = h + "<form method=" + q + "post" + q + " action=" + q + "/login" + q + " class=" + q + "gdash-login" + q + ">"
+        h = h + "<input type=" + q + "hidden" + q + " name=" + q + "csrf" + q + " value=" + q + tok + q + ">"
+        h = h + "<input type=" + q + "hidden" + q + " name=" + q + "next" + q + " value=" + q + gdash_render.html_escape(target) + q + ">"
+        h = h + "<label>Username<br><input name=" + q + "user" + q + " autocomplete=" + q + "username" + q + " autofocus></label>"
+        h = h + "<label>Password<br><input name=" + q + "pass" + q + " type=" + q + "password" + q + " autocomplete=" + q + "current-password" + q + "></label>"
+        h = h + "<button type=" + q + "submit" + q + ">Sign in</button>"
+        h = h + "</form></body></html>"
+        return h
+    end function
+
+    ' A session exists before login so that the CSRF token on the form has
+    ' something to be bound to. It carries no user and no privilege; the id it
+    ' holds is thrown away the moment one is granted.
+    function login_form(req)
+        p = paths_for(req)
+        v = viewer_of(req, p)
+        target = ""
+        q = req["query"]
+        if not is_unknown(q) then
+            target = string(default(q["next"], ""))
+        end if
+        if v.sid != "" then
+            return { body: _login_html(p, v.sid, "", target), headers: { "content-type": "text/html; charset=utf-8" } }
+        end if
+        fresh = gdash_session.create(_store(p), "", epoch())
+        if not fresh.ok then
+            return _refuse(500, "could not start a session")
+        end if
+        return { body: _login_html(p, fresh.session.id, "", target), headers: { "content-type": "text/html; charset=utf-8" }, cookies: [gdash_session.cookie("gdash_session", fresh.session.id, _secure(req), gdash_session.limits().absolute)] }
+    end function
+
+    ' Only a local path, and only one that cannot leave this site. A `next` of
+    ' "//evil.example" is a protocol-relative URL a browser follows off-site.
+    function safe_next(target)
+        if target = "" then
+            return "/"
+        end if
+        if not starts_with(target, "/") then
+            return "/"
+        end if
+        if starts_with(target, "//") then
+            return "/"
+        end if
+        if contains(target, chr(10)) or contains(target, chr(13)) then
+            return "/"
+        end if
+        return target
+    end function
+
+    function login(req)
+        p = paths_for(req)
+        v = viewer_of(req, p)
+        f = req["form"]
+        if is_unknown(f) then
+            f = {}
+        end if
+        target = safe_next(string(default(f["next"], "")))
+
+        if not csrf_present(req, p, v) then
+            return { status: 400, body: _login_html(p, v.sid, "That form expired. Try again.", target), headers: { "content-type": "text/html; charset=utf-8" } }
+        end if
+
+        db = gdash_users.load_users(p)
+        if not db.ok then
+            logged = gdash_audit.event(p, "login.failed", { reason: "users file unreadable" })
+            return { status: 500, body: _login_html(p, v.sid, "Sign-in is unavailable. Ask an administrator.", target), headers: { "content-type": "text/html; charset=utf-8" } }
+        end if
+
+        who = string(default(f["user"], ""))
+        got = gdash_users.authenticate(db.db, who, string(default(f["pass"], "")))
+        if not got.ok then
+            ' The username is audited; the password is not, was not read into
+            ' any other variable, and does not appear in the response.
+            logged = gdash_audit.event(p, "login.failed", { user: who })
+            return { status: 401, body: _login_html(p, v.sid, got.message, target), headers: { "content-type": "text/html; charset=utf-8" } }
+        end if
+
+        ' The session-fixation defence: a privilege change gets a new id, so
+        ' an id an attacker planted before login is not the id that carries
+        ' the privilege after it.
+        fresh = gdash_session.regenerate(_store(p), v.sid, epoch())
+        if not fresh.ok then
+            return _refuse(500, "could not start a session")
+        end if
+        stored = _store(p).put(_store(p).ctx, fresh.session.id, { format: 1, id: fresh.session.id, user: got.user.name, created: epoch(), seen: epoch() })
+        logged = gdash_audit.event(p, "login", { user: got.user.name })
+        return { status: 303, headers: { "content-type": "text/html; charset=utf-8", "location": target }, body: "", cookies: [gdash_session.cookie("gdash_session", fresh.session.id, _secure(req), gdash_session.limits().absolute)] }
+    end function
+
+    function logout(req)
+        p = paths_for(req)
+        v = viewer_of(req, p)
+        if not csrf_present(req, p, v) then
+            return _refuse(400, "that form expired")
+        end if
+        if v.authed then
+            logged = gdash_audit.event(p, "logout", { user: v.name })
+        end if
+        ' Regenerate rather than merely destroy: logging out is a privilege
+        ' change too, and a browser that keeps its old id keeps a name for
+        ' something someone else might later be given.
+        dropped = gdash_session.destroy(_store(p), v.sid)
+        return { status: 303, headers: { "location": "/login" }, body: "", cookies: [gdash_session.clearing_cookie("gdash_session", _secure(req))] }
+    end function
+
+    function whoami(req)
+        p = paths_for(req)
+        v = viewer_of(req, p)
+        return _json({ authenticated: v.authed, user: v.name, groups: v.groups, admin: v.admin, csrf: gdash_session.csrf_for(secret_of(p), v.sid) })
+    end function
+
     ' Each stream body polls the per-dashboard version file and emits on
     ' change. The rename-swap guarantees a notified reader sees complete data.
     function events(req, name)
-        got = _load_dashboard(req, name)
+        got = _load_dashboard(req, name, "view")
         if not got.ok then
             return 0
         end if

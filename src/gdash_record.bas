@@ -300,6 +300,25 @@ library gdash_record
             i += 1
         end while
 
+        ' --- groups (design §8). `access` is already checked above. ---
+        errors = concat(errors, _group_list(rec, "view_groups"))
+        errors = concat(errors, _group_list(rec, "edit_groups"))
+
+        ' A record may not declare a reserved param. Allowing it would let an
+        ' author write `user_email` with a default and believe they had
+        ' configured something; the server overwrites it unconditionally.
+        pn = []
+        if type(rec["params"]) = "record" then
+            pn = keys(rec["params"])
+        end if
+        i = 0
+        while i < count(pn)
+            if is_reserved(pn[i]) then
+                errors = concat(errors, ["param '" + pn[i] + "' is reserved; the server supplies it from the authenticated identity"])
+            end if
+            i += 1
+        end while
+
         ' --- visuals ---
         visuals = rec["visuals"]
         if is_unknown(visuals) or type(visuals) != "record" then
@@ -323,7 +342,11 @@ library gdash_record
                 found = gdash_sql.bindings(v["sql"])
                 j = 0
                 while j < count(found)
-                    if not contains(param_names, found[j]) then
+                    ' A binding resolves against `params`, then the reserved
+                    ' user_* namespace, which the server supplies from the
+                    ' authenticated identity and a record never declares
+                    ' (design §2).
+                    if not contains(param_names, found[j]) and not is_reserved(found[j]) then
                         errors = concat(errors, ["visual '" + vn + "' binds ':" + found[j] + "', which is not a declared param"])
                     end if
                     j += 1
@@ -477,25 +500,86 @@ library gdash_record
     ' Params resolved for a request: declared defaults overlaid with supplied
     ' values. Only declared params are honoured; anything else is ignored
     ' rather than passed through to SQL.
-    function resolve_params(rec, supplied)
-        out = {}
-        params = rec["params"]
-        if is_unknown(params) then
-            return out
+    ' The reserved namespace (design §2). Injected by the server from the
+    ' authenticated identity; personalization is parameter binding, not a
+    ' feature.
+    function reserved_params()
+        return ["user_name", "user_email", "user_groups"]
+    end function
+
+    function is_reserved(name)
+        return contains(reserved_params(), name)
+    end function
+
+    ' `identity` is { name, email, groups } or unknown for an anonymous
+    ' viewer. It is the ONLY source of user_*: a client-supplied user_email is
+    ' ignored, not merged, because a param a viewer can set is a param a
+    ' viewer can set to someone else.
+    ' A group list is an array of non-empty strings or it is not a group list.
+    ' A string where an array belongs is the shape an author reaches for, and
+    ' "finance" as a list of one is not what they would get.
+    function _group_list(rec, key)
+        v = rec[key]
+        if is_unknown(v) then
+            return []
         end if
-        names = keys(params)
+        if type(v) != "array" then
+            return ["'" + key + "' must be an array of group names; a bare string is not a list of one"]
+        end if
+        out = []
         i = 0
-        while i < count(names)
-            nm = names[i]
-            out[nm] = params[nm]["default"]
-            if not is_unknown(supplied) then
-                got = supplied[nm]
-                if not is_unknown(got) then
-                    out[nm] = got
+        while i < count(v)
+            if type(v[i]) != "string" or trim(string(v[i])) = "" then
+                errors_here = "'" + key + "' contains an entry that is not a group name"
+                if not contains(out, errors_here) then
+                    out = concat(out, [errors_here])
                 end if
             end if
             i += 1
         end while
+        return out
+    end function
+
+    function resolve_params(rec, supplied, identity)
+        out = {}
+        params = rec["params"]
+        if not is_unknown(params) then
+            names = keys(params)
+            i = 0
+            while i < count(names)
+                nm = names[i]
+                out[nm] = params[nm]["default"]
+                if not is_unknown(supplied) and not is_reserved(nm) then
+                    got = supplied[nm]
+                    if not is_unknown(got) then
+                        out[nm] = got
+                    end if
+                end if
+                i += 1
+            end while
+        end if
+
+        ' Injected last, over anything of the same name from any other source.
+        if is_unknown(identity) then
+            out["user_name"] = ""
+            out["user_email"] = ""
+            ' The empty group list in the SAME encoding as a full one, so a
+            ' query written against `%|finance|%` behaves identically in shape
+            ' for an anonymous viewer instead of hitting a different case.
+            out["user_groups"] = "||"
+        else
+            out["user_name"] = string(default(identity["name"], ""))
+            out["user_email"] = string(default(identity["email"], ""))
+            ' A list cannot be bound into SQL, so groups arrive as a delimited
+            ' string a query can test with `like`. The delimiters are on BOTH
+            ' ends so that `:user_groups like '%|finance|%'` cannot match a
+            ' group merely ending in "finance".
+            g = identity["groups"]
+            if is_unknown(g) then
+                g = []
+            end if
+            out["user_groups"] = "|" + join(g, "|") + "|"
+        end if
         return out
     end function
 

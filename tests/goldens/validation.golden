@@ -42,6 +42,14 @@ min_age not a whole number
   ERROR dataset 'd1' has 'min_age' of '-1'; it must be a whole number of seconds, zero or more
 too many datasets
   ERROR dashboard has 12 datasets; SQLite attaches at most 10 beside the one being queried, so 11 is the limit
+reserved param declared
+  ERROR param 'user_email' is reserved; the server supplies it from the authenticated identity
+access not open
+  ERROR unsupported access mode: 'public' (this build understands 'open')
+view_groups as a bare string
+  ERROR 'view_groups' must be an array of group names; a bare string is not a list of one
+edit_groups with an empty entry
+  ERROR 'edit_groups' contains an entry that is not a group name
 money scale missing
   ERROR money column 'd1.amt' has no 'scale'
 money scale negative

@@ -22,6 +22,31 @@ server gdash_web( port: 8780 )
         return { body: "<!doctype html><meta charset=utf-8><title>gdash</title><p>gdash is running. Open /d/&lt;dashboard&gt;.", headers: { "content-type": "text/html; charset=utf-8" } }
     end get
 
+    ' Sign in and out. The login form is a GET so it can be linked to; the
+    ' post carries a CSRF token bound to the pre-login session.
+    get "/login"( req )
+        load gdash_app from "gdash_app.bas"
+        return gdash_app.login_form(req)
+    end get
+
+    post "/login"( req )
+        load gdash_app from "gdash_app.bas"
+        return gdash_app.login(req)
+    end post
+
+    post "/logout"( req )
+        load gdash_app from "gdash_app.bas"
+        return gdash_app.logout(req)
+    end post
+
+    ' What the browser is currently authenticated as, and the CSRF token to
+    ' use with it. The shim reads this rather than having it baked into every
+    ' page.
+    get "/whoami"( req )
+        load gdash_app from "gdash_app.bas"
+        return gdash_app.whoami(req)
+    end get
+
     ' The shell: renders every visual and control once, server-side.
     get "/d/{name}"( req )
         load gdash_app from "gdash_app.bas"

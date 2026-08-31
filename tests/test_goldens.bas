@@ -107,6 +107,24 @@ program main(args)
         ci += 1
     end while
     lines = concat(lines, [emit_case("too many datasets", crowd)])
+
+    ' The reserved namespace: a record may bind user_* but may not declare it.
+    reserved = skeleton()
+    reserved["params"] = { user_email: { default: "x" } }
+    reserved["visuals"] = {}
+    reserved["tabs"] = [{ name: "T", layout: { vert: [] } }]
+    lines = concat(lines, [emit_case("reserved param declared", reserved)])
+
+    ' Access and groups (design §8).
+    badacc = skeleton()
+    badacc["access"] = "public"
+    lines = concat(lines, [emit_case("access not open", badacc)])
+    badview = skeleton()
+    badview["view_groups"] = "finance"
+    lines = concat(lines, [emit_case("view_groups as a bare string", badview)])
+    badedit = skeleton()
+    badedit["edit_groups"] = ["authors", ""]
+    lines = concat(lines, [emit_case("edit_groups with an empty entry", badedit)])
     lines = concat(lines, [emit_case("money scale missing", ds_case("d1", { profile: "p", sql: "select 1", columns: { amt: { type: "money" } } }))])
     lines = concat(lines, [emit_case("money scale negative", ds_case("d1", { profile: "p", sql: "select 1", columns: { amt: { type: "money", scale: -1 } } }))])
     lines = concat(lines, [emit_case("money currency unsupported", ds_case("d1", { profile: "p", sql: "select 1", columns: { amt: { type: "money", scale: 2, currency: "XYZ" } } }))])

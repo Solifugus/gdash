@@ -21,9 +21,9 @@ program main(args)
     s = gdash_test.ok(s, not gdash_users.authenticate(loaded.db, "", "").ok, "nor an empty one")
 
     ' --- add and authenticate ---
-    db = gdash_users.upsert(gdash_users.empty(), "ada", password_hash("fake-password-for-tests"), ["analysts", "finance"], false, false)
-    db = gdash_users.upsert(db, "root_of_all", password_hash("another-fake-one"), [], true, false)
-    db = gdash_users.upsert(db, "gone", password_hash("third-fake"), ["analysts"], false, true)
+    db = gdash_users.upsert(gdash_users.empty(), "ada", password_hash("fake-password-for-tests"), "ada@example.invalid", ["analysts", "finance"], false, false)
+    db = gdash_users.upsert(db, "root_of_all", password_hash("another-fake-one"), "", [], true, false)
+    db = gdash_users.upsert(db, "gone", password_hash("third-fake"), "", ["analysts"], false, true)
 
     good = gdash_users.authenticate(db, "ada", "fake-password-for-tests")
     s = gdash_test.ok(s, good.ok, "the right password authenticates")
@@ -44,7 +44,7 @@ program main(args)
     s = gdash_test.ok(s, not contains(wrong.message, "ada"), "and the refusal does not echo the username back")
 
     ' --- a corrupt hash fails closed ---
-    broken = gdash_users.upsert(gdash_users.empty(), "ada", "not-a-hash-at-all", [], false, false)
+    broken = gdash_users.upsert(gdash_users.empty(), "ada", "not-a-hash-at-all", "", [], false, false)
     s = gdash_test.ok(s, not gdash_users.authenticate(broken, "ada", "anything").ok, "a corrupt hash cannot be authenticated against")
 
     ' --- one hash field, and it really is per-password salted ---
@@ -75,18 +75,19 @@ program main(args)
     s = gdash_test.eq(s, count(gdash_users.names(corrupt.db)), 0, "and yields nothing anyone can log in as")
 
     ' --- changing a password keeps everything else ---
-    db2 = gdash_users.upsert(db, "ada", password_hash("rotated-fake"), ["analysts", "finance"], false, false)
+    db2 = gdash_users.upsert(db, "ada", password_hash("rotated-fake"), "", ["analysts", "finance"], false, false)
     s = gdash_test.ok(s, gdash_users.authenticate(db2, "ada", "rotated-fake").ok, "the new password works")
     s = gdash_test.ok(s, not gdash_users.authenticate(db2, "ada", "fake-password-for-tests").ok, "the old one does not")
 
     ' An empty hash on upsert means "leave the password alone", which is what
     ' a groups change must not silently reset.
-    db3 = gdash_users.upsert(db2, "ada", "", ["analysts"], false, false)
+    db3 = gdash_users.upsert(db2, "ada", "", "", ["analysts"], false, false)
     s = gdash_test.ok(s, gdash_users.authenticate(db3, "ada", "rotated-fake").ok, "changing groups does not reset the password")
     s = gdash_test.eq(s, count(gdash_users.identity(db3, "ada").groups), 1, "but does change the groups")
 
     ' --- identity ---
     s = gdash_test.eq(s, gdash_users.identity(db, "ada").name, "ada", "identity names the user")
+    s = gdash_test.eq(s, gdash_users.identity(db, "ada").email, "ada@example.invalid", "and carries the address user_email binds")
     s = gdash_test.ok(s, is_unknown(gdash_users.identity(db, "nobody")), "an unknown user has no identity")
     s = gdash_test.ok(s, is_unknown(gdash_users.identity(db, "gone")), "and neither does a disabled one")
 

@@ -8,6 +8,15 @@
 '   gdash_cli.bas --root <dir> rollback  <dashboard> [snapshot]
 '   gdash_cli.bas --root <dir> snapshots <dashboard>
 '   gdash_cli.bas --root <dir> diff      <dashboard> [from] [to]
+'   gdash_cli.bas --root <dir> user list
+'   gdash_cli.bas --root <dir> user add    <name> [--admin] [--email E] [--groups a,b]
+'   gdash_cli.bas --root <dir> user passwd <name>
+'   gdash_cli.bas --root <dir> user groups <name> a,b
+'   gdash_cli.bas --root <dir> user disable|enable|remove <name>
+'
+' The password is read from STDIN, never from argv and never from the
+' environment: argv is world-visible in ps, and an environment variable
+' outlives the command that set it.
 '
 ' Authoring in this phase is the record file itself (design §10), so the CLI
 ' is what an author uses to check a record and pull data.
@@ -26,6 +35,7 @@ program main(args)
     load gdash_refresh from "gdash_refresh.bas"
     load gdash_publish from "gdash_publish.bas"
     load gdash_diff from "gdash_diff.bas"
+    load gdash_users from "gdash_users.bas"
 
     p = gdash_paths.from_args(args)
 
@@ -48,6 +58,148 @@ program main(args)
             i += 1
         end if
     end while
+
+    ' --- accounts ---------------------------------------------------------
+    if verb = "user" then
+        opt_admin = false
+        opt_email = ""
+        opt_groups = ""
+        k = 0
+        while k < count(args)
+            if args[k] = "--admin" then
+                opt_admin = true
+            end if
+            if args[k] = "--email" and k + 1 < count(args) then
+                opt_email = args[k + 1]
+            end if
+            if args[k] = "--groups" and k + 1 < count(args) then
+                opt_groups = args[k + 1]
+            end if
+            k += 1
+        end while
+
+        loaded_users = gdash_users.load_users(p)
+        if not loaded_users.ok then
+            print to error loaded_users.message
+            exit(1)
+        end if
+        db = loaded_users.db
+
+        sub = ""
+        if count(rest) > 0 then
+            sub = rest[0]
+        end if
+        who = ""
+        if count(rest) > 1 then
+            who = rest[1]
+        end if
+
+        if sub = "list" then
+            have = gdash_users.names(db)
+            if count(have) = 0 then
+                print("no users yet -- create the first with: gdash user add <name> --admin")
+                exit(0)
+            end if
+            j = 0
+            while j < count(have)
+                u = gdash_users.lookup(db, have[j])
+                marks = []
+                if u["admin"] = true then
+                    marks = concat(marks, ["admin"])
+                end if
+                if u["disabled"] = true then
+                    marks = concat(marks, ["disabled"])
+                end if
+                tail = ""
+                if count(marks) > 0 then
+                    tail = " [" + join(marks, ", ") + "]"
+                end if
+                print(have[j] + "  groups: " + join(gdash_users.groups_of(u), ",") + tail)
+                j += 1
+            end while
+            exit(0)
+        end if
+
+        if who = "" then
+            print to error "which user?"
+            exit(2)
+        end if
+        existing = gdash_users.lookup(db, who)
+
+        if sub = "add" or sub = "passwd" then
+            if sub = "add" and not is_unknown(existing) then
+                print to error "user '" + who + "' already exists; use passwd or groups"
+                exit(1)
+            end if
+            if sub = "passwd" and is_unknown(existing) then
+                print to error "no such user: " + who
+                exit(1)
+            end if
+            pw = input("password for " + who + ": ")
+            again = input("again: ")
+            if pw != again then
+                print to error "those did not match; nothing was changed"
+                exit(1)
+            end if
+            if trim(pw) = "" then
+                print to error "an empty password is not a password"
+                exit(1)
+            end if
+            groups = []
+            email = opt_email
+            admin = opt_admin
+            disabled = false
+            if not is_unknown(existing) then
+                groups = gdash_users.groups_of(existing)
+                if email = "" then
+                    email = gdash_users.email_of(existing)
+                end if
+                if sub = "passwd" then
+                    admin = existing["admin"] = true
+                    disabled = existing["disabled"] = true
+                end if
+            end if
+            if opt_groups != "" then
+                groups = split(opt_groups, ",")
+            end if
+            db = gdash_users.upsert(db, who, password_hash(pw), email, groups, admin, disabled)
+            if not gdash_users.save(p, db) then
+                print to error "could not write the user file"
+                exit(1)
+            end if
+            print("ok: " + who)
+            exit(0)
+        end if
+
+        if is_unknown(existing) then
+            print to error "no such user: " + who
+            exit(1)
+        end if
+
+        if sub = "groups" then
+            g = []
+            if count(rest) > 2 then
+                g = split(rest[2], ",")
+            end if
+            db = gdash_users.upsert(db, who, "", gdash_users.email_of(existing), g, existing["admin"] = true, existing["disabled"] = true)
+        else if sub = "disable" then
+            db = gdash_users.upsert(db, who, "", gdash_users.email_of(existing), gdash_users.groups_of(existing), existing["admin"] = true, true)
+        else if sub = "enable" then
+            db = gdash_users.upsert(db, who, "", gdash_users.email_of(existing), gdash_users.groups_of(existing), existing["admin"] = true, false)
+        else if sub = "remove" then
+            db = gdash_users.drop_user(db, who)
+        else
+            print to error "unknown user command: " + sub
+            exit(2)
+        end if
+
+        if not gdash_users.save(p, db) then
+            print to error "could not write the user file"
+            exit(1)
+        end if
+        print("ok: " + who)
+        exit(0)
+    end if
 
     if verb = "" then
         print to error "usage: gdash --root <dir> validate|refresh <dashboard> [dataset]"
