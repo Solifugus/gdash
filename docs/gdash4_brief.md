@@ -1,6 +1,7 @@
 # GDASH-4 — Sessions, local auth, access enforcement: phase brief
 
-**Status:** IN PROGRESS.
+**Status:** COMPLETE. All seven §5 criteria met; at the review boundary.
+Findings in `gdash4_findings.md`; DONE note in §7.
 **Narrows:** the GDASH-4 paragraph of `gdash_development_plan.md`.
 **Authority:** `gdash_design.md` outranks this brief. The findings of GDASH-0
 through GDASH-3 are inputs, not open questions.
@@ -205,3 +206,58 @@ group defaults (design §8 names them as "optional later"). Remember-me beyond
 the session cookie's bounded age. Per-visual or per-row authorization — design
 §8's authorization is coarse and per-dashboard on purpose, and row-level
 filtering is what `user_*` in a query already is.
+
+---
+
+## 7. DONE note
+
+All seven §5 criteria met. The hermetic suite is 19 suites — 476 in-process
+assertions plus 128 end-to-end — green from a clean checkout with no services
+running, ending scratch-clean; the opt-in live-Postgres runner passes 8/8.
+
+**Built:** local accounts in a 0600 `users.json` with one `password_hash`
+field; CLI account management reading the password from stdin; server-side
+sessions as one file per session under `/run`, behind a storage seam that
+`gdash_session` never reaches around; session-id regeneration at login and
+logout; an `HttpOnly`/`SameSite=Lax` cookie with `Secure` conditional on
+`req.scheme` and a bounded age; CSRF on every state-changing route; coarse
+per-dashboard `view_groups`/`edit_groups` with `access: open` unchanged as a
+per-dashboard opt-in; `user_*` injected from the identity and never merged
+from the client; and a sign-in/sign-out affordance on every page.
+
+**Proved rather than asserted:** `gdash_session`'s tests run against a store
+gdash does not ship — a single-file JSON map, not a file per session — so the
+seam is exercised by something shaped like the Postgres implementation that
+will follow it, rather than by a near-copy of the only implementation there is.
+
+**Deliberately not built** — §6 stands, with these to record:
+
+- **The pin and the session know a browser, not a person.** Two browsers are
+  two sessions. That is what a cookie can know.
+- **No password policy, no lockout, no rate limit on failed login.** A hash
+  costs ~12ms (`password_hash_cost()` reports it), so an attacker who can
+  reach the login form can try on the order of 80 candidates a second per
+  connection. For an intranet product that is a documented posture rather than
+  a solved problem, and it is the reason `users.json` is 0600.
+- **No password reset, no email, no self-service, no registration.** Accounts
+  are provisioned by whoever runs the server.
+- **No user-management UI.** The CLI is the interface, as the record file is
+  the authoring interface.
+- **Authorization is per-dashboard and nothing finer.** Row-level filtering is
+  what `user_*` in a query already is; a per-visual rule would be a second
+  authorization system with different semantics.
+- **Sessions are not swept on a timer.** `gdash_session.sweep` exists and is
+  tested; nothing calls it on a schedule yet. `/run` is cleared on reboot,
+  which bounds the mess without bounding it well. The scheduler is the obvious
+  caller and GDASH-7 the obvious phase.
+
+**Design edits owed** (the maintainer's): §8's password hashing should name
+`password_hash` rather than `pbkdf2`/`scrypt` — **accepted by the platform
+review**; §4's money headroom figure; §4's render path, now bounded by the
+money type's storage scale; §2's content-hash sentence (G2-10).
+
+**Still open, deliberately:** the shared session/auth stdlib. The gbasic repo
+approved extraction with gdash's sequencing — build locally first, extract
+from one real implementation. That implementation now exists, with the storage
+half isolated in `gdash_session_files` and nothing else in `gdash_session`
+touching a file.
