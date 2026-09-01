@@ -213,3 +213,70 @@ gdash builds to now rather than later:
   caller. Worth recording that this only became expressible in August, when
   `lib.fn` became a first-class function value: the clean shape is newer than
   the problem.
+
+---
+
+## G4-9 — the namespace audit found F6 again, in a module written after F6
+
+`library_collisions()` was wired in on the day it landed, and on the first run
+against this phase's new modules it reported:
+
+- **`resolve` — `web` and `gdash_session`.** That is **F6 exactly**: the
+  finding that cost an afternoon of GDASH-0, where `gdash_paths.resolve`
+  shadowed `web.resolve`, every working route broke while trivial ones
+  answered, and the only signal was a stderr warning nobody was reading. I
+  wrote it again, in a module whose whole subject is security, four phases
+  after writing the finding down. It is `gdash_session.active` now, with the
+  reason in a comment above it.
+- **`load_file` — `gdash_record` and `gdash_users`.**
+- **`_restrict` — `gdash_refresh` and `gdash_users`.** Two copies of a
+  `chmod 600`, which is two places for one of them to be forgotten. Now one
+  `gdash_paths.restrict`.
+
+Three more followed during the phase, each caught on the run after the code
+was written: `gdash_users.find` and `remove` shadowing built-ins, and
+`gdash_app.csrf_ok` colliding with `gdash_session.csrf_ok`.
+
+None had symptoms. None would have been reported by watching stderr, because
+every call was qualified. The audit is the reason this phase did not ship a
+second F6, and the honest conclusion is that a naming discipline held by
+memory does not hold — mine has now failed at it four times in a row.
+
+## G4-10 — a pre-login session is a real session, and the code did not think so
+
+The end-to-end run found one genuine bug, and it is worth recording because
+the mistake is a category error rather than a slip.
+
+`viewer_of` resolved a session, looked its user up, and destroyed the session
+if the user did not resolve — reasonable, since an account removed or disabled
+while a session lived should take the session with it. But a **pre-login**
+session has no user at all: it exists so the login form's CSRF token has
+something to be bound to. Both cases reached the same branch, so every visit
+to `/login` minted a session and then destroyed it on the next request,
+carrying the form's token with it. Signing in was impossible.
+
+The fix is one branch: an empty user is a pre-login session and is kept; a
+non-empty user that no longer resolves is an account that went away and the
+session goes with it. Two different facts that had been written as one.
+
+Recorded because it is the shape of bug this whole phase is most exposed to:
+"not signed in" and "has no session" are the same thing to every caller, which
+is exactly why the code that distinguishes them has to do it deliberately.
+
+## G4-11 — an unauthenticated refusal is a 404, not a 403
+
+Not a defect; a ruling, made here and worth writing down because it looks like
+a mistake to anyone reading the route table.
+
+A viewer who is not signed in and asks for a dashboard they may not see gets
+**404**, indistinguishable from a dashboard that does not exist. On an
+intranet — design §1's expected deployment — the existence of a dashboard
+called `layoffs-q3` is itself information, and a 403 confirms it to anyone who
+can reach the port.
+
+A viewer who **is** signed in and simply lacks the group gets **403**. For
+them the dashboard's existence is not the secret; their access to it is, and a
+404 would send them to an administrator to report a bug that is not one.
+
+The diff endpoint follows the same rule, because a snapshot is a version of a
+dashboard and whoever may not see one may not see the other.
