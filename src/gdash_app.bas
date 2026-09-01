@@ -484,6 +484,23 @@ library gdash_app
         return s
     end function
 
+    ' Who you are, and the way out. The logout form carries its own CSRF token
+    ' because logging out is a state change, and a link that logs you out is a
+    ' link someone else can put in an image tag.
+    function _who_bar(p, v)
+        q = chr(34)
+        if not v.authed then
+            return "<div class=" + q + "gdash-who" + q + "><a href=" + q + "/login" + q + ">Sign in</a></div>"
+        end if
+        tok = gdash_session.csrf_for(secret_of(p), v.sid)
+        h = "<div class=" + q + "gdash-who" + q + ">" + gdash_render.html_escape(v.name) + " "
+        h = h + "<form method=" + q + "post" + q + " action=" + q + "/logout" + q + " style=" + q + "display:inline" + q + ">"
+        h = h + "<input type=" + q + "hidden" + q + " name=" + q + "csrf" + q + " value=" + q + tok + q + ">"
+        h = h + "<button type=" + q + "submit" + q + " style=" + q + "border:0;background:none;color:#06c;cursor:pointer;font-size:12px" + q + ">sign out</button>"
+        h = h + "</form></div>"
+        return h
+    end function
+
     function dashboard_page(req, name)
         got = _load_dashboard(req, name, "view")
         if not got.ok then
@@ -522,6 +539,7 @@ library gdash_app
         body = tabbar + join(panes, "")
         q = chr(34)
         html = "<!doctype html><html><head><meta charset=" + q + "utf-8" + q + "><title>" + string(default(rec["title"], name)) + "</title><style>" + _style() + "</style></head><body>"
+        html = html + _who_bar(p, got.viewer)
         html = html + "<h1>" + string(default(rec["title"], name)) + "</h1>"
         html = html + "<div class=" + q + "gdash-stale" + q + ">" + _status_block(p, name, mode, rec) + "</div>"
         ' Hidden until a publish is observed. The viewer decides when to move.

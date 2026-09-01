@@ -364,6 +364,12 @@ if [[ -n "$preA" && -n "$postA" && "$preA" != "$postA" ]]; then
     echo "  ok   the session id changed at the privilege change (fixation defence)"; pass=$((pass+1))
 else echo "  FAIL the session id changed at the privilege change (got '$preA' -> '$postA')"; fail=$((fail+1)); fi
 
+page_who="$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/d/sales")"
+has "$page_who" "sign out" "a signed-in viewer is offered the way out"
+has "$page_who" 'name="csrf"' "and the logout form carries its own token"
+anon_who="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/sales")"
+has "$anon_who" "Sign in" "an anonymous viewer on an open dashboard is offered the way in"
+
 who="$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/whoami")"
 has "$who" '"authenticated":true' "the browser is now authenticated"
 has "$who" '"user":"ada"' "as the user who signed in"

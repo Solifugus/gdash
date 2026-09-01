@@ -256,15 +256,54 @@ to a viewer and belong here:
 full validation in this document and refuses on any error — warnings do not
 block. Nothing is written and `current` does not move.
 
-## 9. Access
+## 9. Access, groups, and identity
 
-`access: open` is a **per-dashboard opt-in, never a server default**. A record
-with no `access` key is refused with 403. A half-configured server fails
-closed.
+| key | required | meaning |
+|---|---|---|
+| `access` | no | `open` is the only value. **Absent means closed.** |
+| `view_groups` | no | Array of group names that may view. |
+| `edit_groups` | no | Array of group names that may publish, roll back and refresh. |
 
-This build implements no identity: `open` is the only mode it can honour, and
-saying so is what keeps the default closed rather than leaving a window in
-which "no auth yet" quietly means "open to all".
+Resolution, in order, and failing closed at every step:
+
+1. `access: open` — served to anyone, signed in or not. A **per-dashboard
+   opt-in, never a server default**: a half-configured server must not serve.
+2. Otherwise the viewer must be signed in **and** in one of `view_groups` or
+   `edit_groups`. An editor can always see what they may change; the reverse
+   is not true, and `edit` never falls back to `view`.
+3. An administrator needs no group.
+4. Anything else is refused. A record naming no groups and no `access` is
+   visible to administrators only.
+
+**A viewer who is not signed in is told the dashboard does not exist** — 404,
+not 403. On an intranet the existence of a dashboard called `layoffs-q3` is
+itself information, and 403 confirms it. A viewer who *is* signed in and
+simply lacks the group gets 403: for them the secret is their access, not the
+dashboard's existence. Version history follows the same rule as the dashboard.
+
+### Identity in a query
+
+The reserved params (design §2) are supplied by the server from the signed-in
+identity and **may not be declared** by a record — declaring one would let an
+author give it a default and believe they had configured something the server
+overwrites unconditionally.
+
+| param | value |
+|---|---|
+| `user_name` | the signed-in username, or `""` |
+| `user_email` | their address, or `""` |
+| `user_groups` | their groups, delimited: `\|analysts\|finance\|` |
+
+`user_groups` is delimited **at both ends** so that
+`:user_groups like '%\|finance\|%'` cannot match a group merely ending in
+`finance`. An anonymous viewer gets `\|\|` — the same encoding with nothing in
+it, so a query written for the signed-in case behaves the same way rather than
+hitting a different one.
+
+**They are injected, never merged.** A client that sends `?user_email=...`
+is ignored. This is the whole of design §5's claim that a user-filtered
+dashboard over a shared dataset is genuinely secure: the filtering happens
+server-side against an identity the client cannot state.
 
 ---
 
