@@ -84,8 +84,16 @@ library gdash_app
         return string(default(c["gdash_session"], ""))
     end function
 
+    ' An anonymous viewer may still hold a session: the login form needs one
+    ' so its CSRF token has something to be bound to. Carrying the id here is
+    ' what lets "not signed in" and "has no session at all" stay one concept
+    ' to every caller while still being different facts.
+    function anonymous_with(sid)
+        return { authed: false, name: "", email: "", groups: [], admin: false, sid: sid }
+    end function
+
     function anonymous()
-        return { authed: false, name: "", email: "", groups: [], admin: false, sid: "" }
+        return anonymous_with("")
     end function
 
     ' Who is asking. An expired session, a forged id and no cookie at all are
@@ -100,15 +108,23 @@ library gdash_app
         if not got.ok then
             return anonymous()
         end if
+        holder = string(got.session.user)
+        if holder = "" then
+            ' A pre-login session: real, unprivileged, and NOT to be destroyed.
+            ' Destroying it here would take the login form's CSRF token with
+            ' it and make signing in impossible.
+            return anonymous_with(sid)
+        end if
         db = gdash_users.load_users(p)
         if not db.ok then
             ' A user file gdash cannot read is a user file gdash does not
             ' trust. Everyone is anonymous until an operator fixes it.
-            return anonymous()
+            return anonymous_with(sid)
         end if
-        ident = gdash_users.identity(db.db, string(got.session.user))
+        ident = gdash_users.identity(db.db, holder)
         if is_unknown(ident) then
-            ' The account was removed or disabled while the session lived.
+            ' The account was removed or disabled while the session lived, so
+            ' the session goes with it.
             dropped = gdash_session.destroy(_store(p), sid)
             return anonymous()
         end if

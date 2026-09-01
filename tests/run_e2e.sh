@@ -88,10 +88,12 @@ has "$page" "flex:2 1 0" "a weighted child flexes"
 has "$page" "gap:16px" "gap is applied"
 
 echo "--- access fails closed (design §8) ---"
+# An anonymous viewer gets 404, not 403: on an intranet the existence of a
+# dashboard is itself information, and 403 would confirm it.
 code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/d/private")"
-ok "record without access:open is refused" "$code" "403"
+ok "record without access:open is refused to an anonymous viewer" "$code" "404"
 code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/d/nosuch")"
-ok "unknown dashboard is 404" "$code" "404"
+ok "and an unknown dashboard is indistinguishable from it" "$code" "404"
 
 echo "--- slicer round trip: only binding visuals re-run (design §2) ---"
 resp="$(curl -s --max-time 10 -X POST -H 'content-type: application/json' -d '{"region":"east"}' "http://127.0.0.1:$PORT/d/sales/params")"
@@ -295,8 +297,10 @@ d2="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/timed/diff?from=0002.json&
 has "$d2" '"changed":false' "a snapshot does not differ from itself"
 code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/d/timed/diff?from=9999.json")"
 ok "a snapshot that does not exist is 404" "$code" "404"
+# A snapshot is a version of a dashboard, so whoever may not see the dashboard
+# may not see its history -- and is told the same nothing about both.
 code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/d/private/diff")"
-ok "history follows the dashboard's own access rule" "$code" "403"
+ok "history follows the dashboard's own access rule" "$code" "404"
 
 echo "--- an invalid draft cannot be published ---"
 printf '{ "format": 1 }' > "$ROOT/lib/dashboards/timed/draft.json"
@@ -306,6 +310,144 @@ ok "publishing an invalid draft exits nonzero" "$?" "1"
 has "$out" "nothing was published" "and says nothing was published"
 ok "current did not move" "$(cat "$ROOT/lib/dashboards/timed/current")" "$before_ptr"
 
+
+# ---------------------------------------------------------------------------
+# Identity (GDASH-4).
+# ---------------------------------------------------------------------------
+echo "--- accounts, and no default anything ---"
+printf 'fake-analyst-pw\nfake-analyst-pw\n' | "$GBASIC" src/gdash_cli.bas --root "$ROOT" user add ada --email ada@example.invalid --groups analysts >/dev/null 2>&1
+ok "creating the first account exits 0" "$?" "0"
+printf 'fake-outsider-pw\nfake-outsider-pw\n' | "$GBASIC" src/gdash_cli.bas --root "$ROOT" user add bo --email bo@example.invalid --groups shipping >/dev/null 2>&1
+printf 'fake-boss-pw\nfake-boss-pw\n' | "$GBASIC" src/gdash_cli.bas --root "$ROOT" user add root_of_all --admin >/dev/null 2>&1
+ok "the user file is 0600" "$(stat -c '%a' "$ROOT/etc/users.json")" "600"
+hasnt "$(cat "$ROOT/etc/users.json")" "fake-analyst-pw" "no password is stored, only its hash"
+
+# A dashboard shared with one group, and nothing else.
+python3 - "$ROOT" <<'PYEOF'
+import json,os,sys
+r=sys.argv[1]
+d=json.load(open('dashboards/sales/draft.json'))
+d['name']='team'; d.pop('access',None)
+d['view_groups']=['analysts']
+d['edit_groups']=['analysts']
+os.makedirs(f'{r}/lib/dashboards/team', exist_ok=True)
+json.dump(d, open(f'{r}/lib/dashboards/team/draft.json','w'), indent=2)
+PYEOF
+"$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh team >/dev/null 2>&1
+
+echo "--- login (design §8) ---"
+jarA="$SCRATCH/ada.txt"; rm -f "$jarA"
+form="$(curl -s -c "$jarA" --max-time 10 "http://127.0.0.1:$PORT/login")"
+has "$form" 'name="csrf"' "the login form carries a CSRF token"
+has "$(cat "$jarA")" "gdash_session" "and a session to bind it to"
+tokA="$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' <<<"$form")"
+preA="$(awk '/gdash_session/{print $7}' "$jarA")"
+
+# Wrong password, right username: refused, and refused the same way as a
+# username that does not exist.
+bad1="$(curl -s -b "$jarA" -c "$jarA" --max-time 10 -X POST -d "csrf=$tokA&user=ada&pass=wrong" "http://127.0.0.1:$PORT/login")"
+bad2="$(curl -s -b "$jarA" -c "$jarA" --max-time 10 -X POST -d "csrf=$tokA&user=nobody&pass=wrong" "http://127.0.0.1:$PORT/login")"
+has "$bad1" "do not match" "a wrong password is refused"
+if [[ "$(grep -o 'do not match' <<<"$bad1")" == "$(grep -o 'do not match' <<<"$bad2")" ]]; then
+    echo "  ok   an unknown user is refused in exactly the same words"; pass=$((pass+1))
+else echo "  FAIL an unknown user is refused in exactly the same words"; fail=$((fail+1)); fi
+
+# A post with no CSRF token at all.
+nocsrf="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarA" --max-time 10 -X POST -d "user=ada&pass=fake-analyst-pw" "http://127.0.0.1:$PORT/login")"
+ok "a login without a CSRF token is refused" "$nocsrf" "400"
+
+# The real thing.
+code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarA" -c "$jarA" --max-time 10 -X POST -d "csrf=$tokA&user=ada&pass=fake-analyst-pw&next=/d/team" "http://127.0.0.1:$PORT/login")"
+ok "a correct login redirects" "$code" "303"
+postA="$(awk '/gdash_session/{print $7}' "$jarA")"
+if [[ -n "$preA" && -n "$postA" && "$preA" != "$postA" ]]; then
+    echo "  ok   the session id changed at the privilege change (fixation defence)"; pass=$((pass+1))
+else echo "  FAIL the session id changed at the privilege change (got '$preA' -> '$postA')"; fail=$((fail+1)); fi
+
+who="$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/whoami")"
+has "$who" '"authenticated":true' "the browser is now authenticated"
+has "$who" '"user":"ada"' "as the user who signed in"
+
+echo "--- per-dashboard groups ---"
+code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/d/team")"
+ok "an anonymous viewer cannot see a group dashboard, and cannot tell it exists" "$code" "404"
+code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/d/team")"
+ok "a member of its group can" "$code" "200"
+
+# Someone authenticated but in the wrong group gets 403: for them the
+# dashboard's existence is not the secret, their access to it is.
+jarB="$SCRATCH/bo.txt"; rm -f "$jarB"
+formB="$(curl -s -c "$jarB" --max-time 10 "http://127.0.0.1:$PORT/login")"
+tokB="$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' <<<"$formB")"
+curl -s -o /dev/null -b "$jarB" -c "$jarB" --max-time 10 -X POST -d "csrf=$tokB&user=bo&pass=fake-outsider-pw" "http://127.0.0.1:$PORT/login"
+code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarB" --max-time 10 "http://127.0.0.1:$PORT/d/team")"
+ok "an authenticated non-member gets 403, not 404" "$code" "403"
+has "$(cat "$ROOT/log/audit.log")" "access.denied" "and the denial is audited"
+
+# An admin sees everything, without being in any group.
+jarC="$SCRATCH/boss.txt"; rm -f "$jarC"
+formC="$(curl -s -c "$jarC" --max-time 10 "http://127.0.0.1:$PORT/login")"
+tokC="$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' <<<"$formC")"
+curl -s -o /dev/null -b "$jarC" -c "$jarC" --max-time 10 -X POST -d "csrf=$tokC&user=root_of_all&pass=fake-boss-pw" "http://127.0.0.1:$PORT/login"
+code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarC" --max-time 10 "http://127.0.0.1:$PORT/d/team")"
+ok "an admin needs no group" "$code" "200"
+
+echo "--- CSRF on a state-changing route ---"
+code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarA" --max-time 10 -X POST "http://127.0.0.1:$PORT/d/team/refresh")"
+ok "a refresh without a CSRF token is refused" "$code" "400"
+tokA2="$(sed -n 's/.*"csrf":"\([^"]*\)".*/\1/p' <<<"$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/whoami")")"
+code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarA" -H "x-gdash-csrf: $tokA2" --max-time 10 -X POST "http://127.0.0.1:$PORT/d/team/refresh")"
+ok "and accepted with one" "$code" "200"
+# ada's own session, but somebody else's token. (bo would be refused at
+# authorization first, which is the right order and a different test.)
+code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarA" -H "x-gdash-csrf: $tokC" --max-time 10 -X POST "http://127.0.0.1:$PORT/d/team/refresh")"
+ok "another session's token does not work" "$code" "400"
+
+echo "--- user_* reaches the query, and only from the server (design §5) ---"
+python3 - "$ROOT" <<'PYEOF'
+import json,sys
+r=sys.argv[1]
+p=f'{r}/lib/dashboards/team/draft.json'
+d=json.load(open(p))
+# A `value` mark, because its title is HTML gdash emits and is therefore
+# something the run can look for; a bar's title lives inside the chart
+# library's SVG. The point of the test is the WHERE clause either way.
+d['visuals']['mine']={
+ 'dataset':'orders',
+ 'sql':"select sum(amount) as total from orders where :user_email like '%ada%'",
+ 'encoding':{'mark':'value','value':'total','format':'currency','currency':'USD','title':'Only for ada'}}
+d['tabs'][0]['layout']['vert'].append({'visual':'mine'})
+json.dump(d, open(p,'w'), indent=2)
+PYEOF
+# The visual's title only appears when the query returned rows, so its
+# presence IS the assertion that :user_email carried the right identity.
+mine="$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/d/team")"
+has "$mine" "Only for ada" "a visual binding :user_email renders for the matching identity"
+has "$mine" "gdash-value-number" "with a figure, which an empty result would not render"
+
+# The admin has no email, so the same query returns nothing for them. Same
+# dashboard, same dataset, different rows -- design §5's whole claim.
+boss="$(curl -s -b "$jarC" --max-time 10 "http://127.0.0.1:$PORT/d/team")"
+hasnt "$boss" "Only for ada" "and renders nothing for an identity it does not match"
+
+# ...and asking to be someone else changes nothing, because user_* is
+# injected from the session and never merged from the client.
+spoof="$(curl -s -b "$jarC" --max-time 10 "http://127.0.0.1:$PORT/d/team?user_email=ada@example.invalid")"
+hasnt "$spoof" "Only for ada" "a client-supplied user_email is ignored, not honoured"
+
+echo "--- logout ---"
+code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarA" -H "x-gdash-csrf: $tokA2" -c "$jarA" --max-time 10 -X POST "http://127.0.0.1:$PORT/logout")"
+ok "logout redirects" "$code" "303"
+code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/d/team")"
+ok "and the dashboard is no longer reachable with that cookie" "$code" "404"
+has "$(cat "$ROOT/log/audit.log")" '"login"' "logins are audited"
+has "$(cat "$ROOT/log/audit.log")" '"logout"' "so are logouts"
+has "$(cat "$ROOT/log/audit.log")" "login.failed" "so are failures"
+hasnt "$(cat "$ROOT/log/audit.log")" "fake-analyst-pw" "and no password reaches the log"
+
+# An open dashboard is still open to anyone: per-dashboard opt-in, unchanged.
+code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/d/sales")"
+ok "access: open still serves anyone, authenticated or not" "$code" "200"
 kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
 rm -rf "$SCRATCH"
 [[ -e "$SCRATCH" ]] && { echo "SCRATCH NOT CLEAN"; exit 1; }
