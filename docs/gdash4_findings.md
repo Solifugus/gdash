@@ -280,3 +280,43 @@ them the dashboard's existence is not the secret; their access to it is, and a
 
 The diff endpoint follows the same rule, because a snapshot is a version of a
 dashboard and whoever may not see one may not see the other.
+
+## G4-12 — F6 is fixed at the root, and several findings above are now history
+
+The platform changed the resolution rule: **inside a library body, an
+unqualified name resolves to that library's own function first**
+(gbasic `d08409f`). Verified rather than taken on report:
+
+- **The F6 scenario itself no longer breaks anything.** A library defining
+  `resolve` alongside a `server` block — the exact shape that broke every
+  working route in GDASH-0 while trivial ones answered — now dispatches
+  correctly (`/hello/{who}` → `hi ada`), and the shadowing library's own
+  `resolve` is still reachable through its prefix.
+- **The minimal repro inverts.** `liba.work()` calling its own bare `helper`
+  returned `libb`'s answer before; it returns `liba`'s now.
+- **The cross-library fallback is preserved.** A library calling another
+  library's function by a bare name it never declared still resolves, so
+  nothing that depended on the old reach is cut off.
+- **gdash is green on it**: 19 suites, 476 in-process assertions plus 128
+  end-to-end, live Postgres 8/8, no code changes.
+
+**What this retires.** F6 (GDASH-0), G1-2, G2-8, G4-6 and G4-9 are all the same
+hazard seen from five angles, and the hazard is gone in its damaging form. The
+renames it forced stay — `gdash_paths.roles`, `gdash_session.active`,
+`gdash_app.dashboard_page`, `gdash_render.html_escape` — because renaming them
+back is churn with no benefit, and several read better than what they replaced.
+
+**What it does not retire.** `library_collisions()` is still worth running:
+two libraries defining one name is still ambiguous for a *caller* writing the
+bare name outside either of them, and the audit is the only thing that reports
+it. gdash's allowlist stays empty.
+
+**One discrepancy to report back.** The fix reached the built-in case too, and
+the warning text did not follow it. A library defining `lines` (a built-in)
+and calling it bare from its own body now gets **its own** function — verified,
+`blib.count_them` returns 2 rather than raising `lines expects a file
+reference` — while the warning at that definition still says *"unqualified
+calls use the built-in"*. From outside the library the built-in does still win,
+so the sentence is true of one call site and false of the one the warning
+points at. Not a defect in behaviour; a stale message on a line that now means
+something else.
