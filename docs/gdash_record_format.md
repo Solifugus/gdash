@@ -83,8 +83,9 @@ would reload every open tab twelve times an hour to show the same numbers.
 `{ "type": "money", "scale": s, "currency": "USD" }` materializes as an
 INTEGER scaled by 10^s, with per-column scale recorded in `_gdash_meta` inside
 the dataset file. **Source values with more decimals than `s` are rejected, not
-rounded.** `currency` defaults to `USD` and must be one this build supports:
-USD, EUR, GBP, JPY, CHF, CAD, AUD, KWD.
+rounded.** `currency` defaults to `USD` and must be a code ISO 4217 defines —
+all 178 of them. A code it does not define is refused rather than rendered as
+dollars.
 
 Undeclared columns map: integer-looking → INTEGER, numeric → REAL, else TEXT.
 
@@ -164,10 +165,16 @@ options:
 
 **Currency range.** Formatting goes through gBASIC's money type, an exact
 int64 at the currency's storage scale (its minor-unit exponent plus four guard
-digits). For USD that caps rendering at **$9,223,372,036,854.77**. gdash's own
-storage is unaffected — SQLite holds the exact integer either way — but a
-value above the ceiling **refuses to render** rather than falling back to a
-second formatting path with different rounding.
+digits). The ceiling therefore **moves with the currency**: USD stops at
+`9,223,372,036,854.77`, KWD at `922,337,203,685.477`, and JPY — which has no
+minor unit — at `922,337,203,685,477`. gdash's own storage is unaffected;
+SQLite holds the exact integer either way. A value above the ceiling
+**refuses to render**, naming that currency's own limit, rather than falling
+back to a second formatting path with different rounding.
+
+Symbols are given for USD, EUR, GBP and JPY; every other currency renders as
+its code and the amount (`NGN 1,234.56`), because ISO 4217 defines codes and
+not symbols.
 
 ## 5. Layout
 

@@ -340,3 +340,38 @@ silent**, and correctly so — neither library is harmed. gdash's stderr sweep
 therefore catches only built-in shadowing now, and `library_collisions()` is
 the only thing that sees the other case at all. Both halves of the check are
 still earning their place; what each covers has changed underneath them.
+
+## G4-13 — every currency, and what the lookup costs
+
+GDASH-1 shipped eight currencies as literal branches, because `{USD}=` needs a
+literal code; its DONE note called widening "mechanical, wanting generation
+rather than typing". `money.of(code, text)` takes the code as a **value**, so
+it wants neither. Three enumerations collapsed at once:
+
+- `to_money`'s eight-branch chain became one call.
+- `supported_currencies()` now comes from `money.currencies()` — 178 codes,
+  and a list that cannot drift out of date the next time a currency
+  redenominates.
+- `minor_places()` reads the exponent from the same source instead of
+  hardcoding JPY 0, KWD 3, everything else 2. BHD now renders at three places
+  without anyone having thought about BHD.
+
+The range refusal improved with it. The ceiling is an int64 at exponent + 4
+guard digits, so it **moves with the currency** — USD stops at
+`9,223,372,036,854.77`, KWD at `922,337,203,685.477`, JPY at
+`922,337,203,685,477`. The old message quoted USD's number for every currency,
+which was wrong for two of the eight it supported. It now names the ceiling of
+the currency that actually refused.
+
+**The cost, measured rather than assumed.** `money.currencies()` builds all 178
+records per call: 10,000 lookups take **0.75s early in the list and 0.81s at
+the end**, so the scan is not what costs — the array build is. That is ~80µs
+per formatted money value.
+
+Left as it is, deliberately. The reference dashboard renders in ~30ms end to
+end. A hundred-row table pays ~8ms; a ten-thousand-row one would pay most of a
+second, and GDASH-1 already recorded that a table paginates nothing. The fix
+if it ever matters is to resolve the exponent once per visual — `gdash_render`
+already computes the scale and currency once — rather than once per cell. That
+is a change to the format API's shape, and making it now would be inventing a
+problem the reference record does not have.

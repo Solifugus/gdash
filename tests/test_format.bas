@@ -75,5 +75,45 @@ program main(args)
     s = gdash_test.eq(s, gdash_format.apply({ name: "number", decimals: 1 }, 12.34, unknown), "12.3", "apply number")
     s = gdash_test.eq(s, gdash_format.apply({ name: "text" }, "west", unknown), "west", "apply text")
 
+    ' --- every ISO 4217 currency, not the eight that could be branches ---
+    ' GDASH-1 supported eight because {USD}= needs a literal code. money.of
+    ' takes it as a value, so the limit is gone rather than widened.
+    s = gdash_test.ok(s, count(gdash_format.supported_currencies()) > 150, "the supported set is the platform's, not a list here")
+    s = gdash_test.ok(s, contains(gdash_format.supported_currencies(), "NGN"), "a currency GDASH-1 could not render is supported")
+    s = gdash_test.ok(s, contains(gdash_format.supported_currencies(), "INR"), "and so is another")
+
+    ' Rendered at their own minor units, from the platform's exponents.
+    s = gdash_test.eq(s, gdash_format.minor_places("USD"), 2, "USD shows two places")
+    s = gdash_test.eq(s, gdash_format.minor_places("JPY"), 0, "JPY shows none")
+    s = gdash_test.eq(s, gdash_format.minor_places("KWD"), 3, "KWD shows three")
+    s = gdash_test.eq(s, gdash_format.minor_places("BHD"), 3, "and so does BHD, which was never enumerated here")
+
+    ngn = gdash_format.currency("123456", 2, "NGN")
+    s = gdash_test.ok(s, ngn.ok, "a previously unsupported currency renders -- " + ngn.message)
+    s = gdash_test.eq(s, ngn.text, "NGN 1,234.56", "with grouping and its code, since ISO gives no symbol")
+
+    ' A code ISO 4217 does not define is still a refusal, not a fallback to
+    ' dollars: rendering one currency as another is worse than saying no.
+    bogus = gdash_format.currency("100", 2, "XYZ")
+    s = gdash_test.ok(s, not bogus.ok, "an invented currency is refused")
+    s = gdash_test.contains_text(s, bogus.message, "unsupported currency", "and says so in gdash's own words")
+
+    ' --- the range refusal names the currency's own limit ---
+    ' The bound moves with the exponent, because storage is an int64 at
+    ' exponent + 4 guard digits.
+    s = gdash_test.eq(s, gdash_format.range_ceiling("USD"), "9,223,372,036,854.77", "USD stops near 9.2 trillion")
+    s = gdash_test.eq(s, gdash_format.range_ceiling("JPY"), "922,337,203,685,477", "JPY, with no minor unit, reaches a hundred times further")
+    s = gdash_test.eq(s, gdash_format.range_ceiling("KWD"), "922,337,203,685.477", "and KWD, with three, stops sooner")
+
+    ' Ten trillion: past USD's ceiling, inside JPY's.
+    over = gdash_format.currency("1000000000000000", 2, "USD")
+    s = gdash_test.ok(s, not over.ok, "a value past the ceiling is refused")
+    s = gdash_test.contains_text(s, over.message, "9,223,372,036,854.77", "naming the limit it passed")
+    s = gdash_test.contains_text(s, over.message, "the data is intact", "and saying the data is not the problem")
+
+    ' The same magnitude is fine in JPY, which is the point of naming the
+    ' currency rather than quoting one number for all of them.
+    s = gdash_test.ok(s, gdash_format.currency("1000000000000000", 2, "JPY").ok, "the same magnitude renders in a currency with room for it")
+
     exit(gdash_test.report(s))
 end program

@@ -11,6 +11,12 @@
 ' constructor (finding F5); it does now, so the string surgery is gone rather
 ' than kept beside it.
 '
+' Every currency ISO 4217 defines is supported. GDASH-1 shipped eight, because
+' `{USD}=` needs a LITERAL currency code and each supported one was therefore
+' an explicit branch; its DONE note called widening "mechanical, wanting
+' generation rather than typing". `money.of(code, text)` takes the code as a
+' value, so it now wants neither.
+'
 ' The F1 text boundary is unchanged by that: minor units still cross from
 ' SQLite as decimal TEXT and go straight into the currency modifier. No
 ' number() appears anywhere on this path.
@@ -54,49 +60,65 @@ library gdash_format
         return out
     end function
 
-    ' Build a money value from exact decimal text. The currency modifier is a
-    ' literal in the source, so the supported set is enumerated here; an
-    ' unknown code is a refusal rather than a silent fallback to USD, because
-    ' rendering yen as dollars is worse than saying no.
+    ' The int64 an exact money value is, spelled out. Used only to say what a
+    ' currency's range actually is when a value exceeds it.
+    function _int64_max()
+        return "9223372036854775807"
+    end function
+
+    ' The largest amount a currency can represent, as decimal text. Storage is
+    ' an int64 at exponent + 4 guard digits, so the bound moves with the
+    ' currency: USD stops near 9.2 trillion and JPY near 922 trillion. String
+    ' surgery, because computing it would be the 2^53 hop this module exists
+    ' to avoid.
+    function range_ceiling(code)
+        exp = minor_places(code)
+        if exp < 0 then
+            return ""
+        end if
+        digits = _int64_max()
+        cut = len(digits) - (exp + 4)
+        whole = mid(digits, 0, cut)
+        frac = mid(digits, cut, exp)
+        if exp = 0 then
+            return _group(whole)
+        end if
+        return _group(whole) + "." + frac
+    end function
+
+    ' Build a money value from exact decimal text. The code is a VALUE, not a
+    ' literal, which is what lets every ISO 4217 currency work rather than the
+    ' eight that could be spelled out as branches.
     function to_money(decimal_text, currency)
         on error goto next
-        if currency = "USD" then
-            m{USD}= decimal_text
-        else if currency = "EUR" then
-            m{EUR}= decimal_text
-        else if currency = "GBP" then
-            m{GBP}= decimal_text
-        else if currency = "JPY" then
-            m{JPY}= decimal_text
-        else if currency = "CHF" then
-            m{CHF}= decimal_text
-        else if currency = "CAD" then
-            m{CAD}= decimal_text
-        else if currency = "AUD" then
-            m{AUD}= decimal_text
-        else if currency = "KWD" then
-            m{KWD}= decimal_text
-        else
-            return { ok: false, value: 0, message: "unsupported currency '" + string(currency) + "'" }
-        end if
+        m = money.of(currency, decimal_text)
         if error then
+            msg = error.message
             ' Range is the interesting failure, and it is a consequence of
             ' the guard digits: an int64 at storage scale exponent+4 tops out
-            ' far below an int64 at the minor unit. USD reaches
-            ' $9,223,372,036,854.77, not $92 quadrillion. gdash's SQLite
-            ' storage is unaffected -- only rendering is bounded -- and a
-            ' refusal is better than a second formatting path with different
-            ' rounding semantics quietly taking over above a threshold.
-            if contains(error.message, "out of range") then
-                return { ok: false, value: 0, message: "value is beyond what " + string(currency) + " can represent (guard digits bound it near 9.2 trillion); the data is intact, only rendering refuses" }
+            ' far below an int64 at the minor unit. gdash's SQLite storage is
+            ' unaffected -- only rendering is bounded -- and a refusal is
+            ' better than a second formatting path with different rounding
+            ' semantics quietly taking over above a threshold.
+            if contains(msg, "out of range") then
+                return { ok: false, value: 0, message: "value is beyond what " + string(currency) + " can represent (its exact range stops at " + range_ceiling(currency) + "); the data is intact, only rendering refuses" }
             end if
-            return { ok: false, value: 0, message: error.message }
+            if contains(msg, "not a known currency") then
+                return { ok: false, value: 0, message: "unsupported currency '" + string(currency) + "'" }
+            end if
+            return { ok: false, value: 0, message: msg }
         end if
         return { ok: true, value: m, message: "" }
     end function
 
+    ' Every code ISO 4217 defines, from the platform rather than from a list
+    ' here that would drift out of date the first time a currency redenominated.
     function supported_currencies()
-        return ["USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "KWD"]
+        out = []
+        for each c in money.currencies()
+            out = concat(out, [c.code])
+        next
+        return out
     end function
 
     function _group(digits)
@@ -157,15 +179,22 @@ library gdash_format
     end function
 
     ' The currency's own minor-unit exponent -- what a human is shown, as
-    ' distinct from the storage scale that carries the guard digits.
+    ' distinct from the storage scale that carries the guard digits. -1 for a
+    ' code ISO 4217 does not define, which `to_money` refuses before this is
+    ' consulted for anything that renders.
+    '
+    ' `money.currencies()` builds all 178 records per call, which measures at
+    ' ~80us. That is per formatted VALUE, so a hundred-row table pays ~8ms and
+    ' a ten-thousand-row one pays most of a second -- worth knowing before
+    ' someone renders a table that large, and cheap enough not to restructure
+    ' the format API around today (finding G4-13).
     function minor_places(code)
-        if code = "JPY" then
-            return 0
-        end if
-        if code = "KWD" then
-            return 3
-        end if
-        return 2
+        for each c in money.currencies()
+            if c.code = code then
+                return c.exponent
+            end if
+        next
+        return -1
     end function
 
     function number_fmt(value, decimals)
