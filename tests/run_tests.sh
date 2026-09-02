@@ -46,10 +46,11 @@ for testfile in "$HERE"/test_*.bas; do
     fi
 done
 
-# The library-namespace audit. gBASIC function names are global and a second
-# definition silently wins (F6). Two checks, because neither covers the other:
-# library_collisions() reports the latent library-vs-library state, and stderr
-# carries the call-triggered warning for a library shadowing a BUILT-IN.
+# The library-namespace audit. The capture hazard (F6) is fixed in the
+# platform as of d08409f; what is left is ambiguity for a caller writing a bare
+# name outside every library defining it. library_collisions() reports the
+# library-vs-library case, which is now otherwise silent; stderr carries the
+# note for a library shadowing a BUILT-IN, which the audit does not cover.
 echo "--- library namespace ---"
 ran=$((ran + 1))
 sweep="$SCRATCH/overrides.err"

@@ -6,18 +6,24 @@
 ' GDASH-1 repeated it within a day of writing the finding down (G1-2), so the
 ' check is automated rather than remembered.
 '
-' It is checked TWO ways, because one of them is not enough:
+ The hazard itself is now gone from the platform: since gbasic d08409f a
+' library's own unqualified calls resolve to its own functions first, so no
+' library can capture another's internals (G4-12). What remains is ambiguity
+' for a CALLER writing a bare name outside every library that defines it, and
+' that is still worth refusing.
+'
+' Checked two ways, because neither covers the other:
 '
 '   library_collisions() reports every public name defined by more than one
-'   loaded library -- the LATENT state, before anyone writes the call that
-'   makes it live. This is the real audit, and it exists because gdash asked:
-'   the override warning is call-triggered, so two libraries sharing a name
-'   stay silent for as long as every call is qualified (G4-6). A sweep resting
-'   on the warning alone is a partial check.
+'   loaded library. Two libraries sharing a name is now silent -- correctly,
+'   since neither is harmed -- so this audit is the only thing that sees it.
 '
-'   The warning still catches what the audit does not: a library function
-'   shadowing a BUILT-IN. That is how gdash_diff.lines was caught (G3-1). The
-'   runner reads stderr for it.
+'   stderr carries the note for a library function shadowing a BUILT-IN, which
+'   the audit does not cover. That one still matters inside gdash: sixteen
+'   modules call each other, and a gdash function named like a built-in is a
+'   function every OTHER gdash module reaches past. It is a `note` on the
+'   platform, because there the rule is well-defined; it is a failure here,
+'   because here it is a name collision across our own modules.
 '
 ' Some collisions are legitimate and belong in `accepted` with a reason. An
 ' empty list is not the goal; an explained list is.

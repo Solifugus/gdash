@@ -320,3 +320,23 @@ calls use the built-in"*. From outside the library the built-in does still win,
 so the sentence is true of one call site and false of the one the warning
 points at. Not a defect in behaviour; a stale message on a line that now means
 something else.
+
+**All three follow-ups resolved and verified** (gbasic `417f061`, `389df3a`):
+
+- The text now names both sides of the boundary and the escape hatch:
+  *"inside 'blib' unqualified calls use this function, outside it they use the
+  built-in, and 'blib.lines' is explicit either way."* Accurate wherever it is
+  read, which the old sentence was not.
+- The built-in half was **ruled intended**, and the severity dropped from
+  `warning:` to `note:` — a rule rather than a hazard. That is the right call
+  and it is now the message's own claim rather than something a reader has to
+  infer from behaviour.
+- The location is correct: physical line 4 in a file whose function is on line
+  4, and physical line 7 in the file whose function is on line 7. Both
+  previously reported line 2.
+
+One consequence worth recording: **a library-vs-library collision is now
+silent**, and correctly so — neither library is harmed. gdash's stderr sweep
+therefore catches only built-in shadowing now, and `library_collisions()` is
+the only thing that sees the other case at all. Both halves of the check are
+still earning their place; what each covers has changed underneath them.
