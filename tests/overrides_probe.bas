@@ -6,7 +6,7 @@
 ' GDASH-1 repeated it within a day of writing the finding down (G1-2), so the
 ' check is automated rather than remembered.
 '
- The hazard itself is now gone from the platform: since gbasic d08409f a
+' The hazard itself is now gone from the platform: since gbasic d08409f a
 ' library's own unqualified calls resolve to its own functions first, so no
 ' library can capture another's internals (G4-12). What remains is ambiguity
 ' for a CALLER writing a bare name outside every library that defines it, and
