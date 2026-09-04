@@ -1,0 +1,46 @@
+dn: ou=people,dc=example,dc=invalid
+objectClass: organizationalUnit
+ou: people
+
+dn: ou=groups,dc=example,dc=invalid
+objectClass: organizationalUnit
+ou: groups
+
+dn: uid=ada,ou=people,dc=example,dc=invalid
+objectClass: inetOrgPerson
+uid: ada
+cn: Ada Okonjo
+sn: Okonjo
+mail: ada@example.invalid
+userPassword: fake-directory-pw
+
+dn: uid=bo,ou=people,dc=example,dc=invalid
+objectClass: inetOrgPerson
+uid: bo
+cn: Bo Lindqvist
+sn: Lindqvist
+mail: bo@example.invalid
+userPassword: another-fake-pw
+
+dn: uid=gone,ou=people,dc=example,dc=invalid
+objectClass: inetOrgPerson
+uid: gone
+cn: Departed Person
+sn: Person
+mail: gone@example.invalid
+userPassword: third-fake-pw
+
+dn: cn=analysts,ou=groups,dc=example,dc=invalid
+objectClass: groupOfNames
+cn: analysts
+member: uid=ada,ou=people,dc=example,dc=invalid
+
+dn: cn=finance,ou=groups,dc=example,dc=invalid
+objectClass: groupOfNames
+cn: finance
+member: uid=ada,ou=people,dc=example,dc=invalid
+
+dn: cn=shipping,ou=groups,dc=example,dc=invalid
+objectClass: groupOfNames
+cn: shipping
+member: uid=bo,ou=people,dc=example,dc=invalid

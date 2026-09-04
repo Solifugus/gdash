@@ -1,0 +1,17 @@
+FROM docker.io/library/ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update -qq && apt-get install -y -qq slapd ldap-utils && rm -rf /var/lib/apt/lists/*
+RUN echo "slapd slapd/no_configuration boolean false"   | debconf-set-selections \
+ && echo "slapd slapd/domain string example.invalid"    | debconf-set-selections \
+ && echo "slapd shared/organization string Example"     | debconf-set-selections \
+ && echo "slapd slapd/password1 password fake-admin-pw" | debconf-set-selections \
+ && echo "slapd slapd/password2 password fake-admin-pw" | debconf-set-selections \
+ && rm -rf /etc/ldap/slapd.d /var/lib/ldap/* \
+ && dpkg-reconfigure -f noninteractive slapd
+COPY seed.ldif /seed.ldif
+RUN slapd -h "ldap://127.0.0.1:389/" -u openldap -g openldap & \
+    sleep 3 && \
+    ldapadd -x -D "cn=admin,dc=example,dc=invalid" -w fake-admin-pw -f /seed.ldif && \
+    pkill slapd && sleep 1
+EXPOSE 389
+CMD ["slapd", "-d", "0", "-h", "ldap://0.0.0.0:389/", "-u", "openldap", "-g", "openldap"]
