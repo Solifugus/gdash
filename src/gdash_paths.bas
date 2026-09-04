@@ -253,6 +253,13 @@ library gdash_paths
         return _join(p.config_dir, "users.json")
     end function
 
+    ' The auth providers. 0600 like users.json, because it holds a directory
+    ' service account's password; absent means local accounts only, which is
+    ' GDASH-4 unchanged and still fails closed.
+    function auth_file(p)
+        return _join(p.config_dir, "auth.json")
+    end function
+
     ' The CSRF secret. Server-level and generated at first use: a fixed secret
     ' in the source would make every deployment's tokens forgeable by anyone
     ' who read the source.

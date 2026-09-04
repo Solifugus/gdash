@@ -15,6 +15,7 @@
 library gdash_users
 
     load gdash_paths from "gdash_paths.bas"
+    load gdash_auth from "gdash_auth.bas"
 
     function empty()
         return { format: 1, users: {} }
@@ -149,6 +150,63 @@ library gdash_users
             return unknown
         end if
         return { name: username, email: email_of(u), groups: groups_of(u), admin: u["admin"] = true }
+    end function
+
+    ' --- the provider seam (GDASH-5) --------------------------------------
+    '
+    ' Local accounts as the first implementation of the provider interface.
+    ' `ctx` is the paths record: the user file is re-read on every call, which
+    ' is what makes `revalidate: 0` honest -- a disabled account stops working
+    ' on the next request, exactly as it did in GDASH-4.
+    '
+    ' `known` is "this file has this username", INCLUDING a disabled one. A
+    ' disabled local account must stop the chain rather than fall through to
+    ' the directory: disabling somebody here would otherwise re-enable them
+    ' there.
+
+    function local_authenticate(p, username, password)
+        loaded = load_users(p)
+        if not loaded.ok then
+            ' A user file gdash cannot read is not an empty user file: that
+            ' would be a locked door quietly removed. It is unavailable.
+            return gdash_auth.unreachable(loaded.message)
+        end if
+        if is_unknown(lookup(loaded.db, username)) then
+            ' Spend a hash anyway. Returning early here would make an unknown
+            ' username answer faster than a wrong password, which is the
+            ' enumeration oracle GDASH-4 closed -- and the chain must not
+            ' reopen it on its way past.
+            burned = authenticate(loaded.db, username, password)
+            return gdash_auth.miss()
+        end if
+        got = authenticate(loaded.db, username, password)
+        if not got.ok then
+            return gdash_auth.reject()
+        end if
+        return gdash_auth.accept(gdash_auth.make_identity(got.user.name, got.user.email, got.user.groups, got.user.admin))
+    end function
+
+    function local_identity(p, username)
+        loaded = load_users(p)
+        if not loaded.ok then
+            return gdash_auth.unreachable(loaded.message)
+        end if
+        if is_unknown(lookup(loaded.db, username)) then
+            return gdash_auth.miss()
+        end if
+        ident = identity(loaded.db, username)
+        if is_unknown(ident) then
+            ' Present but disabled: known, and not ok. The session goes.
+            return gdash_auth.reject()
+        end if
+        return gdash_auth.accept(gdash_auth.make_identity(ident.name, ident.email, ident.groups, ident.admin))
+    end function
+
+    function local_provider(p)
+        return { kind: "local", name: "local", ctx: p,
+                 authenticate: gdash_users.local_authenticate,
+                 identity: gdash_users.local_identity,
+                 revalidate: 0 }
     end function
 
 end library

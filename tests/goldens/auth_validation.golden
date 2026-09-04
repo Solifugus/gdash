@@ -1,0 +1,48 @@
+valid, template mode
+  (accepted)
+valid, local only
+  (accepted)
+format missing
+  ERROR unsupported auth config format: none (this build reads format 1)
+kind unknown
+  ERROR directory has kind 'kerberos'; this build implements 'ldap'
+host missing
+  ERROR directory has no 'host'
+security missing
+  ERROR directory has no 'security'; it must be 'ldaps', 'starttls' or 'plain', and there is no default because a cleartext bind must be a word somebody typed
+security unknown
+  ERROR directory has security 'none'; it must be 'ldaps', 'starttls' or 'plain'
+port not a whole number
+  ERROR directory has 'port' of '636.5'; it must be a whole number of at least 1
+both ways to find a user
+  ERROR directory sets both 'user_dn_template' and 'user_search'; it names exactly one way to find a user
+neither way to find a user
+  ERROR directory sets neither 'user_dn_template' nor 'user_search'; it names exactly one way to find a user
+template without a placeholder
+  ERROR 'user_dn_template' contains no '{user}', so every login would construct the same DN
+user_search without a base
+  ERROR 'user_search' has no 'base'
+user_search without a filter
+  ERROR 'user_search' has no 'filter'
+user_search filter without a placeholder
+  ERROR 'user_search' filter contains no '{user}', so it would match the same entry for every login
+user_search scope unknown
+  ERROR 'user_search' has scope 'deep'; it must be 'base', 'one' or 'sub'
+bind_password without a bind_dn
+  ERROR directory sets 'bind_password' with no 'bind_dn'
+group_strategy missing
+  ERROR directory has no 'group_strategy'; it must be 'memberof' (read the attribute) or 'search' (find groups whose 'member' is the user's DN), and there is no default because stock OpenLDAP populates no memberOf and zero groups is a legitimate answer
+group_strategy unknown
+  ERROR directory has group_strategy 'guess'; it must be 'memberof' or 'search'
+search strategy without a group_base
+  ERROR group_strategy 'search' needs a 'group_base' to search under
+group_filter without a placeholder
+  ERROR 'group_filter' contains no '{dn}', so it would return the same groups for every user
+group_names unknown
+  ERROR directory has group_names 'cn'; it must be 'rdn' (the leftmost value) or 'dn' (the whole distinguished name)
+revalidate not a whole number
+  ERROR directory has 'revalidate' of '-5'; it must be a whole number of seconds, zero or more
+admin_groups as a bare string
+  ERROR 'admin_groups' must be an array of group names; a bare string is not a list of one
+admin_groups with an empty entry
+  ERROR 'admin_groups' contains an entry that is not a group name

@@ -49,6 +49,9 @@ program main(args)
     load gdash_session from "../src/gdash_session.bas"
     load gdash_session_files from "../src/gdash_session_files.bas"
     load gdash_users from "../src/gdash_users.bas"
+    load gdash_auth from "../src/gdash_auth.bas"
+    load gdash_auth_ldap from "../src/gdash_auth_ldap.bas"
+    load gdash_authcfg from "../src/gdash_authcfg.bas"
     load gdash_source_fixture from "../src/gdash_source_fixture.bas"
 
     ' Nothing yet. When a name lands here it needs a sentence saying why the
