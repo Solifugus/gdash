@@ -1,8 +1,8 @@
 # GDASH-5 — Directory auth and personalization: phase brief
 
-**Status:** OPEN. Step-0 complete and written up in `gdash5_findings.md`
-(G5-1 … G5-8); it failed once, was escalated, and now passes against a real
-directory.
+**Status:** COMPLETE. All eight §5 criteria met; at the review boundary.
+Findings in `gdash5_findings.md` (G5-1 … G5-12); DONE note in §7. Step-0
+failed, was escalated, and now passes against a real directory.
 **Narrows:** the GDASH-5 paragraph of `gdash_development_plan.md`.
 **Authority:** `gdash_design.md` outranks this brief. The findings of GDASH-0
 through GDASH-4 are inputs, not open questions.
@@ -358,3 +358,84 @@ Connection pooling — one bind per login is the cost, and it is small. Group
 caching beyond the session's `revalidate`. Per-folder group defaults (design §8
 "optional later"). Rate limiting and lockout, still, and now with a directory
 behind it, which makes it GDASH-7's problem rather than nobody's.
+
+---
+
+## 7. DONE note
+
+All eight §5 criteria met. The hermetic suite is 20 suites — 580 in-process
+assertions plus 144 end-to-end — green from a clean checkout with no services
+running, ending scratch-clean; the opt-in live-Postgres runner passes 8/8, and
+the opt-in live-LDAP runner passes 49 library assertions plus 16 over HTTP
+against a real OpenLDAP 2.6.10.
+
+**Built:** a provider interface whose outcome carries three facts rather than
+one — `ok`, `known`, `available` — with local accounts and LDAP as its two
+implementations and a third, shipped by nobody, standing in for both in the
+tests. The chain is local-then-directory, fixed, with a stated reason. LDAP DN
+and filter escaping per RFC 4514 and RFC 4515, hand-written and NUL-safe.
+Both group strategies, named in configuration with no default. `admin_groups`.
+Bounded-stale identity: materialized at sign-in, re-resolved on an interval,
+kept across a directory outage. `auth.json` at 0600 with a validation catalog
+pinned byte-for-byte. `gdash auth check`, which prints what it resolved and no
+password. Preview-as: draft-only, editor-only, audited by both identities,
+scoped to its dashboard, and unable to move authorization an inch.
+
+**Proved rather than asserted.** Three things are tested against something
+that could contradict them:
+
+- The seam is exercised by `auth_double`, which is neither shipped provider —
+  no file, no socket, and an `available` flag a test can flip. That is the
+  lesson `store_double` taught in GDASH-4.
+- **G5-4 is an assertion now, not a paragraph.** The same real directory that
+  yields two groups under `search` yields *zero* under `memberof`, and the
+  live runner says so. The reason the strategy has no default is a passing
+  test.
+- **The outage rule was tested by causing an outage.** The runner signs a user
+  in, stops the directory container mid-session, and asserts that the session
+  stands and the dashboard still reads — while a *new* sign-in is refused as
+  unavailable with a 503 and an audit line, never as a bad password. Then it
+  starts the directory again.
+
+**Deliberately not built** — §6 stands, with these to record:
+
+- **One directory, not a federation.** The `known` short-circuit is what makes
+  a longer chain safe, and template mode cannot answer `known` without
+  binding, so a second template-mode directory would cost a failed bind per
+  login. Two providers is the shape that is actually correct here.
+- **Nested groups are not expanded.** AD's `LDAP_MATCHING_RULE_IN_CHAIN` is a
+  server-side extension the module does not expose, and walking the tree
+  client-side is an unbounded query amplifier. A deployment that needs it
+  names the effective groups.
+- **`auth.json` is read on every authenticated request**, as `users.json`
+  already was. It is a small file and usually absent, but the revalidation
+  interval is fetched from the chain rather than remembered in the session, so
+  even a request that skips revalidation still reads it. Caching it belongs
+  with whatever caches `users.json`, and neither is a GDASH-5 problem.
+- **Preview-as knows a browser, not a person**, like the session and the pin
+  before it. It also cannot be handed to somebody as a link, which is
+  deliberate.
+- **Sessions are still not swept on a timer** (GDASH-4's note, unchanged).
+  `gdash_session.sweep` exists and is tested; the scheduler is the obvious
+  caller and GDASH-7 the obvious phase.
+- **No rate limit and no lockout on failed sign-in**, still — and now with a
+  directory behind it, where a failed bind may count toward the directory's
+  own lockout. The `known` short-circuit bounds gdash's contribution to one
+  bind per attempt, which is the same cost as typing the password anywhere
+  else; it does not make gdash a rate limiter. GDASH-7.
+
+**Design edits owed** (the maintainer's), carried forward and added to:
+
+- §8's password hashing should name `password_hash` rather than
+  `pbkdf2`/`scrypt` — accepted by the platform review.
+- §8's "yields `memberOf` groups" is **wrong for OpenLDAP** and should name
+  the strategy as configuration (G5-4).
+- §8's provider list should say that local is consulted first and why.
+- §4's money headroom figure; §4's render path; §2's content-hash sentence
+  (G2-10).
+
+**Cross-repo, owed to the gbasic session:**
+`gdash5_platform_report_string_nul.md` — `replace`, `trim`, `join`, `split`
+and `ends_with` are C-string-based while `len`, `mid`, `contains` and the rest
+are length-aware, so a NUL silently truncates a value or flips a boolean. It
+is written and ready to send. gdash is not blocked by it.

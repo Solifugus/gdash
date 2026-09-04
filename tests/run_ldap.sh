@@ -42,7 +42,8 @@ cat > "$ROOT/etc/auth.json" <<JSON
                  "group_strategy": "search",
                  "group_base": "ou=groups,${GDASH_LDAP_BASE:-dc=example,dc=invalid}",
                  "bind_dn": "${GDASH_LDAP_BIND_DN:-}",
-                 "bind_password": "${GDASH_LDAP_BIND_PW:-}" } }
+                 "bind_password": "${GDASH_LDAP_BIND_PW:-}",
+                 "revalidate": 1 } }
 JSON
 chmod 600 "$ROOT/etc/auth.json"
 out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" auth check ada 2>&1)"
@@ -143,6 +144,66 @@ if grep -qF "fake-directory-pw" "$ROOT/log/audit.log"; then
 else
     echo "  ok   no password reaches the audit log"
 fi
+
+echo "--- revalidation: what a session does when the directory changes under it ---"
+CTR="${GDASH_LDAP_CONTAINER:-gdash-ldap}"
+BDN="${GDASH_LDAP_BIND_DN:-cn=admin,dc=example,dc=invalid}"
+BPW="${GDASH_LDAP_BIND_PW:-fake-admin-pw}"
+BASE="${GDASH_LDAP_BASE:-dc=example,dc=invalid}"
+in_dir(){ podman exec -i "$CTR" "$@" -x -H "ldap://127.0.0.1:389" -D "$BDN" -w "$BPW"; }
+
+# A user this test creates, so the test is idempotent and leaves the seeded
+# directory as it found it.
+in_dir ldapadd >/dev/null 2>&1 <<LDIF
+dn: uid=ephemeral,ou=people,$BASE
+objectClass: inetOrgPerson
+uid: ephemeral
+cn: Ephemeral Person
+sn: Person
+mail: ephemeral@example.invalid
+userPassword: fake-ephemeral-pw
+LDIF
+
+code="$(signin "$SCRATCH/eph.txt" ephemeral fake-ephemeral-pw)"
+if [[ "$code" == "303" ]]; then echo "  ok   a user created a moment ago can sign in"; else echo "  FAIL ephemeral login: $code"; failed=1; fi
+
+in_dir ldapdelete "uid=ephemeral,ou=people,$BASE" >/dev/null 2>&1
+sleep 2   # past `revalidate: 1`, so the next request re-resolves
+who="$(curl -s -b "$SCRATCH/eph.txt" --max-time 10 "http://127.0.0.1:$PORT/whoami")"
+if grep -q '"authenticated":false' <<<"$who"; then
+    echo "  ok   and their session goes when the directory stops knowing them"
+else
+    echo "  FAIL session survived the account being deleted: $who"; failed=1
+fi
+
+# The other half of the same rule, and the one that matters more in practice:
+# a directory that is DOWN must not log everybody out. That would turn a
+# directory problem into a total outage.
+podman stop "$CTR" >/dev/null 2>&1
+sleep 2
+who="$(curl -s -b "$SCRATCH/ada.txt" --max-time 10 "http://127.0.0.1:$PORT/whoami")"
+if grep -q '"user":"ada"' <<<"$who"; then
+    echo "  ok   a directory outage leaves existing sessions standing"
+else
+    echo "  FAIL an outage logged an existing session out: $who"; failed=1
+fi
+code="$(curl -s -o /dev/null -w '%{http_code}' -b "$SCRATCH/ada.txt" --max-time 10 "http://127.0.0.1:$PORT/d/corp")"
+if [[ "$code" == "200" ]]; then echo "  ok   and they can still read their dashboards"; else echo "  FAIL outage broke a live session: $code"; failed=1; fi
+
+# ...but nobody NEW gets in, and they are told it is an outage, not a password.
+code="$(signin "$SCRATCH/late.txt" bo another-fake-pw)"
+if [[ "$code" == "503" ]]; then echo "  ok   while a new sign-in is refused as unavailable, not as a bad password"; else echo "  FAIL outage login returned $code, wanted 503"; failed=1; fi
+if grep -q '"event":"login.unavailable"' "$ROOT/log/audit.log"; then
+    echo "  ok   and the outage is audited as one"
+else
+    echo "  FAIL the outage was not audited"; failed=1
+fi
+
+podman start "$CTR" >/dev/null 2>&1
+for i in $(seq 1 60); do
+    podman exec "$CTR" ldapwhoami -x -H "ldap://127.0.0.1:389" -D "uid=ada,ou=people,$BASE" -w fake-directory-pw >/dev/null 2>&1 && break
+    sleep 0.5
+done
 
 kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null
 

@@ -1,6 +1,6 @@
 # GDASH-5 — Findings
 
-**Status:** step-0 failed, was escalated, and now passes; the phase is built.
+**Status:** the phase is complete. Step-0 failed, was escalated, and now passes.
 G5-1 and G5-2 are kept as written — a finding that was true when it was made
 is not edited later to look better.
 **Platform:** gBASIC `5c2ce75` at step-0; `bcd0258` for everything from G5-8
