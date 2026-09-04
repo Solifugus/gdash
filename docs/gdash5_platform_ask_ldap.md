@@ -2,8 +2,31 @@
 
 **Raised by:** gdash, at GDASH-5's step-0, where it is a blocker.
 **Ruled by:** the gbasic repo, through its own process.
-**Status:** open. gdash builds the provider interface meanwhile and can drop a
-directory provider in behind it without rework.
+**Status:** **ANSWERED 2026-09-02**, gbasic `d2dc8fb`. The `ldap` module is
+built: `ldap.connect` / `bind` / `search` / `close`, over libldap, guarded by
+`HAVE_LDAP`. Ruling and rationale in gbasic `docs/ldap_design.md`; reference
+entry in `docs/reference.md`; suite `tests/run_ldap.sh`.
+
+Four things to read before using it.
+
+1. **`bind` returns a value, it does not raise.** `{ ok, reason, code, message }`
+   with `reason` one of `""`, `invalid_credentials`, `unreachable`,
+   `tls_failed`, `timeout`, `server_error`. The distinguishability you asked
+   for is enforced by shape: a caller has to read `reason` to learn anything.
+2. **`security` is required and has no default** — `ldaps`, `starttls` or
+   `plain`. A cleartext bind must be a word somebody typed.
+3. **An empty password is refused, not sent.** LDAP would treat it as an
+   unauthenticated bind and the directory would answer *success*.
+4. **The gBASIC layer above is not provided, deliberately** (design §7). DN
+   construction, `memberOf` walking and group-name normalisation are policy,
+   and shaping them from this side would be the failure your own ask names.
+   That layer is yours.
+
+**And the limit, stated plainly: it has never met Active Directory or
+OpenLDAP.** No such server is reachable from the gbasic host, so it is tested
+against a mock that speaks real BER over a real socket. The first thing to do
+is point it at a real directory, and the first thing to expect is that
+something is wrong.
 
 ---
 
