@@ -17,6 +17,8 @@ library gdash_app
     load gdash_session from "gdash_session.bas"
     load gdash_session_files from "gdash_session_files.bas"
     load gdash_users from "gdash_users.bas"
+    load gdash_auth from "gdash_auth.bas"
+    load gdash_authcfg from "gdash_authcfg.bas"
     load gdash_audit from "gdash_audit.bas"
 
     function _root_of(req)
@@ -104,7 +106,8 @@ library gdash_app
         if sid = "" then
             return anonymous()
         end if
-        got = gdash_session.active(_store(p), sid, epoch(), gdash_session.limits())
+        now = epoch()
+        got = gdash_session.active(_store(p), sid, now, gdash_session.limits())
         if not got.ok then
             return anonymous()
         end if
@@ -115,20 +118,66 @@ library gdash_app
             ' it and make signing in impossible.
             return anonymous_with(sid)
         end if
-        db = gdash_users.load_users(p)
-        if not db.ok then
-            ' A user file gdash cannot read is a user file gdash does not
-            ' trust. Everyone is anonymous until an operator fixes it.
+        remembered = gdash_session.data_of(got.session)
+        chain = gdash_authcfg.providers(p)
+        every = gdash_auth.revalidate_of(chain, string(default(remembered["provider"], "local")))
+
+        ' Local accounts revalidate on every request -- reading users.json is
+        ' cheap, and a disabled account stops working immediately, which is
+        ' GDASH-4's behaviour unchanged. A directory cannot be asked that
+        ' often, so its identity is materialized into the session and
+        ' re-resolved on an interval. Group changes therefore take effect
+        ' within `revalidate` seconds, and that is written down rather than
+        ' discovered (brief §2.6).
+        if not gdash_auth.revalidation_due(remembered["checked"], now, every) then
+            return _viewer_from(remembered["identity"], sid)
+        end if
+
+        who = gdash_auth.whois(chain, holder)
+        if who.unavailable then
+            ' A directory outage must not log everyone out: that turns a
+            ' directory problem into a total outage. The session stands until
+            ' its ordinary absolute and idle limits, and the outage is audited
+            ' -- at most once per interval per session, which is what keeps
+            ' this from becoming a log flood.
+            logged = gdash_audit.event(p, "identity.unavailable", { user: holder })
+            if not is_unknown(remembered["identity"]) then
+                return _viewer_from(remembered["identity"], sid)
+            end if
             return anonymous_with(sid)
         end if
-        ident = gdash_users.identity(db.db, holder)
-        if is_unknown(ident) then
+        if not who.ok then
             ' The account was removed or disabled while the session lived, so
             ' the session goes with it.
             dropped = gdash_session.destroy(_store(p), sid)
             return anonymous()
         end if
-        return { authed: true, name: ident.name, email: ident.email, groups: ident.groups, admin: ident.admin, sid: sid }
+        if every > 0 then
+            ' Only worth a write when something is actually being cached. With
+            ' `revalidate: 0` the identity is re-resolved next request anyway,
+            ' and a store write per request would make reading a dashboard a
+            ' write-heavy operation.
+            stored = gdash_session.assign(_store(p), sid, holder, _remember(who.provider, who.identity, now), now)
+        end if
+        return _viewer_from(who.identity, sid)
+    end function
+
+    function _remember(provider, identity, now)
+        return { provider: provider, identity: identity, checked: now }
+    end function
+
+    ' The viewer record every handler downstream reads, built from a resolved
+    ' identity. One place, so a cached identity and a freshly resolved one
+    ' cannot drift into two shapes.
+    function _viewer_from(identity, sid)
+        if is_unknown(identity) then
+            return anonymous_with(sid)
+        end if
+        g = identity["groups"]
+        if is_unknown(g) then
+            g = []
+        end if
+        return { authed: true, name: string(identity["name"]), email: string(default(identity["email"], "")), groups: g, admin: identity["admin"] = true, sid: sid }
     end function
 
     function identity_of(v)
@@ -473,6 +522,10 @@ library gdash_app
         s = s + ".gdash-login input{padding:6px;font-size:14px;width:100%;box-sizing:border-box}"
         s = s + ".gdash-login button{padding:8px;font-size:14px;cursor:pointer}"
         s = s + ".gdash-who{float:right;font-size:12px;color:#666}"
+        ' Loud on purpose. A preview that looks like the real dashboard is how
+        ' somebody reports a number that was never theirs.
+        s = s + ".gdash-preview{clear:both;margin:8px 0;padding:6px 10px;background:#fff8e1;border:1px solid #e0c060;font-size:12px}"
+        s = s + ".gdash-preview input{font-size:12px;margin-right:4px}"
         s = s + ".gdash-notice{border:1px solid #c90;background:#fffbe6;border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:13px}"
         s = s + ".gdash-tabs{display:flex;gap:4px;border-bottom:1px solid #ddd;margin-bottom:16px}"
         s = s + ".gdash-tab{border:0;background:none;padding:8px 14px;cursor:pointer;font-size:14px;color:#555;border-bottom:2px solid transparent}"
@@ -501,6 +554,145 @@ library gdash_app
         return h
     end function
 
+    ' --- preview-as (design §8, brief §2.7) -------------------------------
+    '
+    ' An editor answers "what does this look like to somebody in Shipping?"
+    ' without borrowing a password. Draft only, editors only, audited -- and it
+    ' substitutes the injected user_* params AND NOTHING ELSE. Authorization
+    ' stays the real viewer's throughout: you cannot preview-as your way into a
+    ' dashboard you may not open, and you cannot preview-as your way into being
+    ' an admin. Anything else would be privilege escalation with a friendly
+    ' name.
+    '
+    ' It lives in the session rather than in the URL so that a reload, a tab
+    ' switch and a param change all keep it, and so that it cannot be handed to
+    ' somebody else as a link.
+
+    function _may_preview(got)
+        return gdash_auth.preview_allowed(got.mode, allowed(got.rec, got.viewer, "edit"))
+    end function
+
+    function _preview_for(p, v, name)
+        if v.sid = "" then
+            return unknown
+        end if
+        st = _store(p)
+        rec = st.get(st.ctx, v.sid)
+        if is_unknown(rec) then
+            return unknown
+        end if
+        pv = gdash_session.data_of(rec)["preview"]
+        if is_unknown(pv) then
+            return unknown
+        end if
+        ' Scoped to the dashboard it was set on: previewing one draft must not
+        ' silently change what another one renders.
+        if string(default(pv["dashboard"], "")) != name then
+            return unknown
+        end if
+        return pv
+    end function
+
+    ' The identity the QUERIES see. The only thing preview-as changes.
+    function _effective_identity(got, name)
+        base = identity_of(got.viewer)
+        if not _may_preview(got) then
+            return base
+        end if
+        pv = _preview_for(got.p, got.viewer, name)
+        if is_unknown(pv) then
+            return base
+        end if
+        g = pv["groups"]
+        if is_unknown(g) then
+            g = []
+        end if
+        return { name: string(default(pv["name"], "")), email: string(default(pv["email"], "")), groups: g }
+    end function
+
+    function preview(req, name)
+        ' need = "edit" here rather than "view": _load_dashboard already
+        ' answers 404 to a stranger and 403 to a viewer who is not an editor,
+        ' so the editors-only rule is enforced before this function has an
+        ' opinion.
+        got = _load_dashboard(req, name, "edit")
+        if not got.ok then
+            return got.response
+        end if
+        p = got.p
+        v = got.viewer
+        if not csrf_present(req, p, v) then
+            return _refuse(400, "that form expired")
+        end if
+        if not _may_preview(got) then
+            logged = gdash_audit.event(p, "preview.denied", { dashboard: name, user: v.name, mode: got.mode })
+            return _refuse(403, "preview-as is for editors, on a draft")
+        end if
+        f = req["form"]
+        if is_unknown(f) then
+            f = {}
+        end if
+        st = _store(p)
+        rec = st.get(st.ctx, v.sid)
+        if is_unknown(rec) then
+            return _refuse(400, "no session")
+        end if
+        data = gdash_session.data_of(rec)
+        if string(default(f["clear"], "")) != "" then
+            data = _drop_preview(data)
+            logged = gdash_audit.event(p, "preview.ended", { dashboard: name, user: v.name })
+        else
+            assumed = gdash_auth.preview_identity(f["as_name"], f["as_email"], f["as_groups"])
+            data["preview"] = { dashboard: name, name: assumed.name, email: assumed.email, groups: assumed.groups }
+            ' The audit names WHO WAS PRETENDING, not just that somebody was.
+            logged = gdash_audit.event(p, "preview.as", { dashboard: name, user: v.name, as_name: assumed.name, as_email: assumed.email, as_groups: join(assumed.groups, ",") })
+        end if
+        stored = gdash_session.assign(st, v.sid, string(rec["user"]), data, epoch())
+        return { status: 303, headers: { "location": "/d/" + name }, body: "" }
+    end function
+
+    function _drop_preview(data)
+        out = {}
+        have = keys(data)
+        i = 0
+        while i < count(have)
+            if have[i] != "preview" then
+                out[have[i]] = data[have[i]]
+            end if
+            i += 1
+        end while
+        return out
+    end function
+
+    ' The editor's control, and -- when one is in force -- an unmissable band
+    ' saying so. A preview that looks like the real thing is how somebody
+    ' reports a number that was never theirs.
+    function _preview_bar(got, name)
+        if not _may_preview(got) then
+            return ""
+        end if
+        q = chr(34)
+        tok = gdash_session.csrf_for(secret_of(got.p), got.viewer.sid)
+        pv = _preview_for(got.p, got.viewer, name)
+        h = "<form class=" + q + "gdash-preview" + q + " method=" + q + "post" + q + " action=" + q + "/d/" + name + "/preview" + q + ">"
+        h = h + "<input type=" + q + "hidden" + q + " name=" + q + "csrf" + q + " value=" + q + tok + q + ">"
+        if is_unknown(pv) then
+            h = h + "<span>Preview as</span> "
+            h = h + "<input name=" + q + "as_name" + q + " placeholder=" + q + "name" + q + ">"
+            h = h + "<input name=" + q + "as_email" + q + " placeholder=" + q + "email" + q + ">"
+            h = h + "<input name=" + q + "as_groups" + q + " placeholder=" + q + "groups, comma separated" + q + ">"
+            h = h + "<button type=" + q + "submit" + q + ">Preview</button>"
+            h = h + "</form>"
+            return h
+        end if
+        h = h + "<input type=" + q + "hidden" + q + " name=" + q + "clear" + q + " value=" + q + "1" + q + ">"
+        h = h + "<strong>Previewing as " + gdash_render.html_escape(string(default(pv["name"], ""))) + "</strong> "
+        h = h + "<span>groups: " + gdash_render.html_escape(join(pv["groups"], ", ")) + "</span> "
+        h = h + "<button type=" + q + "submit" + q + ">Stop previewing</button>"
+        h = h + "</form>"
+        return h
+    end function
+
     function dashboard_page(req, name)
         got = _load_dashboard(req, name, "view")
         if not got.ok then
@@ -510,7 +702,7 @@ library gdash_app
         p = got.p
         mode = got.mode
         asked = _request_opens(p, name, mode, rec)
-        values = gdash_record.resolve_params(rec, req.query, identity_of(got.viewer))
+        values = gdash_record.resolve_params(rec, req.query, _effective_identity(got, name))
 
         tabs = rec["tabs"]
         ' Every tab renders server-side in one response and switches on the
@@ -540,6 +732,7 @@ library gdash_app
         q = chr(34)
         html = "<!doctype html><html><head><meta charset=" + q + "utf-8" + q + "><title>" + string(default(rec["title"], name)) + "</title><style>" + _style() + "</style></head><body>"
         html = html + _who_bar(p, got.viewer)
+        html = html + _preview_bar(got, name)
         html = html + "<h1>" + string(default(rec["title"], name)) + "</h1>"
         html = html + "<div class=" + q + "gdash-stale" + q + ">" + _status_block(p, name, mode, rec) + "</div>"
         ' Hidden until a publish is observed. The viewer decides when to move.
@@ -575,7 +768,7 @@ library gdash_app
         if is_unknown(supplied) then
             supplied = {}
         end if
-        values = gdash_record.resolve_params(rec, supplied, identity_of(got.viewer))
+        values = gdash_record.resolve_params(rec, supplied, _effective_identity(got, name))
 
         changed = keys(supplied)
         moving = []
@@ -779,17 +972,29 @@ library gdash_app
             return { status: 400, body: _login_html(p, v.sid, "That form expired. Try again.", target), headers: { "content-type": "text/html; charset=utf-8" } }
         end if
 
-        db = gdash_users.load_users(p)
-        if not db.ok then
-            logged = gdash_audit.event(p, "login.failed", { reason: "users file unreadable" })
-            return { status: 500, body: _login_html(p, v.sid, "Sign-in is unavailable. Ask an administrator.", target), headers: { "content-type": "text/html; charset=utf-8" } }
+        cfg = gdash_authcfg.load_config(p)
+        if not cfg.ok then
+            ' A configuration gdash cannot read is not a configuration with
+            ' nothing in it. Local accounts still work -- that is the point of
+            ' local being first -- but the operator is told, in the log, what
+            ' is wrong with the file.
+            logged = gdash_audit.event(p, "auth.config.invalid", { reason: join(cfg.errors, "; ") })
         end if
+        chain = gdash_authcfg.chain_from(p, cfg.config)
 
         who = string(default(f["user"], ""))
-        got = gdash_users.authenticate(db.db, who, string(default(f["pass"], "")))
+        got = gdash_auth.sign_in(chain, who, string(default(f["pass"], "")))
         if not got.ok then
             ' The username is audited; the password is not, was not read into
-            ' any other variable, and does not appear in the response.
+            ' any other variable, and does not appear in the response. A
+            ' directory that is down is audited as an outage and shown as one,
+            ' never as a wrong password -- telling someone their password is
+            ' wrong when the directory is down sends them to reset a password
+            ' that was fine.
+            if got.unavailable then
+                logged = gdash_audit.event(p, "login.unavailable", { user: who, provider: got.provider })
+                return { status: 503, body: _login_html(p, v.sid, got.message, target), headers: { "content-type": "text/html; charset=utf-8" } }
+            end if
             logged = gdash_audit.event(p, "login.failed", { user: who })
             return { status: 401, body: _login_html(p, v.sid, got.message, target), headers: { "content-type": "text/html; charset=utf-8" } }
         end if
@@ -801,8 +1006,11 @@ library gdash_app
         if not fresh.ok then
             return _refuse(500, "could not start a session")
         end if
-        stored = _store(p).put(_store(p).ctx, fresh.session.id, { format: 1, id: fresh.session.id, user: got.user.name, created: epoch(), seen: epoch() })
-        logged = gdash_audit.event(p, "login", { user: got.user.name })
+        bound = gdash_session.assign(_store(p), fresh.session.id, got.identity.name, _remember(got.provider, got.identity, epoch()), epoch())
+        if not bound.ok then
+            return _refuse(500, "could not start a session")
+        end if
+        logged = gdash_audit.event(p, "login", { user: got.identity.name, provider: got.provider })
         return { status: 303, headers: { "content-type": "text/html; charset=utf-8", "location": target }, body: "", cookies: [gdash_session.cookie("gdash_session", fresh.session.id, _secure(req), gdash_session.limits().absolute)] }
     end function
 

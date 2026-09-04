@@ -441,6 +441,63 @@ hasnt "$boss" "Only for ada" "and renders nothing for an identity it does not ma
 spoof="$(curl -s -b "$jarC" --max-time 10 "http://127.0.0.1:$PORT/d/team?user_email=ada@example.invalid")"
 hasnt "$spoof" "Only for ada" "a client-supplied user_email is ignored, not honoured"
 
+echo "--- preview-as (design §8) ---"
+# `team` is a draft and ada is in its edit_groups, so she is an editor of it.
+tokA3="$(sed -n 's/.*"csrf":"\([^"]*\)".*/\1/p' <<<"$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/whoami")")"
+page="$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/d/team")"
+has "$page" "gdash-preview" "an editor sees the preview-as control on a draft"
+
+# ...and nobody sees it on a published dashboard, editor or not. `timed` is
+# published and the admin may edit anything.
+pub="$(curl -s -b "$jarC" --max-time 10 "http://127.0.0.1:$PORT/d/timed")"
+# The class name is in the stylesheet on every page, so the assertion is the
+# form's action -- the thing that exists only when the control is rendered.
+hasnt "$pub" 'action="/d/timed/preview"' "and nobody sees it on a published dashboard"
+
+# A non-editor cannot preview-as at all. bo is in shipping, not analysts, so
+# team does not exist as far as bo is concerned.
+jarB="$SCRATCH/bo.txt"; rm -f "$jarB"
+formB="$(curl -s -c "$jarB" --max-time 10 "http://127.0.0.1:$PORT/login")"
+tokB="$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' <<<"$formB")"
+curl -s -o /dev/null -b "$jarB" -c "$jarB" --max-time 10 -X POST -d "csrf=$tokB&user=bo&pass=fake-outsider-pw" "http://127.0.0.1:$PORT/login"
+tokB2="$(sed -n 's/.*"csrf":"\([^"]*\)".*/\1/p' <<<"$(curl -s -b "$jarB" --max-time 10 "http://127.0.0.1:$PORT/whoami")")"
+code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarB" --max-time 10 -X POST -d "csrf=$tokB2&as_name=x&as_groups=analysts" "http://127.0.0.1:$PORT/d/team/preview")"
+ok "a non-editor cannot preview-as" "$code" "403"
+
+# Assume an identity. The `mine` visual binds :user_email and only renders for
+# ada, so previewing as somebody else must make it disappear -- which is the
+# assertion that preview-as reached the QUERY and not just the banner.
+code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarA" --max-time 10 -X POST -d "csrf=$tokA3&as_name=Test+Person&as_email=test@example.invalid&as_groups=shipping,+finance" "http://127.0.0.1:$PORT/d/team/preview")"
+ok "an editor may assume an identity" "$code" "303"
+seen="$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/d/team")"
+has "$seen" "Previewing as Test Person" "and the page says so, unmissably"
+has "$seen" "shipping, finance" "naming the groups being assumed"
+hasnt "$seen" "Only for ada" "the queries see the assumed identity, not the real one"
+
+# ...but authorization does not move an inch. `private` opts into no access
+# and names no groups, so it is admins-only; ada previewing as anything at all
+# is still ada as far as the door is concerned.
+code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/d/private")"
+ok "preview-as is not a way into a dashboard you may not open" "$code" "403"
+whoami_pv="$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/whoami")"
+has "$whoami_pv" '"user":"ada"' "and the viewer is still themselves"
+
+# It is scoped to the dashboard it was set on.
+other="$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/d/sales")"
+hasnt "$other" "Previewing as" "a preview on one draft does not leak into another dashboard"
+
+# Every use is audited, and the audit names who was pretending.
+has "$(cat "$ROOT/log/audit.log")" '"event":"preview.as"' "preview-as is audited"
+has "$(cat "$ROOT/log/audit.log")" '"user":"ada"' "naming the real identity"
+has "$(cat "$ROOT/log/audit.log")" '"as_name":"Test Person"' "and the assumed one"
+
+# And it ends.
+code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarA" --max-time 10 -X POST -d "csrf=$tokA3&clear=1" "http://127.0.0.1:$PORT/d/team/preview")"
+ok "previewing stops" "$code" "303"
+back="$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/d/team")"
+has "$back" "Only for ada" "and the real identity comes back"
+hasnt "$back" "Previewing as" "with the banner gone"
+
 echo "--- logout ---"
 code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarA" -H "x-gdash-csrf: $tokA2" -c "$jarA" --max-time 10 -X POST "http://127.0.0.1:$PORT/logout")"
 ok "logout redirects" "$code" "303"

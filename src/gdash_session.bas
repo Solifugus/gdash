@@ -70,7 +70,7 @@ library gdash_session
 
     function create(store, username, now)
         id = mint_id()
-        rec = { format: 1, id: id, user: username, created: now, seen: now }
+        rec = { format: 1, id: id, user: username, created: now, seen: now, data: {} }
         if not store.put(store.ctx, id, rec) then
             return { ok: false, session: {}, message: "could not store the session" }
         end if
@@ -96,11 +96,13 @@ library gdash_session
         end if
         username = ""
         created = now
+        carried = {}
         if not is_unknown(old) then
             username = string(old["user"])
             created = old["created"]
+            carried = data_of(old)
         end if
-        fresh = { format: 1, id: mint_id(), user: username, created: created, seen: now }
+        fresh = { format: 1, id: mint_id(), user: username, created: created, seen: now, data: carried }
         if not store.put(store.ctx, fresh.id, fresh) then
             return { ok: false, session: {}, message: "could not store the session" }
         end if
@@ -142,7 +144,7 @@ library gdash_session
         ' moves at most once a minute, which is a minute of slack on an hour
         ' of idle timeout.
         if now - seen >= lim.touch_after then
-            touched = { format: 1, id: rec["id"], user: rec["user"], created: created, seen: now }
+            touched = { format: 1, id: rec["id"], user: rec["user"], created: created, seen: now, data: data_of(rec) }
             stored = store.put(store.ctx, id, touched)
             return { ok: true, session: touched, reason: "" }
         end if
@@ -191,6 +193,42 @@ library gdash_session
 
     function clearing_cookie(name, secure)
         return cookie(name, "", secure, 0)
+    end function
+
+    ' --- what a session REMEMBERS (GDASH-5) --------------------------------
+    '
+    ' `data` is opaque here on purpose. gdash_session knows about sessions, not
+    ' about identity: it carries the field, preserves it across a touch and a
+    ' regeneration, and never reads inside it. What gdash_app puts there is the
+    ' resolved identity and the moment it was last checked, because a directory
+    ' cannot be asked on every request the way users.json can.
+
+    function data_of(rec)
+        d = rec["data"]
+        if is_unknown(d) then
+            return {}
+        end if
+        return d
+    end function
+
+    ' Bind a session to a user and give it something to remember. Used at
+    ' login, after regenerate has already changed the id -- the privilege
+    ' change and the identity are two steps, and the fixation defence is the
+    ' first of them.
+    function assign(store, id, username, data, now)
+        if not legal_id(id) then
+            return { ok: false, session: {}, message: "no session" }
+        end if
+        old = store.get(store.ctx, id)
+        created = now
+        if not is_unknown(old) then
+            created = old["created"]
+        end if
+        rec = { format: 1, id: id, user: username, created: created, seen: now, data: data }
+        if not store.put(store.ctx, id, rec) then
+            return { ok: false, session: {}, message: "could not store the session" }
+        end if
+        return { ok: true, session: rec, message: "" }
     end function
 
 end library

@@ -59,6 +59,13 @@ server gdash_web( port: 8780 )
         return gdash_app.params_changed(req, req.params.name)
     end post
 
+    ' Preview-as: draft only, editors only, audited (design §8). It changes
+    ' the injected user_* params and nothing about authorization.
+    post "/d/{name}/preview"( req )
+        load gdash_app from "gdash_app.bas"
+        return gdash_app.preview(req, req.params.name)
+    end post
+
     ' A person asking, whatever the dataset's policy says (design §3).
     post "/d/{name}/refresh"( req )
         load gdash_app from "gdash_app.bas"
