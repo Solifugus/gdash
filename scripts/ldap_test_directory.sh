@@ -112,12 +112,23 @@ up)
     fi
     podman rm -f "$NAME" >/dev/null 2>&1
     podman run -d --name "$NAME" -p "$PORT:389" "$IMAGE" >/dev/null || exit 1
+    # Readiness is a real BIND, not an open port. podman publishes the port
+    # before slapd is serving on it, so a TCP check succeeds against a
+    # directory that answers every bind with `unreachable` -- which reads
+    # exactly like a broken client and cost an hour of looking at the wrong
+    # thing once already.
+    ready=""
     for _ in $(seq 1 60); do
-        (echo > "/dev/tcp/127.0.0.1/$PORT") >/dev/null 2>&1 && break
+        if podman exec "$NAME" ldapwhoami -x -H "ldap://127.0.0.1:389" \
+                -D "uid=ada,ou=people,dc=example,dc=invalid" \
+                -w fake-directory-pw >/dev/null 2>&1; then
+            ready=yes
+            break
+        fi
         sleep 0.5
     done
-    (echo > "/dev/tcp/127.0.0.1/$PORT") >/dev/null 2>&1 || { echo "directory did not come up" >&2; exit 1; }
-    echo "directory listening on 127.0.0.1:$PORT"
+    [ -n "$ready" ] || { echo "directory did not come up (no successful bind after 30s)" >&2; exit 1; }
+    echo "directory answering binds on 127.0.0.1:$PORT"
     ;;
 down)
     need_podman

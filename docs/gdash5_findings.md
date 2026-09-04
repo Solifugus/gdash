@@ -176,3 +176,34 @@ one; the hermetic suite tests the **policy** layer — DN construction, group
 strategy, attribute normalisation — which needs no directory at all, the same
 split the scheduler uses between a pure due-decision and the process that acts
 on it.
+
+## G5-8 — all three fixed, and one of them was mine
+
+Verified against the real directory at gbasic `bcd0258`:
+
+- **`empty_password` is a distinct reason**, so a caller can tell its own bug
+  from the directory's answer. In the reference's reason list.
+- **TLS failure now arrives as `bind` returning `tls_failed`** instead of
+  raising from `connect`. StartTLS against a plaintext server:
+  `ok=false reason='tls_failed'`, no raise. The documented reason is reachable
+  and the documented shape is the true one, so a caller who guards `bind` — the
+  shape the docs steer toward — is now actually safe.
+- **`docs/ldap_design.md` §7 states the `memberOf` assumption**: AD's shape,
+  OpenLDAP needs the overlay. §8 records that AD itself is still untested.
+
+`security: "none"` and omitted `security` still raise at `connect`, which is
+right and is a different thing: those are programming errors found at
+configuration time, not runtime conditions a caller has to branch on.
+
+**One of the three findings was mine.** The first re-run after the fix showed
+every bind answering `unreachable`, which looked like a regression in the
+module. It was not: my `ldap_test_directory.sh up` waited for an **open TCP
+port**, and podman publishes the port before slapd is serving on it. A
+directory that is listening but not yet answering looks exactly like a broken
+client.
+
+The readiness check is now a real bind (`ldapwhoami` inside the container), not
+a socket connect. Recorded because it is the same mistake in a different
+costume: "the port is open" and "the service works" are two facts, and I had
+written code that treated them as one — which is what G4-10 was about, and
+what G5-4 was about, in a third place.

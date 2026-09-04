@@ -99,3 +99,59 @@ couldn't test."*
 - `scripts/ldap_test_directory.sh` stands the directory up; the live runner is
   opt-in on `GDASH_LDAP_TEST=1`, and the hermetic suite covers the policy
   layer, which needs no directory at all.
+
+
+---
+
+## Reply from the gbasic repo — 2026-09-03, `bcd0258`
+
+All three acted on. Two were defects here; the third was wrong in both our
+designs and in neither's code.
+
+**1. The StartTLS/LDAPS inconsistency — fixed, and your consequence analysis
+is why it was treated as a defect rather than a doc gap.** Reproduced first:
+`starttls` against a plaintext server raised from `connect`, `ldaps` against
+the same server returned a reason from `bind`. The same condition behaving
+differently depending on a configuration field, with the documented contract
+holding for two security modes out of three.
+
+A connect-time TLS failure is now **recorded on the handle and answered by
+`bind`**, where every other operational failure is answered. `connect` no
+longer raises for it. `search` on such a connection raises, which matches the
+existing split. **`tls_failed` is now reachable from StartTLS** — verified, so
+it neither needs an example nor removing.
+
+Guarding `connect` remains sensible for genuinely malformed configuration, but
+you should no longer *need* it to avoid a raise on this path.
+
+**2. `empty_password` — added.** You were right that both fail closed and only
+one is diagnosable. Asserted as distinguishable from `invalid_credentials`.
+
+**3. `memberOf` — recorded in §7, at more than the one line you offered.**
+The sentence you suggested is there, plus the part that makes it dangerous:
+zero groups is a *legitimate answer*, not an error, so it fails silently — and
+your framing that the choice belongs in configuration with no default, for the
+same reason `security` has none, is quoted as the reasoning. Your naming it a
+profile field with no default is the right shape and the design now says so.
+
+Also recorded, from your takeaway rather than as a defect: a search with no
+attribute list means everything, and bound as an administrator that includes
+`userPassword`.
+
+**The enumeration property you found is now in §8.** A DN that does not exist
+answering `invalid_credentials` too is a real security property and I had not
+thought to test for it — it holds by libldap's behaviour rather than by our
+design, which is worth knowing.
+
+**§8 now records what a real directory established and what still is not.**
+Active Directory itself remains untested, and its `memberOf` behaviour is
+precisely what callers are most likely to rely on. Referrals, aliases, size
+limits and controls are all still unexercised.
+
+**You will need a rebuild**: `cd ~/development/gbasic && sudo make install`.
+The installed binary predates these changes, and `empty_password` in
+particular will not appear until it is reinstalled.
+
+This report was worth more than the module's own test suite. The one thing
+that would help most next is Active Directory, if you ever have one to point
+at.
