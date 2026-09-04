@@ -1,7 +1,10 @@
 # GDASH-5 — Findings
 
-**Status:** step-0 complete, and it fails.
-**Platform:** gBASIC `5c2ce75`. Everything here was probed or read in the
+**Status:** step-0 failed, was escalated, and now passes; the phase is built.
+G5-1 and G5-2 are kept as written — a finding that was true when it was made
+is not edited later to look better.
+**Platform:** gBASIC `5c2ce75` at step-0; `bcd0258` for everything from G5-8
+on. Everything here was probed against a running system or read in the
 platform's own source, not inferred from its design docs.
 
 ---
@@ -207,3 +210,117 @@ a socket connect. Recorded because it is the same mistake in a different
 costume: "the port is open" and "the service works" are two facts, and I had
 written code that treated them as one — which is what G4-10 was about, and
 what G5-4 was about, in a third place.
+
+## G5-9 — `replace` truncates its haystack at the first NUL, silently
+
+**Found while writing the LDAP escapes, which is the worst possible place for
+it.** RFC 4515 requires NUL to be escaped in a search filter; RFC 4514 requires
+it in a DN. The obvious implementation is a chain of `replace` calls. It is
+wrong in two different ways:
+
+```
+replace(s, chr(0), "\00")        -> raises: "replace: search string cannot be empty"
+split(s, chr(0))                 -> raises: "split separator cannot be empty"
+len("a" + chr(0) + "b")          -> 3
+len(replace("a" + chr(0) + "b", "a", "A"))   -> 1
+len(trim("a" + chr(0) + "b"))    -> 1
+```
+
+The first two are an inconvenience: a `chr(0)` needle is treated as the empty
+string and refused. **The third is data loss with no error.** `replace` is
+given a three-character string and returns a one-character one, because it
+reads its haystack as a C string and stops at the NUL. `trim` does the same.
+`len`, `mid`, `code` and `upper` are all binary-safe, so the failure is not
+uniform and cannot be reasoned about from one probe.
+
+A sweep of the whole family found five affected builtins, and the line they
+fall on is not one a caller could guess: `replace`, `trim`, `join`, `split`
+and **`ends_with`** are C-string-based, while `len`, `mid`, `upper`, `lower`,
+`reverse`, `+`, `contains`, `starts_with`, `hex_encode`, `encode`, `string`
+and `code` are length-aware. `contains` and `ends_with` are in the same family
+and disagree — and `ends_with` does not shorten a value, it returns the wrong
+boolean.
+
+gBASIC strings carry an explicit length and the reference is emphatic — "a
+binary-safe sequence of bytes … strings are not NUL-terminated from the
+program's point of view" — so this is a defect rather than a documented
+limitation. Its shape is the dangerous one: the naive code produces
+a *shorter, plausible* value rather than an error, and the character it eats is
+the one that most needs escaping.
+
+Both LDAP escapes are therefore single hand-written scans over `mid`/`code`,
+which are binary-safe, and both are asserted to survive a NUL. That is the
+right implementation anyway — one pass means an escape introduced by one rule
+is never re-escaped by the next — but it is here because of this, not because
+of that.
+
+One place in gdash is theoretically exposed and is not being changed:
+`gdash_diff` splits snapshot text on newlines, so a dashboard record containing
+a literal NUL inside a JSON string would diff wrongly. It is left alone because
+the fix belongs in `split`, the input is a file an author wrote, and a
+hand-rolled line splitter would be a worse thing to own than a known
+limitation. Recorded rather than quietly tolerated.
+
+Written up for the platform in `gdash5_platform_report_string_nul.md`.
+
+## G5-10 — the namespace audit caught the first new module, again
+
+`gdash_auth.check` collided with `gdash_record.check` on the audit's first run
+after the module was written. That is the fourth phase in a row the audit has
+caught something on the first run of new code, and the second time the offender
+was a name as ordinary as `check`.
+
+Nothing dramatic happened — the platform's resolution fix (gbasic `d08409f`)
+means a library's own internal calls are safe now — but a caller writing a bare
+`check` outside both libraries would still get whichever loaded last. Renamed
+to `check_config`. Recorded only to note that the audit keeps paying for
+itself in a codebase where every module is named for a noun.
+
+## G5-11 — putting a chain in front of a security property nearly broke it
+
+GDASH-4 closed a user-enumeration oracle: an unknown username spends a hash
+anyway, so it does not answer faster than a wrong password.
+
+The provider interface needs a different fact from the same function — *does
+this provider have this username* — and the obvious implementation answers it
+first:
+
+```
+if is_unknown(lookup(db, username)) then
+    return gdash_auth.miss()          ' <- returns in microseconds
+end if
+```
+
+That is correct as a chain, and it reopens the oracle: with local as the only
+provider, an unknown username now returns without hashing. The property was
+not deleted; it was **routed around**, by a function that was added for an
+unrelated reason and never touched the code that held it.
+
+The local provider spends a hash and then reports `miss`. Recorded because the
+general shape is worth naming: a seam introduced in front of existing code
+inherits none of that code's guarantees automatically, and the guarantees most
+likely to be lost are the ones enforced by *timing* or by *doing extra work*,
+because those look like waste to anyone reading the new path in isolation.
+
+## G5-12 — bounded-stale identity, and the write it must not cause
+
+A directory cannot be asked on every request the way `users.json` can, so the
+resolved identity is materialized into the session and re-resolved every
+`revalidate` seconds. Two things fell out of that which were not obvious:
+
+- **The cache write must be conditional.** Writing the session record after
+  every revalidation is correct for a directory (one write per interval) and
+  wrong for local accounts, where `revalidate: 0` means every request — turning
+  reading a dashboard into a write. It is skipped when `revalidate` is 0,
+  which is the same reasoning `gdash_session.active` already applies to its
+  `touch_after` slack.
+- **A directory outage must not log everyone out.** The revalidation path
+  distinguishes *the user is gone* (destroy the session) from *the directory
+  would not say* (keep it, audit it, let the absolute and idle limits bound
+  it). This is design §3's stale-but-coherent rule applied to identity rather
+  than to data, and the argument is the same: bounded staleness beats a hard
+  failure, and the bound is configuration rather than accident.
+
+The audit line is emitted only when a revalidation was actually due, which is
+at most once per interval per session — otherwise a directory outage would
+produce a log flood on top of an outage.

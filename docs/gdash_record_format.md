@@ -312,6 +312,127 @@ is ignored. This is the whole of design §5's claim that a user-filtered
 dashboard over a shared dataset is genuinely secure: the filtering happens
 server-side against an identity the client cannot state.
 
+### Where an identity comes from
+
+Nothing in this table changes with the identity's source; the only difference
+is who answered. Providers are consulted in one fixed order that is not
+configurable:
+
+1. **Local accounts** (`/etc/gdash/users.json`) — always, and always first.
+2. **The directory**, if one is configured in `/etc/gdash/auth.json`.
+
+Local is first because it is the break-glass tier, and break-glass that needs
+the directory to be healthy is not break-glass: a directory consulted first
+would take the local administrator down with it at exactly the moment somebody
+needs to sign in and fix the directory configuration. The cost is that **a
+local account of the same name shadows a directory account** — visible in
+`gdash user list`, created by an operator on purpose, and removed with one
+command, which the reverse failure is not.
+
+The chain stops at the first provider that **has** the username, whatever it
+then says about the password. One typo therefore costs one failed bind rather
+than one per directory, which matters where a failed bind counts toward a
+lockout.
+
+**A directory that is down is never reported as a wrong password.** It answers
+503 and "sign-in is unavailable", and the outage is audited. Telling somebody
+their password is wrong when the directory is down sends them to reset a
+password that was fine.
+
+**Group membership from a directory is bounded-stale.** A directory cannot be
+asked on every request, so the identity is materialized into the session at
+sign-in and re-resolved every `revalidate` seconds (default 300). A group
+change therefore takes effect within that window, not instantly. Local
+accounts use `revalidate: 0` and are re-read on every request, so a disabled
+local account stops working immediately. When a revalidation cannot reach the
+directory, **the session stands** until its ordinary absolute and idle limits:
+a directory outage that logs everyone out turns a directory problem into a
+total outage.
+
+## 10. Auth providers (`/etc/gdash/auth.json`)
+
+Server-level, mode 0600, because it holds a service account's password. An
+absent file means local accounts only — which is a complete configuration, not
+a broken one. A file gdash cannot read or cannot validate means **local
+accounts only** as well: the directory is never guessed at, and the operator
+is told in the log.
+
+```json
+{ "format": 1,
+  "directory": {
+    "kind": "ldap",
+    "name": "corp",
+    "host": "dc01.corp.example",
+    "port": 636,
+    "security": "ldaps",
+    "user_search": { "base": "OU=People,DC=corp,DC=example",
+                     "filter": "(sAMAccountName={user})" },
+    "bind_dn": "CN=gdash,OU=Service,DC=corp,DC=example",
+    "bind_password": "…",
+    "group_strategy": "memberof",
+    "admin_groups": ["gdash-admins"],
+    "revalidate": 300 } }
+```
+
+| key | required | meaning |
+|---|---|---|
+| `kind` | yes | `ldap` is the only value this build implements. |
+| `name` | no | What the audit log calls this provider. Default `directory`. |
+| `host` | yes | The directory. |
+| `port` | no | Defaults to 389 or 636 by `security`. |
+| `security` | **yes** | `ldaps`, `starttls` or `plain`. **No default.** |
+| `verify` | no | TLS verification. True unless explicitly false. |
+| `ca_file` | no | An intranet CA, which is the normal case rather than an exotic one. |
+| `user_dn_template` | one of | e.g. `uid={user},ou=people,dc=x`. No service account needed. |
+| `user_search` | one of | `{ base, filter, scope }`, with `{user}` in the filter. |
+| `bind_dn` / `bind_password` | no | The service account. Anonymous otherwise. |
+| `group_strategy` | **yes** | `memberof` or `search`. **No default.** |
+| `group_attribute` | no | For `memberof`. Default `memberOf`. |
+| `group_base` | with `search` | Where the groups live. |
+| `group_filter` | no | Default `(member={dn})`. Must contain `{dn}`. |
+| `group_name_attribute` | no | For `search`. Default `cn`. |
+| `group_names` | no | `rdn` (default) or `dn`. |
+| `email_attribute` | no | Default `mail`. |
+| `name_attribute` | no | Default `cn`. |
+| `admin_groups` | no | Groups whose members administer gdash. **Empty means none.** |
+| `revalidate` | no | Seconds. Default 300; `0` means every request. |
+
+Three of these have **no default on purpose**, and the reason is the same each
+time: guessing produces a plausible answer rather than a failure.
+
+- **`security`** — the platform's rule, not gdash's. A default would make a
+  cleartext bind either silent or accidental; requiring it means a cleartext
+  bind is a word somebody typed and is greppable in a configuration review.
+- **`group_strategy`** — Active Directory populates `memberOf` natively;
+  **stock OpenLDAP does not**, because the `memberof` overlay is off by
+  default. A provider that reads only that attribute gets zero groups from
+  OpenLDAP, zero groups is a legitimate answer, and so every group-gated
+  dashboard would refuse everyone while the log showed successful logins.
+- **`user_dn_template` vs `user_search`** — exactly one. A profile naming both
+  or neither is refused.
+
+Run **`gdash --root <dir> auth check <username>`** after writing this file. It
+prints the DN it built, the raw group values the directory returned, and the
+names gdash would use — and no password. Without it, the first evidence that
+`group_strategy` is wrong is a dashboard refusing everyone.
+
+### Preview-as
+
+An editor answers "what does this look like to somebody in Shipping?" without
+borrowing a password: a control on the page takes a name, an email and a list
+of groups, and the dashboard re-renders with those as the injected `user_*`
+params.
+
+- **Draft only.** Never on a published dashboard.
+- **Editors only** — the viewer must already pass `edit_groups`, or be an
+  administrator.
+- **Audited**, naming both the real identity and the assumed one.
+- **It changes `user_*` and nothing else.** Authorization stays the real
+  viewer's: preview-as cannot open a dashboard they may not open, and cannot
+  make them an administrator. It is scoped to the dashboard it was set on, and
+  it lives in the session rather than the URL, so it cannot be handed to
+  somebody else as a link.
+
 ---
 
 ## Appendix — the refusal catalog
