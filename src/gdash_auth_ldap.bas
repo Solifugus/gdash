@@ -609,4 +609,86 @@ library gdash_auth_ldap
                  revalidate: every }
     end function
 
+    ' --- diagnosis (`gdash auth check`) ------------------------------------
+    '
+    ' Without this, the first evidence that a `group_strategy` is wrong is a
+    ' dashboard refusing everyone -- which is finding G5-4 happening to an
+    ' operator instead of to gdash. It reports every step it took and what came
+    ' back, INCLUDING the raw attribute values before normalisation, because
+    ' "memberOf came back empty" and "memberOf came back with DNs I parsed
+    ' wrongly" are different problems with the same symptom.
+    '
+    ' It prints no password. The service account's credential is used and never
+    ' echoed, and no attribute record beyond the three gdash asked for is read
+    ' at all (finding G5-6).
+    function explain(cfg, username)
+        steps = ["connect " + string(cfg["host"]) + " security=" + string(cfg["security"])]
+        opened = open_service(cfg)
+        if not opened.ok then
+            return { ok: false, steps: concat(steps, ["FAILED: " + opened.message]), dn: "", raw: [], groups: [], email: "" }
+        end if
+        if trim(string(default(cfg["bind_dn"], ""))) = "" then
+            steps = concat(steps, ["bound anonymously (no bind_dn configured)"])
+        else
+            steps = concat(steps, ["bound as the service account " + string(cfg["bind_dn"])])
+        end if
+        conn = opened.conn
+        dn = ""
+        entry = {}
+        if trim(string(default(cfg["user_dn_template"], ""))) != "" then
+            dn = dn_from_template(cfg, username)
+            steps = concat(steps, ["user DN from template: " + dn])
+            got = search_guarded(conn, { base: dn, scope: "base", filter: "(objectClass=*)", attributes: [mail_attr(cfg), name_attr(cfg), member_attr(cfg)], limit: 1 })
+            if got.ok and count(got.entries) > 0 then
+                entry = got.entries[0]
+                steps = concat(steps, ["read that entry"])
+            else
+                steps = concat(steps, ["could not read that entry -- with no service account this is expected, and it is also what a wrong template looks like"])
+            end if
+        else
+            f = user_filter(cfg, username)
+            steps = concat(steps, ["user search in " + string(cfg["user_search"]["base"]) + " with " + f])
+            got = find_user(cfg, conn, username, [member_attr(cfg)])
+            if not got.ok then
+                closed = close_guarded(conn)
+                return { ok: false, steps: concat(steps, ["FAILED: no entry matched"]), dn: "", raw: [], groups: [], email: "" }
+            end if
+            dn = got.dn
+            entry = got.entry
+            steps = concat(steps, ["found " + dn])
+        end if
+
+        strategy = group_strategy(cfg)
+        raw = []
+        if strategy = "memberof" then
+            steps = concat(steps, ["group_strategy memberof: reading " + member_attr(cfg)])
+            raw = values_of(entry, member_attr(cfg))
+            if count(raw) = 0 then
+                got = search_guarded(conn, { base: dn, scope: "base", filter: "(objectClass=*)", attributes: [member_attr(cfg)], limit: 1 })
+                if got.ok and count(got.entries) > 0 then
+                    raw = values_of(got.entries[0], member_attr(cfg))
+                end if
+            end if
+            if count(raw) = 0 then
+                steps = concat(steps, ["the attribute is EMPTY. Stock OpenLDAP does not populate memberOf without the memberof overlay; try group_strategy 'search' instead"])
+            end if
+        else
+            steps = concat(steps, ["group_strategy search in " + string(default(cfg["group_base"], "")) + " with " + group_filter(cfg, dn)])
+            got = search_guarded(conn, { base: string(default(cfg["group_base"], "")), scope: string(default(cfg["group_scope"], "sub")), filter: group_filter(cfg, dn), attributes: [group_name_attr(cfg)] })
+            if got.ok then
+                i = 0
+                while i < count(got.entries)
+                    raw = concat(raw, [string(got.entries[i].dn)])
+                    i += 1
+                end while
+            end if
+            if count(raw) = 0 then
+                steps = concat(steps, ["nothing matched. Check group_base, and whether the groups use 'member' or 'uniqueMember'"])
+            end if
+        end if
+        groups = groups_for(cfg, conn, dn, entry)
+        closed = close_guarded(conn)
+        return { ok: true, steps: steps, dn: dn, raw: raw, groups: groups, email: first_of(entry, mail_attr(cfg)) }
+    end function
+
 end library

@@ -36,6 +36,9 @@ program main(args)
     load gdash_publish from "gdash_publish.bas"
     load gdash_diff from "gdash_diff.bas"
     load gdash_users from "gdash_users.bas"
+    load gdash_authcfg from "gdash_authcfg.bas"
+    load gdash_auth from "gdash_auth.bas"
+    load gdash_auth_ldap from "gdash_auth_ldap.bas"
 
     p = gdash_paths.from_args(args)
 
@@ -58,6 +61,73 @@ program main(args)
             i += 1
         end if
     end while
+
+    ' --- the auth configuration -------------------------------------------
+    '
+    ' Without this, the first evidence that a group strategy is wrong is a
+    ' dashboard refusing everyone while the log shows successful logins
+    ' (finding G5-4). It prints what it resolved and never a password.
+    if verb = "auth" then
+        sub = ""
+        if count(rest) > 0 then
+            sub = rest[0]
+        end if
+        if sub != "check" then
+            print to error "usage: gdash --root <dir> auth check [username]"
+            exit(2)
+        end if
+        cfg = gdash_authcfg.load_config(p)
+        if not cfg.ok then
+            print to error "the auth configuration is not usable:"
+            j = 0
+            while j < count(cfg.errors)
+                print to error "error: " + cfg.errors[j]
+                j += 1
+            end while
+            print to error "local accounts still work; the directory is not consulted until this is fixed"
+            exit(1)
+        end if
+        if not gdash_authcfg.has_directory(cfg.config) then
+            print("auth: local accounts only (no directory configured in " + gdash_paths.auth_file(p) + ")")
+            exit(0)
+        end if
+        d = cfg.config["directory"]
+        print("auth: local accounts, then " + string(default(d["name"], "directory")) + " (" + string(d["host"]) + ", " + string(d["security"]) + ")")
+        if count(rest) < 2 then
+            print("give a username to test the directory end to end: gdash auth check <username>")
+            exit(0)
+        end if
+        who = rest[1]
+        ' A local account of the same name would shadow the directory, and an
+        ' operator checking the directory deserves to be told rather than left
+        ' wondering why their change had no effect.
+        loaded_users = gdash_users.load_users(p)
+        if loaded_users.ok and not is_unknown(gdash_users.lookup(loaded_users.db, who)) then
+            print("NOTE: '" + who + "' is also a LOCAL account, and local is consulted first, so the directory below is not what signs them in")
+        end if
+        told = gdash_auth_ldap.explain(d, who)
+        j = 0
+        while j < count(told.steps)
+            print("  " + told.steps[j])
+            j += 1
+        end while
+        if not told.ok then
+            exit(1)
+        end if
+        print("  dn: " + told.dn)
+        print("  email: " + told.email)
+        print("  raw group values: " + join(told.raw, " | "))
+        print("  groups gdash would use: " + join(told.groups, ", "))
+        if count(told.groups) = 0 then
+            print to error "no groups resolved: every dashboard gated on a group would refuse this user"
+            exit(1)
+        end if
+        admin_now = gdash_auth_ldap.is_admin(d, told.groups)
+        if admin_now then
+            print("  and this user is a gdash administrator (admin_groups)")
+        end if
+        exit(0)
+    end if
 
     ' --- accounts ---------------------------------------------------------
     if verb = "user" then
