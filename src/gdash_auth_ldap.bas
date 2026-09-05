@@ -536,25 +536,6 @@ library gdash_auth_ldap
         return []
     end function
 
-    ' Bind as the user. Returns the ldap module's own outcome, guarded.
-    function bind_as(wire, cfg, dn, password)
-        on error goto next
-        load ldap
-        if error then
-            return { ok: false, reason: "server_error", conn: unknown }
-        end if
-        conn = ldap.connect(connect_config(cfg))
-        if error then
-            return { ok: false, reason: "server_error", conn: unknown }
-        end if
-        r = ldap.bind(conn, dn, password)
-        if error then
-            closed = ldap.close(conn)
-            return { ok: false, reason: "server_error", conn: unknown }
-        end if
-        return { ok: r.ok, reason: string(r.reason), conn: conn }
-    end function
-
     ' --- the provider ------------------------------------------------------
 
     function ldap_authenticate(ctx, username, password)

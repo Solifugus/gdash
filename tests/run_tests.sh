@@ -62,6 +62,14 @@ else
     failed=$((failed + 1))
 fi
 
+# gBASIC lets one library define the same function twice and silently keeps
+# the later one (G6-11). Three greps find it; nothing else does.
+echo "--- duplicate definitions ---"
+ran=$((ran + 1))
+if ! "$HERE/duplicate_defs.py"; then
+    failed=$((failed + 1))
+fi
+
 # The format doc's refusal catalog is generated from the golden. If they
 # disagree the documentation is wrong, which is a test failure, not a chore.
 echo "--- documentation ---"
