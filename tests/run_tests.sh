@@ -30,7 +30,17 @@ export GDASH_GBASIC="$GBASIC"
 # produces failures with no useful output -- a CLI invocation simply exiting 1
 # -- which look like gdash bugs and are not. Recorded at both ends so the run
 # can say so instead of leaving somebody to debug a phantom.
-GBASIC_STAMP_BEFORE="$(stat -c %Y "$GBASIC" 2>/dev/null || echo unknown)"
+# THE STDLIB COUNTS TOO. gdash loads `chart`, `web`, `sqlite` and `crypto`
+# from the installed stdlib, and `sudo make install` rewrites those .bas files
+# without necessarily moving the interpreter's own mtime -- so stamping only
+# the binary would miss the change that is, in practice, the common one.
+stamp_platform(){
+    local bin lib
+    bin="$(stat -c %Y "$GBASIC" 2>/dev/null || echo unknown)"
+    lib="$(find "${GDASH_GBASIC_STDLIB:-/usr/local/share/gbasic/stdlib}" -name '*.bas' -printf '%T@\n' 2>/dev/null | sort -rn | head -1)"
+    echo "${bin}:${lib:-none}"
+}
+GBASIC_STAMP_BEFORE="$(stamp_platform)"
 
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/gdash-test-XXXXXX")"
 ROOT="$SCRATCH/root"
@@ -119,18 +129,21 @@ if [[ "${GDASH_SKIP_E2E:-0}" != "1" ]]; then
     fi
 fi
 
-GBASIC_STAMP_AFTER="$(stat -c %Y "$GBASIC" 2>/dev/null || echo unknown)"
+GBASIC_STAMP_AFTER="$(stamp_platform)"
 if [[ "$GBASIC_STAMP_BEFORE" != "$GBASIC_STAMP_AFTER" ]]; then
     echo
-    echo "NOTE: the gbasic interpreter was rebuilt DURING this run." >&2
-    echo "      $GBASIC changed at $(date -d "@$GBASIC_STAMP_AFTER" 2>/dev/null)." >&2
-    echo "      Any failure above may be an artifact of that, not a gdash defect." >&2
-    echo "      Re-run before believing it." >&2
+    echo "NOTE: the gbasic platform changed DURING this run." >&2
+    echo "      before: $GBASIC_STAMP_BEFORE" >&2
+    echo "      after:  $GBASIC_STAMP_AFTER   (interpreter mtime : newest stdlib mtime)" >&2
+    echo "      A rebuild or install replaces the binary and the stdlib under a" >&2
+    echo "      running suite, and every invocation in that window fails with no" >&2
+    echo "      useful output. Any failure above may be an artifact of that," >&2
+    echo "      not a gdash defect. Re-run before believing it." >&2
 fi
 
 echo "---"
 if [[ "$GBASIC_STAMP_BEFORE" != "$GBASIC_STAMP_AFTER" && $failed -gt 0 ]]; then
-    echo "suites run: $ran, failed: $failed  -- BUT THE INTERPRETER CHANGED MID-RUN; re-run before believing this"
+    echo "suites run: $ran, failed: $failed  -- BUT THE PLATFORM CHANGED MID-RUN; re-run before believing this"
 else
     echo "suites run: $ran, failed: $failed"
 fi
