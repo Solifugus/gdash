@@ -40,9 +40,32 @@ ok(){ if [[ "$2" == "$3" ]]; then echo "  ok   $1"; pass=$((pass+1)); else echo 
 n_responses(){ grep -o '"authenticated"' "$1" 2>/dev/null | wc -l; }
 n_secrets(){ grep -o '"csrf":"[^"]*"' "$1" 2>/dev/null | sort -u | wc -l; }
 
+# Killing the supervisor does NOT take the workers with it: they are its
+# children, spawned through process.self(), and at least one survives every
+# time. A leaked worker holds the port and keeps a deleted root alive, which
+# is residue the scratch-clean assertion never looked for -- it checks
+# directories, not processes.
+#
+# The scratch path is in each worker's command line and is unique to this run,
+# so it is a safe pattern to match. `pkill -f gdash_server.bas` would not be:
+# it matches the shell that launched this script too, and killing that reads
+# as a mysterious exit 144.
+reap(){
+    local pids
+    pids="$(pgrep -f "$SRC/gdash_server.bas" 2>/dev/null | grep -v "^$$\$" | tr '\n' ' ')"
+    [[ -n "$pids" ]] || return 0
+    kill $pids 2>/dev/null
+    for i in $(seq 1 20); do
+        pgrep -f "$SRC/gdash_server.bas" >/dev/null 2>&1 || return 0
+        sleep 0.1
+    done
+    kill -9 $(pgrep -f "$SRC/gdash_server.bas" 2>/dev/null | tr '\n' ' ') 2>/dev/null
+}
+
 cleanup(){
     [[ -n "${SRV:-}" ]] && kill "$SRV" 2>/dev/null
     wait "$SRV" 2>/dev/null
+    reap
     if [[ $fail -gt 0 && -s "$SCRATCH/server.log" ]]; then
         echo "--- server log (last 20 lines) ---"
         tail -20 "$SCRATCH/server.log"
@@ -104,7 +127,10 @@ ok "and a request actually gets answered" "$serving" "yes"
 # finished spawning, so a single sample races the pool.
 n_workers=0
 for i in $(seq 1 60); do
-    n_workers="$(pgrep -c -x gbasic 2>/dev/null || echo 0)"
+    # `pgrep -c` prints 0 AND exits 1 when nothing matches, so the usual
+    # `|| echo 0` fallback appends a second line and the variable stops being
+    # a number. Count lines from a plain pgrep instead.
+    n_workers="$(pgrep -x gbasic 2>/dev/null | wc -l)"
     [[ "$n_workers" -gt "$WORKERS" ]] && break
     sleep 0.25
 done
@@ -214,6 +240,14 @@ wait "${spids[@]}" 2>/dev/null
 saw=0
 for k in 1 2; do grep -q '^data: refresh' "$SCRATCH/sse$k.txt" && saw=$((saw+1)); done
 ok "every concurrent stream sees a refresh performed by another process" "$saw" "2"
+
+# A leaked worker is residue, and residue is a failure. The suite already
+# asserts that it leaves no files behind; it now asserts that it leaves no
+# processes behind either.
+kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null; SRV=""
+reap
+left="$(pgrep -f "$SRC/gdash_server.bas" 2>/dev/null | wc -l)"
+ok "no server process outlives the run" "$left" "0"
 
 echo "---"
 echo "workers: $pass passed, $fail failed"

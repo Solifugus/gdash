@@ -10,6 +10,21 @@ cd "$HERE/.."
 GBASIC="${GDASH_GBASIC:-$HOME/development/gbasic/gbasic}"
 export GDASH_GBASIC="$GBASIC"
 
+# Kill only processes actually NAMED gbasic. `pkill -f gdash_server.bas` also
+# matches the shell that launched this script -- and killing that produces a
+# mysterious exit code and no output at all, which cost an hour once.
+reap(){
+    local pid
+    for pid in $(pgrep -f "gdash_server.bas\|gdash_scheduler.bas" 2>/dev/null); do
+        [[ "$(cat /proc/$pid/comm 2>/dev/null)" == "gbasic" ]] || continue
+        kill "$pid" 2>/dev/null
+    done
+}
+
+# Without a trap, any early exit leaks a server holding the port, and the next
+# suite to want it fails for a reason that has nothing to do with itself.
+trap reap EXIT
+
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/gdash-e2e-XXXXXX")"
 ROOT="$SCRATCH/root"
 PORT=8780
@@ -512,6 +527,16 @@ hasnt "$(cat "$ROOT/log/audit.log")" "fake-analyst-pw" "and no password reaches 
 code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/d/sales")"
 ok "access: open still serves anyone, authenticated or not" "$code" "200"
 kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
+reap
+sleep 0.5
+# Residue is a failure, and a process is residue. The scratch-clean assertion
+# has always checked directories; nothing checked that the run left no server
+# behind, and it did -- intermittently, which is the worst way to leave one.
+left=0
+for pid in $(pgrep -f "gdash_server.bas\|gdash_scheduler.bas" 2>/dev/null); do
+    [[ "$(cat /proc/$pid/comm 2>/dev/null)" == "gbasic" ]] && left=$((left + 1))
+done
+ok "no server or scheduler outlives the run" "$left" "0"
 rm -rf "$SCRATCH"
 [[ -e "$SCRATCH" ]] && { echo "SCRATCH NOT CLEAN"; exit 1; }
 echo "scratch clean: $SCRATCH removed"
