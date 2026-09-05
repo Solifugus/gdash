@@ -165,11 +165,21 @@ program main(args)
     ' G5-4, hermetically: the same directory that yields two groups under
     ' `search` yields NONE under `memberof`, because the overlay is not on.
     ' This is why the strategy is named in configuration with no default.
+    ' The plan below is the SAME directory the `search` tests used -- group_rule
+    ' is in it, and group_base is configured, so a member= search would find
+    ' two groups. memberof must still resolve none, because the attribute is
+    ' empty and the strategy was named. Without those two lines the test would
+    ' pass for a directory that simply had no groups anywhere, which proves
+    ' nothing: mutation-testing this file caught exactly that, by making
+    ' memberof silently fall back to a search and watching the suite stay green.
     mof = { kind: "ldap", name: "corp", host: "d.example.invalid", security: "ldaps",
-            user_dn_template: "uid={user}," + people, group_strategy: "memberof" }
-    silent = gdash_auth_ldap.ldap_authenticate(ctx_for(mof, { binds: one_bind(ada_dn, { ok: true }), rules: [{ base: ada_dn, entries: [person(ada_dn, "ada@example.invalid", "Ada", [])] }] }), "ada", "fake-pw")
+            user_dn_template: "uid={user}," + people, group_strategy: "memberof",
+            group_base: groups }
+    bare_entry = { base: ada_dn, entries: [person(ada_dn, "ada@example.invalid", "Ada", [])] }
+    silent = gdash_auth_ldap.ldap_authenticate(ctx_for(mof, { binds: one_bind(ada_dn, { ok: true }), rules: [bare_entry, group_rule] }), "ada", "fake-pw")
     s = gdash_test.ok(s, silent.ok, "the memberof strategy still authenticates")
-    s = gdash_test.eq(s, count(silent.identity.groups), 0, "and resolves NO groups from a directory with no memberof overlay")
+    s = gdash_test.eq(s, count(silent.identity.groups), 0, "and resolves NO groups from a directory whose memberOf is empty")
+    s = gdash_test.ok(s, count(gdash_auth_ldap.groups_for(directory_double.wire({ rules: [group_rule] }), tpl, { id: 1 }, ada_dn, {})) = 2, "even though a member= search of that same directory finds two")
 
     withattr = [{ base: ada_dn, entries: [person(ada_dn, "ada@example.invalid", "Ada", ["cn=analysts," + groups, "cn=finance," + groups])] }]
     populated = gdash_auth_ldap.ldap_authenticate(ctx_for(mof, { binds: one_bind(ada_dn, { ok: true }), rules: withattr }), "ada", "fake-pw")
@@ -222,7 +232,7 @@ program main(args)
 
     ' The message that would have turned G5-4 from a silent refusal into a
     ' sentence somebody could act on.
-    empty = gdash_auth_ldap.explain(ctx_for(mof, { binds: one_bind(ada_dn, { ok: true }), rules: [{ base: ada_dn, entries: [person(ada_dn, "a@b.invalid", "Ada", [])] }] }), "ada")
+    empty = gdash_auth_ldap.explain(ctx_for(mof, { binds: one_bind(ada_dn, { ok: true }), rules: [bare_entry, group_rule] }), "ada")
     s = gdash_test.contains_text(s, join(empty.steps, " "), "memberof overlay", "a memberof strategy that resolves nothing says why")
 
     exit(gdash_test.report(s))

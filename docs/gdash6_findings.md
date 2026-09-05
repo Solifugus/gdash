@@ -282,3 +282,82 @@ does not currently understand. The plan already assigns "the SSE worker-pinning
 ceiling stated plainly" to the deployment phase; this is the evidence that the
 sentence needs a number behind it, and that finding the number is real work
 rather than a documentation task.
+
+## G6-11 — a library may define the same function twice, and the later one silently wins
+
+gBASIC accepts this without a warning:
+
+```basic
+library x
+    function f()
+        return 1
+    end function
+    function f()
+        return 2
+    end function
+end library
+```
+
+`x.f()` returns 2. No error at parse, none at load, none at call.
+`library_collisions()` does not report it either — correctly, since it answers
+a different question: which name is defined by more than one *library*. Within
+one library there is no check at all.
+
+It cost real time here. Threading the new directory seam through
+`gdash_auth_ldap` meant rewriting call sites of `bind_as(cfg, dn, password)`,
+and the *definition* line `function bind_as(cfg, dn, password)` contains that
+same text — so the mechanical rename produced a second, stale definition that
+still called the live `ldap` module. The stale one was later in the file, so it
+won. Every bind in the hermetic tests went to a real directory that was not
+running, and the symptom — `unreachable` from a test double that had just
+answered `ok` when called directly — reads exactly like a broken double.
+
+Three greps find it. `tests/duplicate_defs.py` now runs them on every `src/`
+and `tests/` file, in the default suite. Reported to the platform in
+`gdash6_platform_report_duplicate_defs.md`: this should be an error, or at
+minimum a warning, because there is no legitimate reason to define one name
+twice in one library and the failure is silent in both directions.
+
+## G6-12 — mutation testing found a hollow assertion the suite could not
+
+The brief requires every new test to be observed failing. Five deliberate
+breakages were introduced into `gdash_auth_ldap` and the directory suite run
+against each:
+
+| mutation | caught |
+|---|---|
+| forget to close the user's connection | yes |
+| a service-account bind failure reported as success | yes |
+| an empty password sent to the directory after all | yes |
+| bind to the DN the filter implies, not the one returned | yes |
+| **memberof silently falls back to a search when the attribute is empty** | **no** |
+
+The one that survived is the one the whole G5-4 ruling rests on. The test
+asserted "the memberof strategy resolves NO groups", and it did — but the
+scripted directory had no groups to find by any route, so the assertion would
+have passed for a directory that simply had none. It proved the absence of
+data, not the discipline of the strategy.
+
+Fixed by giving that test **the same directory the `search` tests use** —
+`group_base` configured and the group rule present — so a member= search would
+find two groups and memberof must still find none. The mutation is now caught
+with `expected <0> got <2>`.
+
+Worth stating plainly: the suite was green, the assertion was well-named, and
+it was hollow. Nothing but deliberately breaking the code would have shown
+that. Two other assertions were found to *crash* rather than fail — indexing
+`[0]` into an empty array kills the run and takes every later assertion with
+it — which is the same lesson in a different costume.
+
+## G6-13 — `git checkout` after a mutation restores HEAD, not your work
+
+A small process finding, recorded because it produced fifteen minutes of
+convincing nonsense. The mutation loop restores each file with
+`git checkout -- <file>` between runs. An *uncommitted* fix in that same file
+is restored away too — so the duplicate `bind_as` of G6-11, which had been
+removed but not committed, came back after the first mutation and every
+subsequent result was measured against broken code.
+
+The rule is simple and now followed: **commit before mutating.** A mutation
+run is only meaningful against a known-good baseline, and "known-good" has to
+mean committed, not merely edited.
