@@ -6,6 +6,11 @@
 library gdash_app
 
     load crypto
+    ' `emit` belongs to `web`, like `serve` in gdash_server. Until gbasic
+    ' 554e22e a stream handler could call it bare; a function from another
+    ' library is now qualified, which is the rule that stops a bare name
+    ' resolving into somebody else's library.
+    load web
     load gdash_paths from "gdash_paths.bas"
     load gdash_record from "gdash_record.bas"
     load gdash_store from "gdash_store.bas"
@@ -1101,7 +1106,7 @@ library gdash_app
         ' file of its own and a cache wipe cannot lose the signal.
         seen_pub = gdash_paths.read_pointer(p, name)
 
-        alive = emit(req, "event: hello" + chr(10) + "data: " + string(seen) + chr(10) + chr(10))
+        alive = web.emit(req, "event: hello" + chr(10) + "data: " + string(seen) + chr(10) + chr(10))
         ticks = 0
         ' Every live stream pins a worker (design §5, the named ceiling), so a
         ' stream whose client has gone must be noticed promptly. emit is the
@@ -1115,16 +1120,16 @@ library gdash_app
             now_pub = gdash_paths.read_pointer(p, name)
             if now_v != seen then
                 seen = now_v
-                alive = emit(req, "data: refresh" + chr(10) + chr(10))
+                alive = web.emit(req, "data: refresh" + chr(10) + chr(10))
             else if now_pub != seen_pub then
                 ' A NOTICE, not a reload. Yanking the page out from under a
                 ' pinned viewer is the thing pinning exists to prevent
                 ' (design §7): new versions arrive on next open, or when the
                 ' viewer decides.
                 seen_pub = now_pub
-                alive = emit(req, "data: publish" + chr(10) + chr(10))
+                alive = web.emit(req, "data: publish" + chr(10) + chr(10))
             else if mod(ticks, 10) = 0 then
-                alive = emit(req, ": ping" + chr(10) + chr(10))
+                alive = web.emit(req, ": ping" + chr(10) + chr(10))
             end if
             ticks += 1
         end while

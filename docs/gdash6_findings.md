@@ -312,11 +312,18 @@ won. Every bind in the hermetic tests went to a real directory that was not
 running, and the symptom — `unreachable` from a test double that had just
 answered `ok` when called directly — reads exactly like a broken double.
 
-Three greps find it. `tests/duplicate_defs.py` now runs them on every `src/`
-and `tests/` file, in the default suite. Reported to the platform in
-`gdash6_platform_report_duplicate_defs.md`: this should be an error, or at
-minimum a warning, because there is no legitimate reason to define one name
-twice in one library and the failure is silent in both directions.
+**Fixed in the platform at gbasic `f21486e`**, as an error, with a message
+better than the lint that reported it:
+
+```
+function 'refusal' is defined twice in library 'gdash_auth'
+  -- the first, at line 39, would be unreachable
+```
+
+`tests/duplicate_defs.py` was written to catch this and has been **deleted**.
+A check that only restates what the compiler enforces is noise in a suite, and
+the compiler's version names both lines and fires at parse time rather than
+needing a grep pass. The finding stands as the record of why the rule exists.
 
 ## G6-12 — mutation testing found a hollow assertion the suite could not
 
@@ -361,3 +368,31 @@ subsequent result was measured against broken code.
 The rule is simple and now followed: **commit before mutating.** A mutation
 run is only meaningful against a known-good baseline, and "known-good" has to
 mean committed, not merely edited.
+
+## G6-14 — the qualification rule cost gdash five call sites, and my estimate missed them
+
+gbasic `554e22e` made a function from another library require its prefix. I
+priced that change for the platform before it shipped, from gdash as a real
+consumer: **zero** bare cross-library calls among gdash's own sixteen
+libraries, against **501** bare *self*-calls that a stricter reading would
+have forced. The measurement argued for the rule that shipped.
+
+The estimate was right about gdash's own libraries and **wrong about the
+platform's**, which I said at the time it could not see:
+
+```
+src/gdash_server.bas:104: serve(gdash_web)      -> web.serve(gdash_web)
+src/gdash_app.bas    x4 : emit(req, ...)        -> web.emit(req, ...)
+```
+
+Both are `web` functions, and `serve` was documented as "reachable
+unqualified". Neither file loaded `web` at all — the server block supplied
+them implicitly — so both needed a `load web` as well. Five call sites, two
+loads, twenty-six suites green afterwards.
+
+Worth recording for the shape rather than the size. The scan compared gdash's
+libraries **against each other**, because that is the inventory it could build
+from source; native and stdlib modules were outside it and were named as
+outside it. The gap in the estimate was exactly the gap I declared. That is
+the good version of being wrong — but a caveat stated in a report is still a
+hole in the number, and the number is what gets quoted.

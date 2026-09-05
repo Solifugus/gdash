@@ -89,6 +89,7 @@ end server
 
 program main( args )
     load gdash_paths from "gdash_paths.bas"
+    load web
 
     ' Handlers cannot see argv, so the root travels in the environment and
     ' both sides read the same place. --root stays the CLI's spelling.
@@ -101,6 +102,10 @@ program main( args )
     made = gdash_paths.ensure_dir(p.log_dir)
     made = gdash_paths.ensure_dir(p.run_dir)
 
-    h = serve(gdash_web)
+    ' `serve` belongs to `web`, so it is qualified like any other function from
+    ' another library. It was reachable bare until gbasic 554e22e; the rule
+    ' that changed is the one that stops a bare name resolving into somebody
+    ' else's library, which is what cost this project an afternoon in GDASH-0.
+    h = web.serve(gdash_web)
     print("gdash: listening on " + string(h.port))
 end program
