@@ -129,7 +129,11 @@ if [[ "$GBASIC_STAMP_BEFORE" != "$GBASIC_STAMP_AFTER" ]]; then
 fi
 
 echo "---"
-echo "suites run: $ran, failed: $failed"
+if [[ "$GBASIC_STAMP_BEFORE" != "$GBASIC_STAMP_AFTER" && $failed -gt 0 ]]; then
+    echo "suites run: $ran, failed: $failed  -- BUT THE INTERPRETER CHANGED MID-RUN; re-run before believing this"
+else
+    echo "suites run: $ran, failed: $failed"
+fi
 
 # Scratch-clean assertion: the suite owns exactly one temp tree and leaves
 # nothing outside it. Removing it must succeed and leave no residue.
