@@ -103,6 +103,13 @@ A param declares a default. Controls publish a param:
 `kind` is `select` in this build. A control's `sql` runs against its dataset;
 the **first result column** supplies the option values.
 
+**A query may not write its own `?`.** gdash rewrites every `:name` into a
+positional placeholder itself, so a hand-written `?` adds a placeholder that no
+argument accounts for — the query would fail at refresh time with a message
+about argument counts rather than at load time with one about the record. It is
+refused by validation. A `?` inside a string literal or a comment is text, not
+a placeholder, and is left alone.
+
 ### The dependency graph is derived, never declared
 
 The server scans query text for `:name` bindings. When a control publishes a
@@ -472,6 +479,10 @@ dataset sql missing
   ERROR dataset 'd1' has no 'sql'
 dataset profile missing
   ERROR dataset 'd1' has no 'profile'
+dataset writes a bare placeholder
+  ERROR dataset 'd1' writes a bare '?'; gdash produces placeholders itself from ':name' and supplies no argument for a hand-written one
+visual writes a bare placeholder
+  ERROR visual 'v1' writes a bare '?'; gdash produces placeholders itself from ':name' and supplies no argument for a hand-written one
 dataset binds a param
   ERROR dataset 'd1' binds param ':region'; params may appear only in visual queries
 dataset refresh policy

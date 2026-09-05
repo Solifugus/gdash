@@ -239,6 +239,9 @@ library gdash_record
                     errors = concat(errors, ["dataset '" + dn + "' binds param ':" + found[j] + "'; params may appear only in visual queries"])
                     j += 1
                 end while
+                if gdash_sql.placeholders(ds["sql"]) > 0 then
+                    errors = concat(errors, ["dataset '" + dn + "' writes a bare '?'; gdash produces placeholders itself from ':name' and supplies no argument for a hand-written one"])
+                end if
             end if
             if not _has(ds, "profile") then
                 errors = concat(errors, ["dataset '" + dn + "' has no 'profile'"])
@@ -338,6 +341,9 @@ library gdash_record
             if not _has(v, "sql") then
                 errors = concat(errors, ["visual '" + vn + "' has no 'sql'"])
             else
+                if gdash_sql.placeholders(v["sql"]) > 0 then
+                    errors = concat(errors, ["visual '" + vn + "' writes a bare '?'; gdash produces placeholders itself from ':name' and supplies no argument for a hand-written one"])
+                end if
                 ' Every binding resolves, before any database is touched.
                 found = gdash_sql.bindings(v["sql"])
                 j = 0

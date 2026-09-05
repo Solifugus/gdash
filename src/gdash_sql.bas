@@ -27,10 +27,20 @@ library gdash_sql
 
     ' Returns { names: [...unique, first-appearance order],
     '           order: [...one name per '?', left to right],
+    '           holes: how many '?' the AUTHOR wrote,
     '           sql:   the rewritten text }
+    '
+    ' `holes` exists because gdash owns the ':name' -> '?' rewrite (finding
+    ' F2). Every '?' an author writes adds a placeholder that no entry in
+    ' `order` accounts for, so the argument array is always shorter than the
+    ' placeholder count and sqlite refuses the query -- at refresh time, with a
+    ' message about argument counts, rather than at load time with a message
+    ' about the record. Design §1 says a dashboard validates completely before
+    ' any source database is contacted; counting them here is what lets it.
     function scan(sql)
         names = []
         order = []
+        holes = 0
         chunks = []
         i = 0
         n = len(sql)
@@ -107,17 +117,26 @@ library gdash_sql
                 end if
 
             else
+                if c = "?" then
+                    holes += 1
+                end if
                 chunks = concat(chunks, [c])
                 i += 1
             end if
         end while
 
-        return { names: names, order: order, sql: join(chunks, "") }
+        return { names: names, order: order, holes: holes, sql: join(chunks, "") }
     end function
 
     ' The dependency graph for one query: which params it binds.
     function bindings(sql)
         return scan(sql).names
+    end function
+
+    ' How many placeholders the author wrote by hand. Not counting the ones
+    ' gdash produced from ':name'.
+    function placeholders(sql)
+        return scan(sql).holes
     end function
 
     ' Build the positional argument array for a rewritten query.

@@ -26,6 +26,10 @@ dataset sql missing
   ERROR dataset 'd1' has no 'sql'
 dataset profile missing
   ERROR dataset 'd1' has no 'profile'
+dataset writes a bare placeholder
+  ERROR dataset 'd1' writes a bare '?'; gdash produces placeholders itself from ':name' and supplies no argument for a hand-written one
+visual writes a bare placeholder
+  ERROR visual 'v1' writes a bare '?'; gdash produces placeholders itself from ':name' and supplies no argument for a hand-written one
 dataset binds a param
   ERROR dataset 'd1' binds param ':region'; params may appear only in visual queries
 dataset refresh policy
