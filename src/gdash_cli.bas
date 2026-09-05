@@ -105,7 +105,7 @@ program main(args)
         if loaded_users.ok and not is_unknown(gdash_users.lookup(loaded_users.db, who)) then
             print("NOTE: '" + who + "' is also a LOCAL account, and local is consulted first, so the directory below is not what signs them in")
         end if
-        told = gdash_auth_ldap.explain(d, who)
+        told = gdash_auth_ldap.explain(gdash_auth_ldap.directory_ctx(d, gdash_auth_ldap.live_directory()), who)
         j = 0
         while j < count(told.steps)
             print("  " + told.steps[j])

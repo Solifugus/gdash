@@ -21,6 +21,11 @@ program main(args)
 
     s = gdash_test.suite("ldap-live")
 
+    ' The provider's ctx is the profile plus the directory it speaks to. Here
+    ' that directory is the real one; the hermetic suite passes a scripted one
+    ' to exactly the same functions.
+    wire = gdash_auth_ldap.live_directory()
+
     host = default(env("GDASH_LDAP_HOST"), "127.0.0.1")
     port = number(default(env("GDASH_LDAP_PORT"), "3890"))
     base = default(env("GDASH_LDAP_BASE"), "dc=example,dc=invalid")
@@ -35,7 +40,7 @@ program main(args)
             group_strategy: "search", group_base: groups,
             bind_dn: svc_dn, bind_password: svc_pw }
 
-    good = gdash_auth_ldap.ldap_authenticate(tpl, "ada", "fake-directory-pw")
+    good = gdash_auth_ldap.ldap_authenticate(gdash_auth_ldap.directory_ctx(tpl, wire), "ada", "fake-directory-pw")
     s = gdash_test.ok(s, good.ok, "the right password binds against a real directory")
     s = gdash_test.ok(s, good.known, "and the provider says it knows the user")
     s = gdash_test.ok(s, good.available, "with the directory available")
@@ -44,7 +49,7 @@ program main(args)
     s = gdash_test.eq(s, join(sort(good.identity.groups), ","), "analysts,finance", "and the groups a member= search finds")
     s = gdash_test.ok(s, not good.identity.admin, "and no admin it was not given")
 
-    wrong = gdash_auth_ldap.ldap_authenticate(tpl, "ada", "not-the-password")
+    wrong = gdash_auth_ldap.ldap_authenticate(gdash_auth_ldap.directory_ctx(tpl, wire), "ada", "not-the-password")
     s = gdash_test.ok(s, not wrong.ok, "a wrong password is refused")
     s = gdash_test.ok(s, wrong.known, "and it is this provider's user")
     s = gdash_test.ok(s, wrong.available, "with no suggestion the directory is down")
@@ -53,13 +58,13 @@ program main(args)
     ' A DN that does not exist answers invalid_credentials, deliberately: no
     ' enumeration oracle (G5-3). In template mode that makes it indistinguishable
     ' from a wrong password, which is why `known` is true either way.
-    ghost = gdash_auth_ldap.ldap_authenticate(tpl, "nobodyatall", "whatever")
+    ghost = gdash_auth_ldap.ldap_authenticate(gdash_auth_ldap.directory_ctx(tpl, wire), "nobodyatall", "whatever")
     s = gdash_test.ok(s, not ghost.ok, "a user who does not exist is refused")
     s = gdash_test.eq(s, ghost.message, gdash_auth.refusal(), "with the same message as a wrong password")
 
     ' Refused locally: an empty password is an unauthenticated bind, which the
     ' directory answers with SUCCESS. It never travels.
-    blank = gdash_auth_ldap.ldap_authenticate(tpl, "ada", "")
+    blank = gdash_auth_ldap.ldap_authenticate(gdash_auth_ldap.directory_ctx(tpl, wire), "ada", "")
     s = gdash_test.ok(s, not blank.ok, "an empty password cannot sign anyone in")
     s = gdash_test.ok(s, not blank.known, "and is not even sent")
 
@@ -69,7 +74,7 @@ program main(args)
     bare = { kind: "ldap", name: "directory", host: host, port: port, security: "plain",
              user_dn_template: "uid={user}," + people,
              group_strategy: "search", group_base: groups }
-    alone = gdash_auth_ldap.ldap_authenticate(bare, "ada", "fake-directory-pw")
+    alone = gdash_auth_ldap.ldap_authenticate(gdash_auth_ldap.directory_ctx(bare, wire), "ada", "fake-directory-pw")
     s = gdash_test.ok(s, alone.ok, "template mode needs no service account to authenticate")
     s = gdash_test.eq(s, join(sort(alone.identity.groups), ","), "analysts,finance", "and reads groups over the user's own connection")
 
@@ -83,7 +88,7 @@ program main(args)
             user_dn_template: "uid={user}," + people,
             group_strategy: "memberof",
             bind_dn: svc_dn, bind_password: svc_pw }
-    quiet = gdash_auth_ldap.ldap_authenticate(mof, "ada", "fake-directory-pw")
+    quiet = gdash_auth_ldap.ldap_authenticate(gdash_auth_ldap.directory_ctx(mof, wire), "ada", "fake-directory-pw")
     s = gdash_test.ok(s, quiet.ok, "the memberof strategy still authenticates")
     s = gdash_test.eq(s, count(quiet.identity.groups), 0, "and resolves NO groups from a directory with no memberof overlay")
 
@@ -92,28 +97,28 @@ program main(args)
              user_search: { base: people, scope: "sub", filter: "(uid={user})" },
              group_strategy: "search", group_base: groups,
              bind_dn: svc_dn, bind_password: svc_pw }
-    found = gdash_auth_ldap.ldap_authenticate(srch, "bo", "another-fake-pw")
+    found = gdash_auth_ldap.ldap_authenticate(gdash_auth_ldap.directory_ctx(srch, wire), "bo", "another-fake-pw")
     s = gdash_test.ok(s, found.ok, "a service-account search finds the user and binds as them")
     s = gdash_test.eq(s, join(found.identity.groups, ","), "shipping", "with their own groups")
 
     ' With a service account, "no such user" is a fact rather than a guess, so
     ' the chain is told to move on rather than to stop.
-    absent = gdash_auth_ldap.ldap_authenticate(srch, "nobodyatall", "whatever")
+    absent = gdash_auth_ldap.ldap_authenticate(gdash_auth_ldap.directory_ctx(srch, wire), "nobodyatall", "whatever")
     s = gdash_test.ok(s, not absent.ok, "a search that matches nothing does not authenticate")
     s = gdash_test.ok(s, not absent.known, "and reports the username as not this provider's")
     s = gdash_test.ok(s, absent.available, "which is not the same as the directory being down")
 
     ' The injection that escaping exists to stop, against a real server.
-    nasty = gdash_auth_ldap.ldap_authenticate(srch, "*)(uid=*", "fake-directory-pw")
+    nasty = gdash_auth_ldap.ldap_authenticate(gdash_auth_ldap.directory_ctx(srch, wire), "*)(uid=*", "fake-directory-pw")
     s = gdash_test.ok(s, not nasty.ok, "a filter-injection username matches nothing")
     s = gdash_test.ok(s, not nasty.known, "rather than matching the first entry in the tree")
 
     ' --- identity without a password ---------------------------------------
-    who = gdash_auth_ldap.ldap_identity(srch, "ada")
+    who = gdash_auth_ldap.ldap_identity(gdash_auth_ldap.directory_ctx(srch, wire), "ada")
     s = gdash_test.ok(s, who.ok, "an identity re-resolves without a password")
     s = gdash_test.eq(s, join(sort(who.identity.groups), ","), "analysts,finance", "with current groups")
     s = gdash_test.eq(s, who.identity.email, "ada@example.invalid", "and the mail attribute")
-    left = gdash_auth_ldap.ldap_identity(srch, "nobodyatall")
+    left = gdash_auth_ldap.ldap_identity(gdash_auth_ldap.directory_ctx(srch, wire), "nobodyatall")
     s = gdash_test.ok(s, not left.ok, "a user who is not there does not re-resolve")
     s = gdash_test.ok(s, left.available, "and with a service account that is a real absence, not an outage")
 
@@ -123,9 +128,9 @@ program main(args)
              group_strategy: "search", group_base: groups,
              admin_groups: ["finance"],
              bind_dn: svc_dn, bind_password: svc_pw }
-    promoted = gdash_auth_ldap.ldap_authenticate(boss, "ada", "fake-directory-pw")
+    promoted = gdash_auth_ldap.ldap_authenticate(gdash_auth_ldap.directory_ctx(boss, wire), "ada", "fake-directory-pw")
     s = gdash_test.ok(s, promoted.identity.admin, "a named admin group makes an administrator")
-    demoted = gdash_auth_ldap.ldap_authenticate(boss, "bo", "another-fake-pw")
+    demoted = gdash_auth_ldap.ldap_authenticate(gdash_auth_ldap.directory_ctx(boss, wire), "bo", "another-fake-pw")
     s = gdash_test.ok(s, not demoted.identity.admin, "and only for its members")
 
     ' --- a directory that is not there -------------------------------------
@@ -135,7 +140,7 @@ program main(args)
     dead = { kind: "ldap", name: "directory", host: host, port: 1, security: "plain",
              user_dn_template: "uid={user}," + people,
              group_strategy: "search", group_base: groups }
-    outage = gdash_auth_ldap.ldap_authenticate(dead, "ada", "fake-directory-pw")
+    outage = gdash_auth_ldap.ldap_authenticate(gdash_auth_ldap.directory_ctx(dead, wire), "ada", "fake-directory-pw")
     s = gdash_test.ok(s, not outage.ok, "an unreachable directory cannot sign anyone in")
     s = gdash_test.ok(s, not outage.available, "and reports itself unavailable")
     s = gdash_test.ok(s, not outage.known, "rather than claiming the credential was wrong")
@@ -144,7 +149,7 @@ program main(args)
     downgrade = { kind: "ldap", name: "directory", host: host, port: port, security: "starttls",
                   user_dn_template: "uid={user}," + people,
                   group_strategy: "search", group_base: groups }
-    tls = gdash_auth_ldap.ldap_authenticate(downgrade, "ada", "fake-directory-pw")
+    tls = gdash_auth_ldap.ldap_authenticate(gdash_auth_ldap.directory_ctx(downgrade, wire), "ada", "fake-directory-pw")
     s = gdash_test.ok(s, not tls.ok, "StartTLS against a plaintext server does not bind")
     s = gdash_test.ok(s, not tls.available, "and is an operator's problem, not a viewer's")
 
@@ -160,7 +165,7 @@ program main(args)
     s = gdash_test.eq(s, reached.provider, "directory", "and it is the directory that answered")
 
     ' --- the diagnostic prints no password ---------------------------------
-    told = gdash_auth_ldap.explain(tpl, "ada")
+    told = gdash_auth_ldap.explain(gdash_auth_ldap.directory_ctx(tpl, wire), "ada")
     s = gdash_test.ok(s, told.ok, "auth check resolves the user")
     s = gdash_test.eq(s, told.dn, "uid=ada," + people, "and reports the DN it built")
     s = gdash_test.eq(s, count(told.raw), 2, "with the raw group values before normalisation")
@@ -171,7 +176,7 @@ program main(args)
 
     ' The message that would have saved finding G5-4 from being discovered by
     ' a dashboard refusing everyone.
-    empty = gdash_auth_ldap.explain(mof, "ada")
+    empty = gdash_auth_ldap.explain(gdash_auth_ldap.directory_ctx(mof, wire), "ada")
     s = gdash_test.contains_text(s, join(empty.steps, " "), "memberof overlay", "a memberof strategy that resolves nothing says why")
 
     exit(gdash_test.report(s))

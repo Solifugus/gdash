@@ -61,7 +61,9 @@ library gdash_authcfg
         if is_unknown(d) then
             return out
         end if
-        return concat(out, [gdash_auth_ldap.ldap_provider(d)])
+        ' The live directory is the seam's shipped implementation; the tests
+        ' pass a scripted one to the same function.
+        return concat(out, [gdash_auth_ldap.ldap_provider(d, gdash_auth_ldap.live_directory())])
     end function
 
     ' The chain a request uses. A configuration gdash cannot read yields LOCAL

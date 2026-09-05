@@ -329,43 +329,54 @@ library gdash_auth_ldap
         return c
     end function
 
-    ' Open a connection and, when a service account is configured, bind as it.
-    ' Returns { ok, conn, message, reason }. Guards the load, the connect and
-    ' the bind: all three can raise or fail, and none of them may reach a
-    ' request handler as a raise.
-    function open_service(cfg)
+    ' THE SEAM. Everything below this line that touches a directory goes
+    ' through a record of function values, exactly as gdash_session takes a
+    ' store and gdash_auth takes a provider:
+    '
+    '   wire = { ctx,
+    '            open:   fn(ctx, connect_config) -> { ok, conn, reason },
+    '            bind:   fn(ctx, conn, dn, password) -> { ok, reason },
+    '            search: fn(ctx, conn, spec) -> { ok, entries },
+    '            close:  fn(ctx, conn) -> bool }
+    '
+    ' The live implementation is the four `wire_*` functions; a scripted
+    ' directory in tests/ is the other. Before this existed, roughly four
+    ' hundred lines of authentication policy ran ONLY under GDASH_LDAP_TEST=1,
+    ' which is to say: not at all, from a clean checkout with no container.
+    '
+    ' The seam buys more than a coverage number. A healthy directory will not
+    ' return a search that succeeds with zero entries, an entry whose `dn`
+    ' disagrees with the filter that found it, or `server_error` on the third
+    ' call and not the first. Those branches exist precisely because a real
+    ' directory might misbehave, and only a scripted one can make it.
+
+    function wire_open(ctx, config)
         on error goto next
         load ldap
         if error then
-            return { ok: false, conn: unknown, message: "this build has no ldap support", reason: "server_error" }
+            return { ok: false, conn: unknown, reason: "no_ldap" }
         end if
-        conn = ldap.connect(connect_config(cfg))
+        conn = ldap.connect(config)
         if error then
-            return { ok: false, conn: unknown, message: "the directory refused the connection settings", reason: "server_error" }
+            return { ok: false, conn: unknown, reason: "server_error" }
         end if
-        dn = trim(string(default(cfg["bind_dn"], "")))
-        if dn = "" then
-            ' Anonymous. Many directories allow a read-only anonymous search;
-            ' those that do not will simply return nothing, which the caller
-            ' reads as "cannot be sure" rather than as "no such user".
-            return { ok: true, conn: conn, message: "", reason: "" }
-        end if
-        r = ldap.bind(conn, dn, string(default(cfg["bind_password"], "")))
-        if error then
-            closed = ldap.close(conn)
-            return { ok: false, conn: unknown, message: "the service account bind raised", reason: "server_error" }
-        end if
-        if not r.ok then
-            closed = ldap.close(conn)
-            ' The service account's own password being wrong is an operator's
-            ' problem, never a viewer's: it is reported as unavailable, not as
-            ' a bad password.
-            return { ok: false, conn: unknown, message: "the service account could not bind: " + string(r.reason), reason: string(r.reason) }
-        end if
-        return { ok: true, conn: conn, message: "", reason: "" }
+        return { ok: true, conn: conn, reason: "" }
     end function
 
-    function search_guarded(conn, spec)
+    function wire_bind(ctx, conn, dn, password)
+        on error goto next
+        load ldap
+        if error then
+            return { ok: false, reason: "server_error" }
+        end if
+        r = ldap.bind(conn, dn, password)
+        if error then
+            return { ok: false, reason: "server_error" }
+        end if
+        return { ok: r.ok, reason: string(r.reason) }
+    end function
+
+    function wire_search(ctx, conn, spec)
         on error goto next
         load ldap
         if error then
@@ -378,7 +389,7 @@ library gdash_auth_ldap
         return { ok: true, entries: found }
     end function
 
-    function close_guarded(conn)
+    function wire_close(ctx, conn)
         if is_unknown(conn) then
             return false
         end if
@@ -391,12 +402,72 @@ library gdash_auth_ldap
         return true
     end function
 
+    function live_directory()
+        return { ctx: {}, open: gdash_auth_ldap.wire_open, bind: gdash_auth_ldap.wire_bind,
+                 search: gdash_auth_ldap.wire_search, close: gdash_auth_ldap.wire_close }
+    end function
+
+    ' What a provider carries as its ctx: the profile, and the directory it
+    ' speaks to. gBASIC has function references and not closures, so both
+    ' travel as arguments.
+    function directory_ctx(cfg, wire)
+        return { cfg: cfg, wire: wire }
+    end function
+
+    ' Open a connection and, when a service account is configured, bind as it.
+    ' Returns { ok, conn, message, reason }. Guards everything: none of it may
+    ' reach a request handler as a raise.
+    function open_service(wire, cfg)
+        opened = wire.open(wire.ctx, connect_config(cfg))
+        if not opened.ok then
+            if opened.reason = "no_ldap" then
+                return { ok: false, conn: unknown, message: "this build has no ldap support", reason: "server_error" }
+            end if
+            return { ok: false, conn: unknown, message: "the directory refused the connection settings", reason: "server_error" }
+        end if
+        conn = opened.conn
+        dn = trim(string(default(cfg["bind_dn"], "")))
+        if dn = "" then
+            ' Anonymous. Many directories allow a read-only anonymous search;
+            ' those that do not will simply return nothing, which the caller
+            ' reads as "cannot be sure" rather than as "no such user".
+            return { ok: true, conn: conn, message: "", reason: "" }
+        end if
+        r = wire.bind(wire.ctx, conn, dn, string(default(cfg["bind_password"], "")))
+        if not r.ok then
+            closed = wire.close(wire.ctx, conn)
+            ' The service account's own password being wrong is an operator's
+            ' problem, never a viewer's: it is reported as unavailable, not as
+            ' a bad password.
+            return { ok: false, conn: unknown, message: "the service account could not bind: " + string(r.reason), reason: string(r.reason) }
+        end if
+        return { ok: true, conn: conn, message: "", reason: "" }
+    end function
+
+    function search_via(wire, conn, spec)
+        return wire.search(wire.ctx, conn, spec)
+    end function
+
+    function close_via(wire, conn)
+        return wire.close(wire.ctx, conn)
+    end function
+
+    ' Bind as the user, on a connection of their own.
+    function bind_as(wire, cfg, dn, password)
+        opened = wire.open(wire.ctx, connect_config(cfg))
+        if not opened.ok then
+            return { ok: false, reason: "server_error", conn: unknown }
+        end if
+        r = wire.bind(wire.ctx, opened.conn, dn, password)
+        return { ok: r.ok, reason: string(r.reason), conn: opened.conn }
+    end function
+
     ' Find the user's entry with a service (or anonymous) connection.
     ' Returns { ok, dn, entry, certain }. `certain` is false when the search
     ' could not be trusted to be authoritative -- no service account and
     ' nothing came back -- because "the directory would not tell me" and "there
     ' is no such user" are two facts and must not be one branch.
-    function find_user(cfg, conn, username, extra)
+    function find_user(wire, cfg, conn, username, extra)
         us = cfg["user_search"]
         want = [mail_attr(cfg), name_attr(cfg)]
         i = 0
@@ -409,7 +480,7 @@ library gdash_auth_ldap
                  filter: user_filter(cfg, username),
                  attributes: want,
                  limit: 2 }
-        got = search_guarded(conn, spec)
+        got = search_via(wire, conn, spec)
         certain = trim(string(default(cfg["bind_dn"], ""))) != ""
         if not got.ok then
             return { ok: false, dn: "", entry: {}, certain: false }
@@ -421,7 +492,7 @@ library gdash_auth_ldap
     end function
 
     ' The two strategies, named in configuration with no default (G5-4).
-    function groups_for(cfg, conn, dn, entry)
+    function groups_for(wire, cfg, conn, dn, entry)
         style = group_style(cfg)
         strategy = group_strategy(cfg)
         if strategy = "memberof" then
@@ -429,7 +500,7 @@ library gdash_auth_ldap
             if count(raw) = 0 then
                 ' Re-read the entry directly: in template mode there was no
                 ' user search, so nothing has read the attribute yet.
-                got = search_guarded(conn, { base: dn, scope: "base", filter: "(objectClass=*)", attributes: [member_attr(cfg)], limit: 1 })
+                got = search_via(wire, conn, { base: dn, scope: "base", filter: "(objectClass=*)", attributes: [member_attr(cfg)], limit: 1 })
                 if got.ok and count(got.entries) > 0 then
                     raw = values_of(got.entries[0], member_attr(cfg))
                 end if
@@ -437,7 +508,7 @@ library gdash_auth_ldap
             return group_names(raw, style)
         end if
         if strategy = "search" then
-            got = search_guarded(conn, { base: string(cfg["group_base"]),
+            got = search_via(wire, conn, { base: string(cfg["group_base"]),
                                          scope: string(default(cfg["group_scope"], "sub")),
                                          filter: group_filter(cfg, dn),
                                          attributes: [group_name_attr(cfg)] })
@@ -466,7 +537,7 @@ library gdash_auth_ldap
     end function
 
     ' Bind as the user. Returns the ldap module's own outcome, guarded.
-    function bind_as(cfg, dn, password)
+    function bind_as(wire, cfg, dn, password)
         on error goto next
         load ldap
         if error then
@@ -486,7 +557,11 @@ library gdash_auth_ldap
 
     ' --- the provider ------------------------------------------------------
 
-    function ldap_authenticate(cfg, username, password)
+    function ldap_authenticate(ctx, username, password)
+        ' ctx carries the profile and the directory it speaks to
+        ' (directory_ctx). A provider built by ldap_provider always has both.
+        cfg = ctx["cfg"]
+        wire = ctx["wire"]
         if trim(username) = "" or password = "" then
             ' Not sent to the directory: an empty password is an unauthenticated
             ' bind, which the directory answers with SUCCESS. The module refuses
@@ -500,14 +575,14 @@ library gdash_auth_ldap
         if trim(string(default(cfg["user_dn_template"], ""))) != "" then
             dn = dn_from_template(cfg, username)
         else
-            opened = open_service(cfg)
+            opened = open_service(wire, cfg)
             if not opened.ok then
                 return gdash_auth.unreachable(opened.message)
             end if
             svc = opened.conn
-            got = find_user(cfg, svc, username, [member_attr(cfg)])
+            got = find_user(wire, cfg, svc, username, [member_attr(cfg)])
             if not got.ok then
-                closed = close_guarded(svc)
+                closed = close_via(wire, svc)
                 if not got.certain then
                     return gdash_auth.unreachable("the directory could not be searched")
                 end if
@@ -519,10 +594,10 @@ library gdash_auth_ldap
             entry = got.entry
         end if
 
-        bound = bind_as(cfg, dn, password)
+        bound = bind_as(wire, cfg, dn, password)
         if not bound.ok then
-            closed = close_guarded(bound.conn)
-            closed = close_guarded(svc)
+            closed = close_via(wire, bound.conn)
+            closed = close_via(wire, svc)
             if gdash_auth.operational(bound.reason) then
                 return gdash_auth.unreachable("the directory is not answering (" + bound.reason + ")")
             end if
@@ -539,11 +614,11 @@ library gdash_auth_ldap
         if is_unknown(reader) then
             reader = bound.conn
         end if
-        groups = groups_for(cfg, reader, dn, entry)
+        groups = groups_for(wire, cfg, reader, dn, entry)
         email = first_of(entry, mail_attr(cfg))
         shown = first_of(entry, name_attr(cfg))
         if email = "" or shown = "" then
-            got = search_guarded(reader, { base: dn, scope: "base", filter: "(objectClass=*)", attributes: [mail_attr(cfg), name_attr(cfg)], limit: 1 })
+            got = search_via(wire, reader, { base: dn, scope: "base", filter: "(objectClass=*)", attributes: [mail_attr(cfg), name_attr(cfg)], limit: 1 })
             if got.ok and count(got.entries) > 0 then
                 if email = "" then
                     email = first_of(got.entries[0], mail_attr(cfg))
@@ -553,8 +628,8 @@ library gdash_auth_ldap
                 end if
             end if
         end if
-        closed = close_guarded(bound.conn)
-        closed = close_guarded(svc)
+        closed = close_via(wire, bound.conn)
+        closed = close_via(wire, svc)
         return gdash_auth.accept(gdash_auth.make_identity(username, email, groups, is_admin(cfg, groups)))
     end function
 
@@ -562,11 +637,15 @@ library gdash_auth_ldap
     ' Needs a readable directory; when it cannot be sure, it says so rather
     ' than reporting the user gone -- a directory outage that logs everyone out
     ' turns a directory problem into a total outage (brief §2.6).
-    function ldap_identity(cfg, username)
+    function ldap_identity(ctx, username)
+        ' ctx carries the profile and the directory it speaks to
+        ' (directory_ctx). A provider built by ldap_provider always has both.
+        cfg = ctx["cfg"]
+        wire = ctx["wire"]
         if trim(username) = "" then
             return gdash_auth.miss()
         end if
-        opened = open_service(cfg)
+        opened = open_service(wire, cfg)
         if not opened.ok then
             return gdash_auth.unreachable(opened.message)
         end if
@@ -576,9 +655,9 @@ library gdash_auth_ldap
         certain = trim(string(default(cfg["bind_dn"], ""))) != ""
         if trim(string(default(cfg["user_dn_template"], ""))) != "" then
             dn = dn_from_template(cfg, username)
-            got = search_guarded(conn, { base: dn, scope: "base", filter: "(objectClass=*)", attributes: [mail_attr(cfg), name_attr(cfg), member_attr(cfg)], limit: 1 })
+            got = search_via(wire, conn, { base: dn, scope: "base", filter: "(objectClass=*)", attributes: [mail_attr(cfg), name_attr(cfg), member_attr(cfg)], limit: 1 })
             if not got.ok or count(got.entries) = 0 then
-                closed = close_guarded(conn)
+                closed = close_via(wire, conn)
                 if not certain then
                     return gdash_auth.unreachable("the directory could not be read without a service account")
                 end if
@@ -586,9 +665,9 @@ library gdash_auth_ldap
             end if
             entry = got.entries[0]
         else
-            got = find_user(cfg, conn, username, [member_attr(cfg)])
+            got = find_user(wire, cfg, conn, username, [member_attr(cfg)])
             if not got.ok then
-                closed = close_guarded(conn)
+                closed = close_via(wire, conn)
                 if not got.certain then
                     return gdash_auth.unreachable("the directory could not be searched")
                 end if
@@ -597,20 +676,20 @@ library gdash_auth_ldap
             dn = got.dn
             entry = got.entry
         end if
-        groups = groups_for(cfg, conn, dn, entry)
+        groups = groups_for(wire, cfg, conn, dn, entry)
         identity = gdash_auth.make_identity(username, first_of(entry, mail_attr(cfg)), groups, is_admin(cfg, groups))
-        closed = close_guarded(conn)
+        closed = close_via(wire, conn)
         return gdash_auth.accept(identity)
     end function
 
     ' The seam, assembled. A record of function values plus the context they
     ' need, because gBASIC has function references and not closures.
-    function ldap_provider(cfg)
+    function ldap_provider(cfg, wire)
         every = 300
         if not is_unknown(cfg["revalidate"]) then
             every = cfg["revalidate"]
         end if
-        return { kind: "ldap", name: string(default(cfg["name"], "directory")), ctx: cfg,
+        return { kind: "ldap", name: string(default(cfg["name"], "directory")), ctx: directory_ctx(cfg, wire),
                  authenticate: gdash_auth_ldap.ldap_authenticate,
                  identity: gdash_auth_ldap.ldap_identity,
                  revalidate: every }
@@ -628,9 +707,13 @@ library gdash_auth_ldap
     ' It prints no password. The service account's credential is used and never
     ' echoed, and no attribute record beyond the three gdash asked for is read
     ' at all (finding G5-6).
-    function explain(cfg, username)
+    function explain(ctx, username)
+        ' ctx carries the profile and the directory it speaks to
+        ' (directory_ctx). A provider built by ldap_provider always has both.
+        cfg = ctx["cfg"]
+        wire = ctx["wire"]
         steps = ["connect " + string(cfg["host"]) + " security=" + string(cfg["security"])]
-        opened = open_service(cfg)
+        opened = open_service(wire, cfg)
         if not opened.ok then
             return { ok: false, steps: concat(steps, ["FAILED: " + opened.message]), dn: "", raw: [], groups: [], email: "" }
         end if
@@ -645,7 +728,7 @@ library gdash_auth_ldap
         if trim(string(default(cfg["user_dn_template"], ""))) != "" then
             dn = dn_from_template(cfg, username)
             steps = concat(steps, ["user DN from template: " + dn])
-            got = search_guarded(conn, { base: dn, scope: "base", filter: "(objectClass=*)", attributes: [mail_attr(cfg), name_attr(cfg), member_attr(cfg)], limit: 1 })
+            got = search_via(wire, conn, { base: dn, scope: "base", filter: "(objectClass=*)", attributes: [mail_attr(cfg), name_attr(cfg), member_attr(cfg)], limit: 1 })
             if got.ok and count(got.entries) > 0 then
                 entry = got.entries[0]
                 steps = concat(steps, ["read that entry"])
@@ -655,9 +738,9 @@ library gdash_auth_ldap
         else
             f = user_filter(cfg, username)
             steps = concat(steps, ["user search in " + string(cfg["user_search"]["base"]) + " with " + f])
-            got = find_user(cfg, conn, username, [member_attr(cfg)])
+            got = find_user(wire, cfg, conn, username, [member_attr(cfg)])
             if not got.ok then
-                closed = close_guarded(conn)
+                closed = close_via(wire, conn)
                 return { ok: false, steps: concat(steps, ["FAILED: no entry matched"]), dn: "", raw: [], groups: [], email: "" }
             end if
             dn = got.dn
@@ -671,7 +754,7 @@ library gdash_auth_ldap
             steps = concat(steps, ["group_strategy memberof: reading " + member_attr(cfg)])
             raw = values_of(entry, member_attr(cfg))
             if count(raw) = 0 then
-                got = search_guarded(conn, { base: dn, scope: "base", filter: "(objectClass=*)", attributes: [member_attr(cfg)], limit: 1 })
+                got = search_via(wire, conn, { base: dn, scope: "base", filter: "(objectClass=*)", attributes: [member_attr(cfg)], limit: 1 })
                 if got.ok and count(got.entries) > 0 then
                     raw = values_of(got.entries[0], member_attr(cfg))
                 end if
@@ -681,7 +764,7 @@ library gdash_auth_ldap
             end if
         else
             steps = concat(steps, ["group_strategy search in " + string(default(cfg["group_base"], "")) + " with " + group_filter(cfg, dn)])
-            got = search_guarded(conn, { base: string(default(cfg["group_base"], "")), scope: string(default(cfg["group_scope"], "sub")), filter: group_filter(cfg, dn), attributes: [group_name_attr(cfg)] })
+            got = search_via(wire, conn, { base: string(default(cfg["group_base"], "")), scope: string(default(cfg["group_scope"], "sub")), filter: group_filter(cfg, dn), attributes: [group_name_attr(cfg)] })
             if got.ok then
                 i = 0
                 while i < count(got.entries)
@@ -693,8 +776,8 @@ library gdash_auth_ldap
                 steps = concat(steps, ["nothing matched. Check group_base, and whether the groups use 'member' or 'uniqueMember'"])
             end if
         end if
-        groups = groups_for(cfg, conn, dn, entry)
-        closed = close_guarded(conn)
+        groups = groups_for(wire, cfg, conn, dn, entry)
+        closed = close_via(wire, conn)
         return { ok: true, steps: steps, dn: dn, raw: raw, groups: groups, email: first_of(entry, mail_attr(cfg)) }
     end function
 
