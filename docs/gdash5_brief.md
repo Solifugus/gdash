@@ -434,8 +434,11 @@ that could contradict them:
 - §4's money headroom figure; §4's render path; §2's content-hash sentence
   (G2-10).
 
-**Cross-repo, owed to the gbasic session:**
-`gdash5_platform_report_string_nul.md` — `replace`, `trim`, `join`, `split`
-and `ends_with` are C-string-based while `len`, `mid`, `contains` and the rest
-are length-aware, so a NUL silently truncates a value or flips a boolean. It
-is written and ready to send. gdash is not blocked by it.
+**Cross-repo, and now closed:**
+`gdash5_platform_report_string_nul.md` reported that `replace`, `trim`,
+`join`, `split` and `ends_with` were C-string-based while `len`, `mid`,
+`contains` and the rest were length-aware, so a NUL silently truncated a value
+or flipped a boolean. **Fixed at gbasic `36cb538`**, haystack and needle both,
+and re-verified here across all three runners. gdash changed no code: the
+escapes were already one-pass scans, which is the right shape for escaping
+independently of the defect.

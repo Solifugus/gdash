@@ -263,6 +263,31 @@ limitation. Recorded rather than quietly tolerated.
 
 Written up for the platform in `gdash5_platform_report_string_nul.md`.
 
+**Resolved at gbasic `36cb538`** — "strings: NUL is content, in the whole
+family and on both sides". Verified here, all fifteen cases from the sweep
+plus the needle half:
+
+```
+len mid upper lower reverse concat string()   3   (were already right)
+replace trim join                             3   (were 1)
+split[1]                                      2   (was 0)
+ends_with(s, "b")                          true   (was false)
+replace(s, chr(0), "-")               'a-b-c'    (raised)
+split(s, chr(0))                       3 parts    (raised)
+contains / starts_with / ends_with with a NUL needle   all true
+```
+
+And the thing most likely to have been broken by the fix was not: an **empty**
+needle is still refused, so "empty" did not quietly become "matches
+everywhere".
+
+gdash changes nothing. The escapes stay single hand-written passes, because
+one pass is the right shape for escaping regardless — an escape introduced by
+one rule is never re-escaped by the next — but the source comment claiming the
+builtins forced it has been corrected. A comment is a live instruction to the
+next reader, not a record of what was true; the finding above is the record,
+and it stands as written.
+
 ## G5-10 — the namespace audit caught the first new module, again
 
 `gdash_auth.check` collided with `gdash_record.check` on the audit's first run

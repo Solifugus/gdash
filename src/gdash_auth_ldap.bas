@@ -31,13 +31,20 @@ library gdash_auth_ldap
 
     ' --- escaping (pure; these are the hermetic tests) --------------------
 
-    ' THE STRING BUILTINS ARE NOT BINARY-SAFE AND BOTH ESCAPES ARE HAND
-    ' WRITTEN BECAUSE OF IT (finding G5-9). `replace` and `split` treat a
-    ' chr(0) NEEDLE as empty and raise, and worse, `replace` TRUNCATES ITS
-    ' HAYSTACK at the first NUL and returns the prefix with no error at all.
-    ' So the one character that most needs escaping here is the one that
-    ' silently destroys the value on its way through the obvious
-    ' implementation. `mid`/`len`/`code` are binary-safe, so these scan.
+    ' Both escapes are ONE HAND-WRITTEN PASS rather than a chain of `replace`
+    ' calls, so that an escape introduced by one rule is never re-escaped by
+    ' the next. Order-dependence is the classic way to get this wrong, and a
+    ' single scan cannot have it.
+    '
+    ' They were originally hand-written for a second reason that no longer
+    ' applies: `replace`, `trim`, `join`, `split` and `ends_with` used to read
+    ' their arguments as C strings, so a NUL -- the one character RFC 4515 and
+    ' RFC 4514 most oblige us to escape -- silently truncated the value on its
+    ' way through the obvious implementation (finding G5-9). That is fixed in
+    ' the platform as of gbasic `36cb538`, on both the haystack and the needle.
+    ' The scans stay because they are correct, tested and cheap here, not
+    ' because the builtins cannot be trusted; a NUL round-trip is asserted in
+    ' the suite either way.
     '
     ' `mid` is O(i) on codepoint-indexed strings, which makes a per-character
     ' scan quadratic. That is fine at the length of a username and a DN and
