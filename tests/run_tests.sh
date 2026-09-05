@@ -70,6 +70,17 @@ if ! "$HERE/../scripts/gen_catalog_appendix.py" --check; then
     failed=$((failed + 1))
 fi
 
+# The shared-nothing property under more than one worker. Still hermetic:
+# loopback only, fixture source, no database, no display. Skipped with the
+# same switch as the end-to-end run, since both want a port.
+if [[ "${GDASH_SKIP_E2E:-0}" != "1" ]]; then
+    echo "--- multiple workers ---"
+    ran=$((ran + 1))
+    if ! "$HERE/run_workers.sh"; then
+        failed=$((failed + 1))
+    fi
+fi
+
 # The end-to-end spine, over a real HTTP server. Still hermetic: loopback
 # only, fixture source, no database, no display.
 if [[ "${GDASH_SKIP_E2E:-0}" != "1" ]]; then

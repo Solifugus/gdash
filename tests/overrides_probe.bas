@@ -32,7 +32,7 @@ program main(args)
     load web
     load sqlite
     load crypto
-    load chart from "../../gbasic/stdlib/chart.bas"
+    load chart
 
     load gdash_paths from "../src/gdash_paths.bas"
     load gdash_sql from "../src/gdash_sql.bas"

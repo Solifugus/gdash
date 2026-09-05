@@ -49,21 +49,72 @@ library gdash_app
     ' make every deployment's CSRF tokens forgeable by anyone who read the
     ' source, and a per-worker secret would make them forgeable by nobody --
     ' including the worker that has to check them.
+    '
+    ' THAT LAST CLAUSE IS WHY THIS TAKES A LOCK (finding G6-3). Under
+    ' `workers: N` the first request after an install can arrive at several
+    ' workers at once, each finding no secret and each minting its own. The
+    ' creation is therefore serialized with the same advisory lock idiom
+    ' gdash_refresh uses, and the state is re-read inside the lock -- so the
+    ' second worker through finds the first one's secret rather than replacing
+    ' it. The write itself is temp + atomic_replace, like every other durable
+    ' write in gdash; it was the one that was not.
     function secret_of(p)
-        path = gdash_paths.secret_file(p)
-        if gdash_paths.path_exists(path) then
-            on error goto next
-            f {file} = path
-            got = trim(read(f))
-            if not error and got != "" then
-                return got
-            end if
+        got = _read_secret(gdash_paths.secret_file(p))
+        if got != "" then
+            return got
         end if
         made = gdash_paths.ensure_dir(p.config_dir)
-        fresh = crypto.random_token(32)
+        path = gdash_paths.secret_file(p)
+        lockpath = path + ".lock"
         on error goto next
-        nf {file} = path
+        lf {file} = lockpath
+        if not gdash_paths.path_exists(lockpath) then
+            write(lf, "")
+        end if
+        if error then
+            ' No lock is available. Minting unserialized is still better than
+            ' refusing to serve, and the failure it risks is a token that reads
+            ' as expired -- which fails closed.
+            return _mint_secret(path)
+        end if
+        out = ""
+        with lock(lf)
+            again = _read_secret(path)
+            if again != "" then
+                out = again
+            else
+                out = _mint_secret(path)
+            end if
+        end with
+        return out
+    end function
+
+    function _read_secret(path)
+        if not gdash_paths.path_exists(path) then
+            return ""
+        end if
+        on error goto next
+        f {file} = path
+        got = trim(read(f))
+        if error then
+            return ""
+        end if
+        return got
+    end function
+
+    ' Restricted BEFORE it becomes the real file, as gdash_users.save does: a
+    ' window in which the secret is world-readable is a window.
+    function _mint_secret(path)
+        fresh = crypto.random_token(32)
+        tmp = path + ".tmp"
+        on error goto next
+        nf {file} = tmp
         write(nf, fresh)
+        if error then
+            return fresh
+        end if
+        locked = gdash_paths.restrict(tmp)
+        atomic_replace(tmp, path)
         if error then
             return fresh
         end if

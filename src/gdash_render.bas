@@ -20,7 +20,7 @@ library gdash_render
     ' layout CLAUDE.md documents (~/development/gbasic) is what this resolves
     ' against; an installed build needs a real answer here, recorded as a
     ' finding.
-    load chart from "../../gbasic/stdlib/chart.bas"
+    load chart
     load gdash_store from "gdash_store.bas"
     load gdash_format from "gdash_format.bas"
 
