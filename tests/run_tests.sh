@@ -82,6 +82,14 @@ else
     failed=$((failed + 1))
 fi
 
+# An end-to-end assertion whose needle also appears in the stylesheet or the
+# shim passes with the feature removed (G6-6). Eight did.
+echo "--- assertion audit ---"
+ran=$((ran + 1))
+if ! "$HERE/assertion_audit.py"; then
+    failed=$((failed + 1))
+fi
+
 # gBASIC lets one library define the same function twice and silently keeps
 # the later one (G6-11). Three greps find it; nothing else does.
 echo "--- duplicate definitions ---"

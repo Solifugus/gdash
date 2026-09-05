@@ -76,13 +76,17 @@ has "$(cat "$SCRATCH/server.log")" "listening" "server started"
 
 page="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/sales")"
 has "$page" "<svg" "page carries the bar mark as SVG"
-has "$page" "gdash-value" "page carries the value mark"
+has "$page" 'class="gdash-value"' "page carries the value mark"
 has "$page" '$4,927.05' "value mark shows the exact grand total"
 has "$page" "data as of" "page shows data-as-of"
 has "$page" 'data-param="region"' "page carries the slicer bound to :region"
 has "$page" "<option" "slicer options came from a query over the dataset"
 has "$page" "north" "slicer lists a value only the data knows"
-has "$page" "EventSource" "page opens an SSE stream"
+# The shim's EventSource line is page furniture -- it is emitted whatever
+# rendered, and its URL is built from location.pathname, so nothing about it
+# is specific to this dashboard. Asserting on it proved nothing (finding
+# G6-14). The real coverage is further down, where a refresh performed by
+# another process arrives on an open stream as `data: refresh`.
 
 echo "--- two datasets, joined with no schema prefix (design §3) ---"
 has "$page" "Ada Okonjo" "a visual joins the second dataset and renders a value only it knows"
@@ -94,13 +98,13 @@ has "$page" 'class="gdash-tabs"' "multi-tab record renders a tab bar"
 has "$page" 'data-tab="2"' "all three tabs are present"
 has "$page" 'data-pane="1" hidden' "non-active panes start hidden"
 has "$page" "<table>" "the table mark rendered"
-has "$page" "gdashTab" "tab switching is client-side"
+has "$page" 'data-tab="1"' "a second tab rendered, switchable client-side"
 # every tab renders server-side in ONE response -- the Trend tab's line chart
 # is in the page even though the Overview tab is showing.
 has "$page" "trend_by_region" "a hidden tab's visual is already rendered"
 has "$page" "justify-content:space-between" "space maps to flex justification"
 has "$page" "flex:2 1 0" "a weighted child flexes"
-has "$page" "gap:16px" "gap is applied"
+has "$page" "gap:16px;justify-content" "gap is applied to the layout, not just defined in the stylesheet"
 
 echo "--- access fails closed (design §8) ---"
 # An anonymous viewer gets 404, not 403: on an intranet the existence of a
@@ -253,8 +257,8 @@ sleep 2.5
 kill $SSE3 2>/dev/null; wait $SSE3 2>/dev/null
 has "$(cat "$SCRATCH/sse3.txt")" "data: publish" "a publish is announced over SSE"
 hasnt "$(cat "$SCRATCH/sse3.txt")" "data: refresh" "and is NOT announced as a data refresh"
-has "$fresh" "gdash-notice" "the page carries the banner the notice reveals"
-has "$fresh" "hidden" "hidden until there is something to say"
+has "$fresh" 'id="gdash-notice"' "the page carries the banner the notice reveals"
+has "$fresh" 'class="gdash-notice" hidden>' "hidden until there is something to say"
 
 echo "--- rollback, and data that no longer answers the record's question ---"
 out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" snapshots timed 2>&1)"
@@ -444,7 +448,7 @@ PYEOF
 # presence IS the assertion that :user_email carried the right identity.
 mine="$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/d/team")"
 has "$mine" "Only for ada" "a visual binding :user_email renders for the matching identity"
-has "$mine" "gdash-value-number" "with a figure, which an empty result would not render"
+has "$mine" 'gdash-value-number">$' "with a figure, which an empty result would not render"
 
 # The admin has no email, so the same query returns nothing for them. Same
 # dashboard, same dataset, different rows -- design §5's whole claim.
@@ -460,7 +464,7 @@ echo "--- preview-as (design §8) ---"
 # `team` is a draft and ada is in its edit_groups, so she is an editor of it.
 tokA3="$(sed -n 's/.*"csrf":"\([^"]*\)".*/\1/p' <<<"$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/whoami")")"
 page="$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/d/team")"
-has "$page" "gdash-preview" "an editor sees the preview-as control on a draft"
+has "$page" 'action="/d/team/preview"' "an editor sees the preview-as control on a draft"
 
 # ...and nobody sees it on a published dashboard, editor or not. `timed` is
 # published and the admin may edit anything.
