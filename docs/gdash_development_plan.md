@@ -10,7 +10,15 @@ narrow them, never silently widen.
 
 Later phases are sketched more loosely on purpose — earlier findings are
 expected to reshape them, as they did on Studio. Renumber freely; identity
-lives in the names.
+lives in the names. GDASH-6 is an example of that: it was not in the original
+roadmap and was inserted after GDASH-5, on the judgement that no deployment
+was near and that quality mattered more than pace.
+
+**Numbering note.** Briefs written before GDASH-6 was inserted use the old
+numbers, and they are left as written rather than edited: chart vocabulary was
+GDASH-6 and is now **GDASH-7**; deployment and operations was GDASH-7 and is
+now **GDASH-8**. So a forward pointer to "GDASH-7" in `gdash1_brief.md` through
+`gdash5_brief.md` means deployment, not charts.
 
 ## GDASH-0 — Vertical spike  *(brief exists: gdash0_spike_brief.md)*
 
@@ -64,7 +72,21 @@ LDAP(S) bind provider behind the provider interface, group resolution via
 editor-only, audited). Connection profile story finalized for auth providers
 (server-level config, 0600).
 
-## GDASH-6 — Chart vocabulary and rendering depth
+## GDASH-6 — Hardening  *(inserted after GDASH-5; renumbers what follows)*
+
+No new capability. Close the gap between what is designed and what is
+observed, before the chart phase builds more on top of it. Multi-worker
+verification of design §5's shared-nothing claim (step-0, and the first time
+it has ever been executed); hermetic in-process tests for `gdash_app` — 1083
+lines holding every authorization decision, covered until now only by `curl`
+and substring matching; a seam under the LDAP wire so the provider's policy
+runs in the default suite rather than only when a container happens to be up;
+concurrency tests for the refresh lock and the publish swap; and an
+end-to-end assertion style that cannot pass for the wrong reason. The
+deliverable is confidence, and its measure is coverage that survives an
+adversary rather than a happy path.
+
+## GDASH-7 — Chart vocabulary and rendering depth
 
 Grow the mark set and channel depth against real dashboards: legends, axes
 formatting, multi-series behavior, tooips/click-to-publish-parameter in the
@@ -74,7 +96,7 @@ gdash-side work is encoding → library-call translation and the theme layer
 (server-level theme file; per-series color override as the first knob if
 demanded).
 
-## GDASH-7 — Deployment and operations
+## GDASH-8 — Deployment and operations
 
 systemd unit (`CAP_NET_BIND_SERVICE`, `ProtectSystem=strict`,
 `ReadWritePaths`), FHS install target + `--root` parity tests, TLS
