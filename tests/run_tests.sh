@@ -25,6 +25,13 @@ cd "$HERE/.."
 # The refresh parent starts a child interpreter; it finds it here.
 export GDASH_GBASIC="$GBASIC"
 
+# The interpreter is built from a sibling repo that is under active
+# development, and a rebuild mid-run replaces this binary underneath us. That
+# produces failures with no useful output -- a CLI invocation simply exiting 1
+# -- which look like gdash bugs and are not. Recorded at both ends so the run
+# can say so instead of leaving somebody to debug a phantom.
+GBASIC_STAMP_BEFORE="$(stat -c %Y "$GBASIC" 2>/dev/null || echo unknown)"
+
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/gdash-test-XXXXXX")"
 ROOT="$SCRATCH/root"
 mkdir -p "$ROOT"
@@ -92,6 +99,16 @@ if [[ "${GDASH_SKIP_E2E:-0}" != "1" ]]; then
     fi
 fi
 
+# The races. Three pieces of gdash exist because two things can happen at
+# once; until GDASH-6 none of them had ever had two things happen at once.
+if [[ "${GDASH_SKIP_E2E:-0}" != "1" ]]; then
+    echo "--- concurrency ---"
+    ran=$((ran + 1))
+    if ! "$HERE/run_races.sh"; then
+        failed=$((failed + 1))
+    fi
+fi
+
 # The end-to-end spine, over a real HTTP server. Still hermetic: loopback
 # only, fixture source, no database, no display.
 if [[ "${GDASH_SKIP_E2E:-0}" != "1" ]]; then
@@ -100,6 +117,15 @@ if [[ "${GDASH_SKIP_E2E:-0}" != "1" ]]; then
     if ! "$HERE/run_e2e.sh"; then
         failed=$((failed + 1))
     fi
+fi
+
+GBASIC_STAMP_AFTER="$(stat -c %Y "$GBASIC" 2>/dev/null || echo unknown)"
+if [[ "$GBASIC_STAMP_BEFORE" != "$GBASIC_STAMP_AFTER" ]]; then
+    echo
+    echo "NOTE: the gbasic interpreter was rebuilt DURING this run." >&2
+    echo "      $GBASIC changed at $(date -d "@$GBASIC_STAMP_AFTER" 2>/dev/null)." >&2
+    echo "      Any failure above may be an artifact of that, not a gdash defect." >&2
+    echo "      Re-run before believing it." >&2
 fi
 
 echo "---"
