@@ -41,7 +41,10 @@ for testfile in "$HERE"/test_*.bas; do
     caseroot="$ROOT/$name"
     mkdir -p "$caseroot"
     ran=$((ran + 1))
-    if ! "$GBASIC" --line-buffered "$testfile" "$caseroot"; then
+    # Handlers cannot see argv (PLAT-WEB), so gdash_app reads its root from the
+    # environment (G6-5). An in-process handler test therefore needs it there
+    # rather than in args[0]; every other suite ignores it.
+    if ! GDASH_ROOT="$caseroot" "$GBASIC" --line-buffered "$testfile" "$caseroot"; then
         failed=$((failed + 1))
     fi
 done
