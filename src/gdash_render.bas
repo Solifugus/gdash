@@ -81,14 +81,33 @@ library gdash_render
     ' everything else about shape. A missing (x, series) pair stays `unknown`,
     ' which the chart library renders as a gap rather than a zero; a zero
     ' would be a claim the data never made.
+    ' Returns { xs, keys, names, df, x_numeric }.
+    '
+    ' `keys` is the string form of each x value, used for slotting rows; `xs`
+    ' is the x column AS IT WILL REACH THE CHART. Those were the same list
+    ' until GDASH-7, and that was the bug (finding G7-3): every x value was
+    ' stringified, so a line, area or scatter chart -- which needs a numeric x
+    ' to place a point -- received categories and drew NOTHING. It returned a
+    ' complete SVG with axes, gridlines and labels, and no data. gdash shipped
+    ' a reference dashboard with a blank line chart through six phases.
+    '
+    ' `x_numeric` is what the caller uses to refuse rather than render an
+    ' empty frame.
     function _pivot(rows, xch, ych, sch, is_money, scale)
         xs = []
+        keys = []
         names = []
+        x_numeric = true
         i = 0
         while i < count(rows)
-            xv = string(rows[i][xch])
-            if not contains(xs, xv) then
-                xs = concat(xs, [xv])
+            raw_x = rows[i][xch]
+            xv = string(raw_x)
+            if type(raw_x) != "number" then
+                x_numeric = false
+            end if
+            if not contains(keys, xv) then
+                keys = concat(keys, [xv])
+                xs = concat(xs, [raw_x])
             end if
             if sch != "" then
                 sv = string(rows[i][sch])
@@ -108,7 +127,7 @@ library gdash_render
         while c < count(names)
             col = []
             r = 0
-            while r < count(xs)
+            while r < count(keys)
                 col = concat(col, [unknown])
                 r += 1
             end while
@@ -119,7 +138,7 @@ library gdash_render
         i = 0
         while i < count(rows)
             xv = string(rows[i][xch])
-            slot = find(xs, xv)
+            slot = find(keys, xv)
             key = ych
             if sch != "" then
                 key = string(rows[i][sch])
@@ -135,7 +154,7 @@ library gdash_render
             df[key] = col
             i += 1
         end while
-        return { xs: xs, names: names, df: df }
+        return { xs: xs, keys: keys, names: names, df: df, x_numeric: x_numeric }
     end function
 
     function render_visual(name, visual, rows, db_path, attach)
@@ -207,6 +226,19 @@ library gdash_render
             end if
 
             shaped = _pivot(rows, xch, ych, sch, is_money, scale)
+
+            ' A line places points along a numeric axis. Given categories it
+            ' draws NOTHING and still returns a complete chart -- axes,
+            ' gridlines, labels and no data (finding G7-3). An empty chart that
+            ' looks like a chart is worse than an error: the viewer reads it as
+            ' "no data" and the author reads it as "working". So gdash refuses
+            ' here, where it holds the rows and can name the column. `bar`
+            ' takes the same data correctly, and saying so is what turns the
+            ' message into a fix.
+            if mark != "bar" and not shaped.x_numeric then
+                return _err("visual '" + name + "': mark '" + mark + "' needs a numeric 'x', and column '" + string(xch) + "' holds text -- use mark 'bar' for categories, or make the query return a number")
+            end if
+
             on error goto next
             if mark = "bar" then
                 svg = chart.bar(shaped.df, xch, shaped.names)

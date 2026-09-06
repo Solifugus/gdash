@@ -15,13 +15,37 @@ program main(args)
     live = gdash_paths.dataset_db(p, "sales", "draft", "orders")
 
     ' --- series: one query fans out into one chart series per value ---
+    '
+    ' THIS BLOCK USED TO ASSERT "<svg" AND NOTHING ELSE, and it passed for six
+    ' phases while the chart was blank: an empty frame is still an SVG, with
+    ' axes, gridlines and labels (finding G7-3). The assertion now names the
+    ' element that only appears when data was actually drawn.
     sq = "select month as month, region as region, sum(amount) as total from orders group by month, region order by month, region"
-    v = { dataset: "orders", sql: sq, encoding: { mark: "line", x: "month", y: "total", series: "region", format: "currency" } }
+    v = { dataset: "orders", sql: sq, encoding: { mark: "bar", x: "month", y: "total", series: "region", format: "currency" } }
     res = gdash_store.select_rows(live, sq, {}, gdash_render.exact_columns(v), {})
     s = gdash_test.ok(s, res.ok, "series query runs")
     frag = gdash_render.render_visual("trend", v, res.rows, live, {})
-    s = gdash_test.contains_text(s, frag, "<svg", "line mark renders SVG")
-    s = gdash_test.ok(s, not contains(frag, "gdash-error"), "line rendered without error -- " + mid(frag, 0, 120))
+    s = gdash_test.contains_text(s, frag, "<svg", "a series bar renders SVG")
+    s = gdash_test.ok(s, not contains(frag, "gdash-error"), "without error -- " + mid(frag, 0, 120))
+    s = gdash_test.ok(s, count(split(frag, "<rect")) - 1 > 1, "with a bar per series value, not an empty frame")
+
+    ' A line needs a numeric x, and draws a path when it has one.
+    nq = "select cast(substr(month, 6, 2) as integer) as period, sum(amount) as total from orders group by period order by period"
+    nv = { dataset: "orders", sql: nq, encoding: { mark: "line", x: "period", y: "total", format: "currency" } }
+    nres = gdash_store.select_rows(live, nq, {}, gdash_render.exact_columns(nv), {})
+    nfrag = gdash_render.render_visual("trend_num", nv, nres.rows, live, {})
+    s = gdash_test.ok(s, not contains(nfrag, "gdash-error"), "a line over a numeric x renders -- " + mid(nfrag, 0, 120))
+    s = gdash_test.eq(s, count(split(nfrag, "<path")) - 1, 1, "and draws exactly one path, which is the line")
+
+    ' ...and refuses, by name, when the x is text. Loud beats an empty chart:
+    ' the viewer would read a blank plot as "no data" and the author as
+    ' "working".
+    cv = { dataset: "orders", sql: sq, encoding: { mark: "line", x: "month", y: "total", series: "region", format: "currency" } }
+    cfrag = gdash_render.render_visual("trend", cv, res.rows, live, {})
+    s = gdash_test.contains_text(s, cfrag, "gdash-error", "a line over a text x is refused")
+    s = gdash_test.contains_text(s, cfrag, "column 'month' holds text", "naming the column")
+    s = gdash_test.contains_text(s, cfrag, "mark 'bar' for categories", "and what to do instead")
+    s = gdash_test.eq(s, count(split(cfrag, "<svg")) - 1, 0, "with no chart at all, rather than an empty one")
 
     ' The fixture has three regions; the pivot must produce three series, and
     ' a month a region has no row for must be a GAP, not a zero.
@@ -34,11 +58,14 @@ program main(args)
     s = gdash_test.ok(s, is_unknown(north[1]), "a missing (x, series) pair is a gap, not zero")
     s = gdash_test.ok(s, not is_unknown(north[0]), "and the pair that exists has a value")
 
-    ' bar takes the same series channel off the same record shape
-    vb = { dataset: "orders", sql: sq, encoding: { mark: "bar", x: "month", y: "total", series: "region", format: "currency" } }
+    ' Dropping the series channel collapses the fan-out, so the same query
+    ' renders fewer bars. Asserted on the COUNT rather than on inequality: two
+    ' renders differing somewhere is a weaker claim than one having the bars
+    ' the other's series produced.
+    vb = { dataset: "orders", sql: sq, encoding: { mark: "bar", x: "month", y: "total", format: "currency" } }
     bfrag = gdash_render.render_visual("trendbar", vb, res.rows, live, {})
-    s = gdash_test.contains_text(s, bfrag, "<svg", "bar renders with series too")
-    s = gdash_test.ok(s, bfrag != frag, "bar and line are different renders")
+    s = gdash_test.contains_text(s, bfrag, "<svg", "bar renders without a series channel too")
+    s = gdash_test.ok(s, (count(split(bfrag, "<rect")) - 1) < (count(split(frag, "<rect")) - 1), "and draws fewer bars than the same query fanned out by series")
 
     ' a series channel naming no column is refused
     vbad = { dataset: "orders", sql: sq, encoding: { mark: "line", x: "month", y: "total", series: "ghost" } }
