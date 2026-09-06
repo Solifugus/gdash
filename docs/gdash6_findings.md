@@ -396,3 +396,72 @@ from source; native and stdlib modules were outside it and were named as
 outside it. The gap in the estimate was exactly the gap I declared. That is
 the good version of being wrong — but a caveat stated in a report is still a
 hole in the number, and the number is what gets quoted.
+
+## G6-15 — the record validator crashed on author JSON that was not the shape it expected
+
+The front door for author-supplied JSON, and it could be knocked down with a
+valid JSON document:
+
+```json
+{ "format": 1, "name": "b", "datasets": {}, "visuals": {}, "tabs": ["oops"] }
+```
+
+`tb["name"]` on a string raises. Nine sites had the same defect — four
+indexing a container element without asking what it was (`datasets[dn]`,
+`visuals[vn]`, `controls[cnm]`, `tabs[i]`), four calling `keys()` on something
+that might not be a record (`params`, `controls`, a dataset's `columns`, an
+encoding's `formats`), and `check()` itself, which indexed the record before
+establishing it was one.
+
+**This was not merely a CLI annoyance.** `load_file` calls `check`, and
+`_load_dashboard` calls `load_file` on every request — so a hand-edited draft
+of the wrong shape would raise inside a handler, and a raise inside a handler
+kills the worker (PLAT-WEB, let-it-crash). A published record cannot reach
+this state, because publish validates first; a draft is exactly the thing an
+author edits by hand, and the draft is what gets served until the first
+publish.
+
+All nine now refuse with a message, pinned in the golden. Two of the guards
+were mutation-tested by removing them: both crash the suite without them,
+which is the proof the assertions are load-bearing rather than decorative.
+
+Worth naming the pattern, because it is the same one as G6-11 and G5-9: the
+failure was not a wrong answer but a **raise where an answer belonged**, in
+code whose entire job is to report what is wrong with something.
+
+## G6-16 — a NUL truncates a record key, silently
+
+```basic
+r = {}
+r["a" + chr(0) + "b"] = 1
+print(len(keys(r)[0]))        ' 1
+```
+
+gBASIC strings are binary-safe and the string builtins have been since
+`36cb538` (G5-9), but a record **key** carrying a NUL comes back from `keys()`
+truncated at it, with no error. So a dataset named `"a\0b"` in a record file is
+really named `"a"` by the time anything validates it — a legal identifier, and
+not the name the author wrote.
+
+Found by an adversarial assertion that was wrong about gdash: the test expected
+such a name to be refused, and it was accepted, because by then it was no longer
+that name. No gdash change; it is asserted so the behaviour is visible rather
+than surprising, and it belongs with the G5-9 report as the remaining corner of
+the same question.
+
+## G6-17 — a dataset named for a SQL keyword is accepted, by decision
+
+`legal_identifier("select")` is true — it is a legal identifier lexically. The
+name becomes a table name, so a visual reading `from select` fails at query
+time with a sqlite syntax error rather than at load time with a message about
+the record.
+
+**Not fixed, deliberately.** A keyword list is dialect-specific, long, and a
+policy gdash would then own forever; several plausible names (`order`,
+`group`, `values`) are also reasonable business words. The failure is immediate,
+visible on the author's own first refresh, and names the spot. Recorded with an
+assertion so the decision is a decision rather than an oversight.
+
+This is the one place the adversarial pass found something and left it alone,
+and the difference from G6-15 is worth stating: that one raised where an answer
+belonged, this one answers — just later than design §1 would prefer.

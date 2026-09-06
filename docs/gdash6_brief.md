@@ -1,7 +1,8 @@
 # GDASH-6 — Hardening: phase brief
 
-**Status:** OPEN. Step-0 complete and written up in `gdash6_findings.md`
-(G6-1 … G6-6). It passed, which was not the expected outcome.
+**Status:** COMPLETE. All eight §5 criteria met; at the review boundary.
+Findings in `gdash6_findings.md` (G6-1 … G6-17); DONE note in §7. Step-0
+passed, which was not the expected outcome.
 **Narrows:** the GDASH-6 paragraph of `gdash_development_plan.md`, a phase
 inserted after GDASH-5 rather than planned from the start.
 **Authority:** `gdash_design.md` outranks this brief. The findings of GDASH-0
@@ -186,3 +187,74 @@ one is a project. FHS-mode verification and the systemd unit: those are
 GDASH-8's step-0 and belong with the deployment work, not before it. Rate
 limiting and lockout, still GDASH-8. Anything the tests uncover that is a
 missing feature rather than a defect gets a finding, not a fix.
+
+---
+
+## 7. DONE note
+
+All eight §5 criteria met. **25 suites — 744 in-process assertions, 22
+multi-worker, 9 concurrency, 144 end-to-end** — green from a clean checkout
+with no services running, ending scratch-clean and process-clean; the opt-in
+live-Postgres runner passes 8/8 and the live-LDAP runner 49 plus 16 over HTTP.
+
+**Built:** multi-worker as a tested configuration, with readiness correct in
+both `serve` shapes; `gdash_app` in process, its authorization rule as an
+18-cell table; a seam under the LDAP wire and 56 hermetic assertions against a
+scripted directory; the refresh lock and the publish swap tested by producing
+the races; `secret_of` serialized and atomic; an assertion audit that renders
+the page furniture and refuses any end-to-end needle found in it; and
+adversarial passes over both input surfaces.
+
+**What the phase actually found**, which is the measure of whether it was worth
+inserting:
+
+- **gdash could not be installed or relocated at all** (G6-8) — a path literal
+  into the sibling gbasic checkout, invisible for five phases because every
+  process starts from the repo root. That is GDASH-8's whole phase, blocked by
+  a string, and the fix was one word.
+- **The record validator raised instead of answering** on nine kinds of
+  author JSON (G6-15), in code that runs inside request handlers, where a
+  raise kills the worker.
+- **Eight end-to-end assertions were passing for the wrong reason** (G6-6),
+  found mechanically rather than by reading.
+- **A hollow assertion survived mutation testing** (G6-12) — the one the whole
+  G5-4 ruling rests on. It asserted the absence of data, not the discipline of
+  the strategy.
+- **`secret_of` was the only non-atomic durable write in gdash** (G6-3), and
+  the race reproduced one attempt in five against the pre-fix code.
+- **A library could define a function twice, silently** (G6-11) — escalated
+  and now a platform error.
+- **The suite left a process behind on every run** (G6-9), because
+  scratch-clean checked directories and nothing checked processes.
+
+**Deliberately not built** — §6 stands, with these to record:
+
+- **Ten modules still have no dedicated test**, and they are named rather than
+  counted: `gdash_auth_ldap` (765 lines — its policy is covered by
+  `test_directory`, its wire only by the live runner), `gdash_cli` (475 —
+  covered end-to-end only), `gdash_session_files` (123), `gdash_server` (111),
+  `gdash_authcfg` (85), `gdash_refresh_child` (67), `gdash_scheduler` (60),
+  `gdash_source_fixture` (52), `gdash_source_pg` (51), `gdash_audit` (38).
+  Most are exercised indirectly; none is exercised deliberately.
+- **The SSE stream ceiling is unresolved** (G6-10). Concurrent streams do not
+  establish reliably, it does not scale with worker count, and I could not
+  separate worker pinning from curl's buffering with a shell. GDASH-8 owns the
+  number, and the plan already asks for it.
+- **The worker count cannot be configured** (G6-7) — `workers` must be a
+  number literal. GDASH-8's decision: a literal a packager patches, or
+  `webserver.listen` at the cost of the block's static checking.
+- **No performance work.** This phase measured where it had to and tuned
+  nothing; the O(n²) `mid` scans and the ~80µs-per-value money formatting are
+  still unmeasured at scale.
+- **No property-based testing.** gBASIC has no framework and writing one is a
+  project. Mutation testing was done by hand, five mutations at a time, and
+  found the thing the suite could not.
+- **A dataset named for a SQL keyword is still accepted** (G6-17), by
+  decision.
+
+**Design edits owed** (the maintainer's), unchanged from GDASH-5 except that
+§5's shared-nothing claim can now be stated as observed rather than intended.
+
+**Cross-repo:** `gdash6_platform_report_duplicate_defs.md` is **closed** —
+fixed at gbasic `f21486e`. The G5-9 string report is closed. G6-16 (a NUL
+truncating a record key) is the one corner still open, and it is small.
