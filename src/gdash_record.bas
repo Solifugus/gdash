@@ -54,6 +54,20 @@ library gdash_record
         return { ok: count(got.errors) = 0, record: doc, errors: got.errors, warnings: got.warnings }
     end function
 
+    ' AUTHOR-SUPPLIED JSON CAN BE ANY SHAPE. `try_decode` will happily return
+    ' `{"tabs": ["oops"]}`, and indexing a string with ["name"] RAISES. That
+    ' matters more than it looks: load_file calls check() and _load_dashboard
+    ' calls load_file on every request, so a hand-edited draft could kill a
+    ' worker (PLAT-WEB let-it-crash) on every visit to its page. Found by the
+    ' GDASH-6 adversarial pass; before it, four container elements were indexed
+    ' without ever asking what they were.
+    function _is_object(v)
+        if is_unknown(v) then
+            return false
+        end if
+        return type(v) = "record"
+    end function
+
     function legal_space(v)
         return contains(["between", "around", "evenly", "start", "end", "center"], v)
     end function
@@ -176,6 +190,14 @@ library gdash_record
         errors = []
         warnings = []
 
+        ' The record itself may not be a record. load_file already refuses a
+        ' non-object document, but check() is called directly by tests and by
+        ' anything that has a decoded value in hand, and it must answer rather
+        ' than raise -- see _is_object.
+        if not _is_object(rec) then
+            return { errors: ["record must be a JSON object"], warnings: [] }
+        end if
+
         if not _has(rec, "format") then
             errors = concat(errors, ["record has no 'format'"])
         else if rec["format"] != 1 then
@@ -197,6 +219,9 @@ library gdash_record
 
         params = rec["params"]
         if is_unknown(params) then
+            params = {}
+        else if not _is_object(params) then
+            errors = concat(errors, ["'params' must be an object"])
             params = {}
         end if
         param_names = keys(params)
@@ -222,6 +247,10 @@ library gdash_record
         while i < count(ds_names)
             dn = ds_names[i]
             ds = datasets[dn]
+            if not _is_object(ds) then
+                errors = concat(errors, ["dataset '" + dn + "' must be an object"])
+                ds = {}
+            end if
             ' A dataset becomes a table, so its name must be a legal SQL
             ' identifier (design §2).
             if not gdash_sql.legal_identifier(dn) then
@@ -278,6 +307,10 @@ library gdash_record
             end if
             ' money columns must declare a non-negative integer scale
             cols = ds["columns"]
+            if not is_unknown(cols) and not _is_object(cols) then
+                errors = concat(errors, ["dataset '" + dn + "' has a 'columns' that is not an object"])
+                cols = unknown
+            end if
             if not is_unknown(cols) then
                 cn = keys(cols)
                 k = 0
@@ -333,6 +366,10 @@ library gdash_record
         while i < count(vis_names)
             vn = vis_names[i]
             v = visuals[vn]
+            if not _is_object(v) then
+                errors = concat(errors, ["visual '" + vn + "' must be an object"])
+                v = {}
+            end if
             if not _has(v, "dataset") then
                 errors = concat(errors, ["visual '" + vn + "' has no 'dataset'"])
             else if not contains(ds_names, v["dataset"]) then
@@ -398,6 +435,10 @@ library gdash_record
                     end if
                 end if
                 fmts = enc["formats"]
+                if not is_unknown(fmts) and not _is_object(fmts) then
+                    errors = concat(errors, ["visual '" + vn + "' has a 'formats' that is not an object"])
+                    fmts = unknown
+                end if
                 if not is_unknown(fmts) then
                     if mk != "table" then
                         errors = concat(errors, ["visual '" + vn + "' sets 'formats', which only mark 'table' uses"])
@@ -432,12 +473,19 @@ library gdash_record
         controls = rec["controls"]
         if is_unknown(controls) then
             controls = {}
+        else if not _is_object(controls) then
+            errors = concat(errors, ["'controls' must be an object"])
+            controls = {}
         end if
         ctl_names = keys(controls)
         i = 0
         while i < count(ctl_names)
             cnm = ctl_names[i]
             c = controls[cnm]
+            if not _is_object(c) then
+                errors = concat(errors, ["control '" + cnm + "' must be an object"])
+                c = {}
+            end if
             if c["kind"] != "select" then
                 errors = concat(errors, ["control '" + cnm + "' has kind '" + string(c["kind"]) + "'; this build implements 'select'"])
             end if
@@ -464,6 +512,10 @@ library gdash_record
             i = 0
             while i < count(tabs)
                 tb = tabs[i]
+                if not _is_object(tb) then
+                    errors = concat(errors, ["tab[" + string(i) + "] must be an object"])
+                    tb = {}
+                end if
                 if is_unknown(tb["name"]) then
                     errors = concat(errors, ["tab[" + string(i) + "] has no 'name'"])
                 end if

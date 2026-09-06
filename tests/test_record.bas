@@ -133,5 +133,115 @@ program main(args)
     s = gdash_test.ok(s, not bad_parse.ok, "malformed record fails")
     s = gdash_test.contains_text(s, join(bad_parse.errors, "|"), "not valid JSON", "malformed file says so")
 
+    ' --- adversarial (GDASH-6 §2.6) --------------------------------------
+    '
+    ' `check` is the front door for author-supplied JSON: whatever `try_decode`
+    ' will parse can arrive here. The bar is REFUSE, NEVER RAISE, AND NEVER
+    ' HANG. A validator that crashes on a malformed record is a validator that
+    ' cannot report on one, and the CLI's whole job is to say what is wrong.
+
+    ' The record itself, of every wrong shape.
+    s = gdash_test.ok(s, count(gdash_record.check({}).errors) > 0, "an empty record is refused, not accepted")
+    s = gdash_test.ok(s, count(gdash_record.check({ format: 1 }).errors) > 0, "a record with only a format is refused")
+
+    ' Wrong TYPES in every slot that expects a container. Each of these would
+    ' be a crash if the validator indexed before it checked.
+    wrong_types = [
+        { format: 1, name: "b", datasets: "not an object", visuals: {}, tabs: [{ name: "T", layout: { vert: [] } }] },
+        { format: 1, name: "b", datasets: {}, visuals: "not an object", tabs: [{ name: "T", layout: { vert: [] } }] },
+        { format: 1, name: "b", datasets: {}, visuals: {}, tabs: "not an array" },
+        { format: 1, name: "b", datasets: {}, visuals: {}, tabs: [{ name: "T", layout: "not an object" }] },
+        { format: 1, name: "b", datasets: {}, visuals: {}, tabs: [ "not an object" ] },
+        { format: 1, name: "b", datasets: {}, visuals: {}, params: "not an object", tabs: [{ name: "T", layout: { vert: [] } }] },
+        { format: 1, name: "b", datasets: {}, visuals: {}, controls: "not an object", tabs: [{ name: "T", layout: { vert: [] } }] },
+        { format: 1, name: 42, datasets: {}, visuals: {}, tabs: [{ name: "T", layout: { vert: [] } }] },
+        { format: "1", name: "b", datasets: {}, visuals: {}, tabs: [{ name: "T", layout: { vert: [] } }] }
+    ]
+    i = 0
+    while i < count(wrong_types)
+        got = gdash_record.check(wrong_types[i])
+        s = gdash_test.ok(s, count(got.errors) >= 0, "wrong-typed record " + string(i) + " is judged without raising")
+        i += 1
+    end while
+
+    ' A dataset and a visual whose bodies are the wrong type entirely.
+    s = gdash_test.ok(s, count(gdash_record.check({ format: 1, name: "b", datasets: { d1: "not an object" }, visuals: {}, tabs: [{ name: "T", layout: { vert: [] } }] }).errors) > 0, "a dataset that is a string is refused")
+    s = gdash_test.ok(s, count(gdash_record.check({ format: 1, name: "b", datasets: {}, visuals: { v1: 7 }, tabs: [{ name: "T", layout: { vert: [] } }] }).errors) > 0, "a visual that is a number is refused")
+
+    ' --- depth. The layout walk recurses, so nesting is the input that turns
+    ' a validator into a stack overflow. Refusing is fine; crashing is not.
+    deep = { visual: "v1" }
+    d = 0
+    while d < 400
+        deep = { vert: [deep] }
+        d += 1
+    end while
+    nested = { format: 1, name: "b", datasets: { d1: { profile: "p", sql: "select 1" } },
+               visuals: { v1: { dataset: "d1", sql: "select a, b from d1", encoding: { mark: "bar", x: "a", y: "b" } } },
+               tabs: [{ name: "T", layout: deep }] }
+    got_deep = gdash_record.check(nested)
+    s = gdash_test.ok(s, count(got_deep.errors) >= 0, "a layout nested 400 deep is judged rather than fatal")
+
+    ' --- names: empty, unicode, whitespace, and a NUL ---------------------
+    ' `select` is NOT in this list, and neither is a name carrying a NUL --
+    ' see the two assertions after the loop. Both were in the first draft, and
+    ' both were wrong about gdash rather than finding something wrong with it.
+    odd_names = ["", " ", "  ", "reg" + chr(233) + "ion", "1", "-", "a.b", "a-b", "a b"]
+    i = 0
+    while i < count(odd_names)
+        r = { format: 1, name: "b", datasets: {}, visuals: {}, tabs: [{ name: "T", layout: { vert: [] } }] }
+        ds = {}
+        ds[odd_names[i]] = { profile: "p", sql: "select 1" }
+        r["datasets"] = ds
+        got = gdash_record.check(r)
+        s = gdash_test.ok(s, count(got.errors) > 0, "a dataset named <" + odd_names[i] + "> is refused as an identifier")
+        i += 1
+    end while
+
+    ' A dataset name that is a SQL KEYWORD is accepted. `select` is a legal
+    ' identifier lexically, and it becomes a table name -- so a visual reading
+    ' `from select` fails at query time with a sqlite syntax error rather than
+    ' at load time with a message about the record. Recorded as a finding
+    ' rather than fixed: a keyword list is a policy gdash would own forever,
+    ' it is dialect-specific, and the failure is immediate and visible on the
+    ' author's own first refresh. Asserted so the decision is visible.
+    kw = { format: 1, name: "b", datasets: {}, visuals: {}, tabs: [{ name: "T", layout: { vert: [] } }] }
+    kw_ds = {}
+    kw_ds["select"] = { profile: "p", sql: "select 1" }
+    kw["datasets"] = kw_ds
+    s = gdash_test.eq(s, count(gdash_record.check(kw).errors), 0, "a dataset named for a SQL keyword is accepted, by decision")
+
+    ' A NUL inside a record KEY does not survive: gBASIC strings are
+    ' binary-safe and the string builtins have been since 36cb538, but a
+    ' record key carrying a NUL comes back from keys() truncated at it, with
+    ' no error. So a dataset "a\0b" is really named "a" by the time anything
+    ' validates it -- legal, and not the name the author wrote.
+    nul_key = {}
+    nul_key["a" + chr(0) + "b"] = 1
+    s = gdash_test.eq(s, len(keys(nul_key)[0]), 1, "a NUL truncates a record key, silently")
+
+    ' --- volume: many of everything, and it must still finish -------------
+    many = { format: 1, name: "b", datasets: {}, visuals: {}, controls: {}, params: {}, tabs: [] }
+    big_ds = {}
+    big_vis = {}
+    j = 0
+    while j < 9
+        big_ds["d" + string(j)] = { profile: "p", sql: "select 1" }
+        j += 1
+    end while
+    j = 0
+    while j < 200
+        big_vis["v" + string(j)] = { dataset: "d0", sql: "select a, b from d0", encoding: { mark: "bar", x: "a", y: "b" } }
+        j += 1
+    end while
+    many["datasets"] = big_ds
+    many["visuals"] = big_vis
+    many["tabs"] = [{ name: "T", layout: { vert: [] } }]
+    big = gdash_record.check(many)
+    s = gdash_test.eq(s, count(big.errors), 0, "nine datasets and two hundred visuals validate cleanly")
+
+    ' --- a record that is not a record at all ------------------------------
+    s = gdash_test.ok(s, count(gdash_record.check(nothing).errors) > 0, "a record of `nothing` is refused")
+
     exit(gdash_test.report(s))
 end program

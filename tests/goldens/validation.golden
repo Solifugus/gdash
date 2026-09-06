@@ -26,6 +26,33 @@ dataset sql missing
   ERROR dataset 'd1' has no 'sql'
 dataset profile missing
   ERROR dataset 'd1' has no 'profile'
+record is not an object
+  ERROR record must be a JSON object
+dataset is not an object
+  ERROR dataset 'd1' must be an object
+  ERROR dataset 'd1' has no 'sql'
+  ERROR dataset 'd1' has no 'profile'
+visual is not an object
+  ERROR visual 'v1' must be an object
+  ERROR visual 'v1' has no 'dataset'
+  ERROR visual 'v1' has no 'sql'
+  ERROR visual 'v1' has no 'encoding'
+control is not an object
+  ERROR control 'c1' must be an object
+  ERROR control 'c1' has kind 'unknown'; this build implements 'select'
+  ERROR control 'c1' has no 'param'
+tab is not an object
+  ERROR tab[0] must be an object
+  ERROR tab[0] has no 'name'
+  ERROR tab[0] has no 'layout'
+params is not an object
+  ERROR 'params' must be an object
+controls is not an object
+  ERROR 'controls' must be an object
+columns is not an object
+  ERROR dataset 'd1' has a 'columns' that is not an object
+formats is not an object
+  ERROR visual 'v1' has a 'formats' that is not an object
 dataset writes a bare placeholder
   ERROR dataset 'd1' writes a bare '?'; gdash produces placeholders itself from ':name' and supplies no argument for a hand-written one
 visual writes a bare placeholder

@@ -30,6 +30,18 @@ function vis_case(v)
     return r
 end function
 
+function params_case(v)
+    r = skeleton()
+    r["params"] = v
+    return r
+end function
+
+function controls_case(v)
+    r = skeleton()
+    r["controls"] = v
+    return r
+end function
+
 function ctl_case(c)
     r = skeleton()
     r["controls"] = { c1: c }
@@ -87,6 +99,19 @@ program main(args)
     lines = concat(lines, [emit_case("dataset illegal name", ds_case("2bad", { profile: "p", sql: "select 1" }))])
     lines = concat(lines, [emit_case("dataset sql missing", ds_case("d1", { profile: "p" }))])
     lines = concat(lines, [emit_case("dataset profile missing", ds_case("d1", { sql: "select 1" }))])
+    ' --- shapes author-supplied JSON can take that are not objects -------
+    ' Before GDASH-6 each of these RAISED rather than refusing, and load_file
+    ' runs inside request handlers, so a hand-edited draft could kill a worker.
+    lines = concat(lines, [emit_case("record is not an object", "not a record")])
+    lines = concat(lines, [emit_case("dataset is not an object", ds_case("d1", "nope"))])
+    lines = concat(lines, [emit_case("visual is not an object", vis_case("nope"))])
+    lines = concat(lines, [emit_case("control is not an object", ctl_case("nope"))])
+    lines = concat(lines, [emit_case("tab is not an object", tab_case("nope"))])
+    lines = concat(lines, [emit_case("params is not an object", params_case("nope"))])
+    lines = concat(lines, [emit_case("controls is not an object", controls_case("nope"))])
+    lines = concat(lines, [emit_case("columns is not an object", ds_case("d1", { profile: "p", sql: "select 1", columns: "nope" }))])
+    lines = concat(lines, [emit_case("formats is not an object", vis_case({ dataset: "d1", sql: "select a from d1", encoding: { mark: "table", formats: "nope" } }))])
+
     lines = concat(lines, [emit_case("dataset writes a bare placeholder", ds_case("d1", { profile: "p", sql: "select a from t where b = ?" }))])
     lines = concat(lines, [emit_case("visual writes a bare placeholder", vis_case({ dataset: "d1", sql: "select a, b from d1 where c = ?", encoding: { mark: "bar", x: "a", y: "b" } }))])
     lines = concat(lines, [emit_case("dataset binds a param", ds_case("d1", { profile: "p", sql: "select * from t where r = :region" }))])
