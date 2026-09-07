@@ -124,5 +124,38 @@ program main(args)
     write(bf, "{not json")
     s = gdash_test.eq(s, gdash_sched.read_state(path).last_success, 0, "corrupt state reads as never refreshed")
 
+    ' --- a state file that is not what gdash wrote -----------------------
+    '
+    ' Written by gdash and read by gdash, which is exactly why it is checked:
+    ' nothing else would notice if it stopped being what gdash wrote. A full
+    ' disk truncates it, an operator edits it, an older build leaves a
+    ' different shape behind.
+    '
+    ' Since gbasic 2cec71a an ordering comparison across kinds RAISES rather
+    ' than answering, and due() runs on the request path -- so a text value
+    ' here would take a worker down on every page view. It used to answer
+    ' silently and wrongly, which is how it went unnoticed.
+    corrupt = root + "/corrupt.state.json"
+    cf {file} = corrupt
+    write(cf, encode({ format: 1, last_attempt: "yesterday", last_success: "never", rows: "many", requested: "soon", hash: 7 }))
+    cst = gdash_sched.read_state(corrupt)
+    s = gdash_test.eq(s, type(cst.last_success), "number", "a text timestamp falls back to a number")
+    s = gdash_test.eq(s, cst.last_success, 0, "namely zero -- never refreshed")
+    s = gdash_test.eq(s, type(cst.requested), "number", "so does a text request marker")
+    s = gdash_test.eq(s, type(cst.hash), "string", "and a numeric hash becomes text")
+
+    ' The whole point: it must ANSWER, not raise.
+    on error goto next
+    verdict = gdash_sched.due({ refresh: "on_open", min_age: 0 }, cst, 1000, "open")
+    s = gdash_test.ok(s, not error, "a due decision on a corrupt state answers instead of raising")
+    if not error then
+        s = gdash_test.ok(s, not verdict.due, "reading it as a dataset that has never refreshed")
+    end if
+
+    ' A state file that is not an object at all.
+    write(cf, "[1, 2, 3]")
+    lst = gdash_sched.read_state(corrupt)
+    s = gdash_test.eq(s, lst.last_success, 0, "a state file that is a list yields the defaults")
+
     exit(gdash_test.report(s))
 end program

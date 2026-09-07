@@ -168,6 +168,13 @@ for the wrong reason read as coverage and are worse than absent ones.
 
 ## G6-7 — `workers` must be a number literal, so the count cannot be configured
 
+**Closed at gbasic `ca5df46`** by `web.configure`, which merges deployment
+settings into a declaration without the head giving up its literals. gdash
+reads `GDASH_WORKERS`; the generated-source workaround below is gone. The
+finding stands as written, including the part about the error message pointing
+at `webserver.listen` — which the platform confirmed was true for port and
+address and false for workers, and has fixed.
+
 ```
 parse error: server 't': option 'workers' must be a number literal -- head
 options are literals, so the block stays statically checkable; computed

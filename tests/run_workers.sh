@@ -7,13 +7,12 @@
 # claim. Through GDASH-5 it had never been executed -- every test ran against
 # the default `workers: 1` (finding G6-1).
 #
-# `workers` must be a NUMBER LITERAL in the server block's head (G6-7), so the
-# count cannot come from the environment. Rather than commit a second copy of
-# the routing table with a different literal -- two sources of truth for
-# routing, which gdash refuses everywhere else -- this copies src/ to a scratch
-# directory and rewrites the literal there. `load` is script-relative, so the
-# copy resolves its own modules; fixtures are cwd-relative, so the run stays
-# anchored at the repo root.
+# The worker count is CONFIGURATION now (gbasic ca5df46, gdash uses
+# web.configure), so this suite sets GDASH_WORKERS and runs the real
+# src/gdash_server.bas. It used to copy src/ to a scratch directory and rewrite
+# a literal there, because the head took literals only and committing a second
+# copy of the routing table would have been two sources of truth for routing
+# (finding G6-7). That workaround is gone.
 
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,8 +24,8 @@ WORKERS="${GDASH_TEST_WORKERS:-4}"
 PORT=8780
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/gdash-workers-XXXXXX")"
 ROOT="$SCRATCH/root"
-SRC="$SCRATCH/src"
 mkdir -p "$ROOT/etc" "$ROOT/lib/dashboards/sales" "$ROOT/cache" "$ROOT/log" "$ROOT/run"
+SERVER="src/gdash_server.bas"
 
 pass=0; fail=0
 ok(){ if [[ "$2" == "$3" ]]; then echo "  ok   $1"; pass=$((pass+1)); else echo "  FAIL $1: expected <$3> got <$2>"; fail=$((fail+1)); fi; }
@@ -50,16 +49,15 @@ n_secrets(){ grep -o '"csrf":"[^"]*"' "$1" 2>/dev/null | sort -u | wc -l; }
 # so it is a safe pattern to match. `pkill -f gdash_server.bas` would not be:
 # it matches the shell that launched this script too, and killing that reads
 # as a mysterious exit 144.
+# Kill only processes actually NAMED gbasic. A bare `pkill -f gdash_server.bas`
+# also matches the shell that launched this script, and killing that produces a
+# mysterious exit code and no output at all.
 reap(){
-    local pids
-    pids="$(pgrep -f "$SRC/gdash_server.bas" 2>/dev/null | grep -v "^$$\$" | tr '\n' ' ')"
-    [[ -n "$pids" ]] || return 0
-    kill $pids 2>/dev/null
-    for i in $(seq 1 20); do
-        pgrep -f "$SRC/gdash_server.bas" >/dev/null 2>&1 || return 0
-        sleep 0.1
+    local pid
+    for pid in $(pgrep -f "gdash_server.bas" 2>/dev/null); do
+        [[ "$(cat /proc/$pid/comm 2>/dev/null)" == "gbasic" ]] || continue
+        kill "$pid" 2>/dev/null
     done
-    kill -9 $(pgrep -f "$SRC/gdash_server.bas" 2>/dev/null | tr '\n' ' ') 2>/dev/null
 }
 
 cleanup(){
@@ -75,13 +73,6 @@ cleanup(){
 }
 trap cleanup EXIT
 
-cp -r src "$SRC"
-sed -i "s/server gdash_web( port: $PORT )/server gdash_web( port: $PORT, workers: $WORKERS )/" "$SRC/gdash_server.bas"
-if ! grep -q "workers: $WORKERS" "$SRC/gdash_server.bas"; then
-    echo "  FAIL could not set the worker count -- the server block's head changed shape" >&2
-    exit 1
-fi
-
 cp dashboards/sales/draft.json "$ROOT/lib/dashboards/sales/draft.json"
 cat > "$ROOT/etc/connections.json" <<JSON
 { "warehouse":  { "kind": "fixture", "path": "fixtures/orders.json" },
@@ -91,7 +82,7 @@ printf 'fake-analyst-pw\nfake-analyst-pw\n' | "$GBASIC" src/gdash_cli.bas --root
 "$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh sales >/dev/null 2>&1
 
 echo "--- $WORKERS workers ---"
-GDASH_ROOT="$ROOT" "$GBASIC" --line-buffered "$SRC/gdash_server.bas" > "$SCRATCH/server.log" 2>&1 &
+GDASH_ROOT="$ROOT" GDASH_WORKERS="$WORKERS" "$GBASIC" --line-buffered "$SERVER" > "$SCRATCH/server.log" 2>&1 &
 SRV=$!
 
 # READINESS IS SHAPE-DEPENDENT (finding G6-2). At `workers: 1` serve returns
@@ -246,7 +237,7 @@ ok "every concurrent stream sees a refresh performed by another process" "$saw" 
 # processes behind either.
 kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null; SRV=""
 reap
-left="$(pgrep -f "$SRC/gdash_server.bas" 2>/dev/null | wc -l)"
+left="$(pgrep -f "$SERVER" 2>/dev/null | wc -l)"
 ok "no server process outlives the run" "$left" "0"
 
 echo "---"

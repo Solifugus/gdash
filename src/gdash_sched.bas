@@ -22,8 +22,22 @@ library gdash_sched
         return { format: 1, last_attempt: 0, last_success: 0, last_error: "", rows: 0, hash: "", requested: 0, definition: "" }
     end function
 
+    ' A state file is written by gdash and read by gdash, which is exactly the
+    ' reason to check it: nothing else would notice if it stopped being what
+    ' gdash wrote. It can be truncated by a full disk, hand-edited by an
+    ' operator, or left behind by an older build.
+    '
+    ' The type check is not decoration. Since gbasic 2cec71a an ordering
+    ' comparison across kinds RAISES rather than answering, and `due()` is
+    ' called from _request_opens on the request path -- so a state file with
+    ' "last_success": "yesterday" would take a worker down on every page view
+    ' (PLAT-WEB, let-it-crash). Before that change it answered silently and
+    ' wrongly, which is how it went unnoticed.
     function _num(v, fallback)
         if is_unknown(v) or is_nothing(v) then
+            return fallback
+        end if
+        if type(v) != "number" then
             return fallback
         end if
         return v
@@ -54,6 +68,12 @@ library gdash_sched
             return d
         end if
         v = parsed.value
+        if type(v) != "record" then
+            ' Valid JSON of the wrong shape -- `[1,2,3]` decodes fine and then
+            ' raises on the first field read. Same class as the record
+            ' validator's nine (G6-15): a reader that indexes before it asks.
+            return d
+        end if
         return { format: 1, last_attempt: _num(v["last_attempt"], 0), last_success: _num(v["last_success"], 0), last_error: _txt(v["last_error"]), rows: _num(v["rows"], 0), hash: _txt(v["hash"]), requested: _num(v["requested"], 0), definition: _txt(v["definition"]) }
     end function
 

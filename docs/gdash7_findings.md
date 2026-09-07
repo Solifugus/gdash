@@ -238,3 +238,87 @@ one, and it appeared first. Two measurements that disagree by two orders of
 magnitude mean at least one is measuring something other than what it claims,
 and the way to find out is to make them share everything except the thing
 being compared.
+
+---
+
+# Platform update at gbasic `ca5df46`
+
+## G7-11 — the cross-kind comparison change found a crash on the request path
+
+The update said "your `x = 0` guards against possibly-text values are worth a
+grep". They were. Ordering across kinds now raises, and gdash had a reader that
+produced text where a number was expected:
+
+```basic
+function _num(v, fallback)
+    if is_unknown(v) or is_nothing(v) then
+        return fallback
+    end if
+    return v            ' <- never asked whether it WAS a number
+end function
+```
+
+A state file containing `"last_success": "yesterday"` therefore reached
+`st.last_success > 0`, and:
+
+```
+due() RAISED: a string and a number have no order;
+              = and != answer, the ordering operators do not
+```
+
+`due()` is called from `_request_opens` on the **request path**, so a corrupt
+state file would have taken a worker down on every page view. Before this
+change it answered silently and wrongly, which is exactly how it went
+unnoticed through seven phases.
+
+**The change did not create the bug; it converted a silent wrong answer into a
+loud one.** That is the better failure, and it is the second time this platform
+has done that for gdash — the first was the LDAP module refusing to conflate a
+wrong password with an unreachable directory.
+
+## G7-12 — seven JSON readers indexed a decoded value without checking its shape
+
+Fixing G7-11 exposed a bigger one. `read_state` also raised on `[1, 2, 3]` —
+valid JSON that decodes fine and then raises on the first field read. A sweep
+found the same defect in **every** remaining JSON reader:
+
+| reader | what a wrong shape reached |
+|---|---|
+| `gdash_sched.read_state` | the scheduler and the request path |
+| `gdash_users.load_users` | the login path |
+| `gdash_authcfg.load_config` | the login path |
+| `gdash_session_files.get` | `gdash_session.active`, on every request |
+| `gdash_source_fixture` | a refresh |
+| `gdash_refresh.load_profiles` | a refresh |
+| `gdash_refresh_child` | the child process |
+
+This is G6-15 again — the nine sites in the record validator — in the seven
+files GDASH-6's adversarial pass did not reach, because that pass was aimed at
+the record and these read gdash's *own* files. Which is the point worth
+recording: **a file gdash writes and gdash reads is exactly the file nothing
+else would notice had changed shape.** A full disk truncates it, an operator
+edits it, an older build leaves a different shape behind.
+
+All seven now check and fall back to something sane: no users rather than an
+empty user list, no session rather than a broken one, no profiles rather than a
+raise.
+
+## G7-13 — the worker count is configuration now, and G6-7 is closed
+
+`web.configure(sv, settings)` returns another declaration with deployment
+settings merged in, so the head keeps its literals and the value still reaches
+the runtime. gdash reads `GDASH_WORKERS` and passes it through; `run_workers.sh`
+no longer copies `src/` to a scratch directory to rewrite a literal, which is
+about forty lines and one whole class of confusion gone.
+
+Two details from the update are worth keeping:
+
+- **`app.options.workers = 4` was always possible**, and the reason to prefer
+  `configure` is not capability but validation: `app.options.workesr = 4` is
+  accepted in silence, creates a field nothing reads, and leaves the server on
+  the declared value. That is the same failure shape as `chart.options` merging
+  unknown keys (G7-5), and the same answer — refuse by name.
+- **`workers: 0` now raises** rather than quietly serving single-process. gdash
+  clamps a configured `0` up to `1`, because an operator who typed 0 meant one
+  worker, not a dead server, and an environment variable is exactly where a 0
+  arrives by accident.

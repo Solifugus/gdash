@@ -32,6 +32,9 @@ library gdash_source_fixture
             return { ok: false, columns: [], rows: [], message: "fixture is not valid JSON: " + string(parsed.message) }
         end if
         doc = parsed.value
+        if type(doc) != "record" then
+            return { ok: false, rows: [], message: "fixture is not an object" }
+        end if
 
         ' A fixture may carry several named result sets so one file can serve
         ' a dataset and a failure case; `sql` selects nothing here, since the

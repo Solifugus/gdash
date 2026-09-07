@@ -45,6 +45,9 @@ library gdash_authcfg
             ' become a file with nothing in it.
             return { ok: false, config: { format: 1 }, errors: ["auth config is not valid JSON"] }
         end if
+        if type(parsed.value) != "record" then
+            return { ok: false, config: { format: 1 }, errors: ["auth config is not an object"] }
+        end if
         problems = gdash_auth.check_config(parsed.value)
         if count(problems) > 0 then
             return { ok: false, config: parsed.value, errors: problems }

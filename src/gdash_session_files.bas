@@ -72,6 +72,12 @@ library gdash_session_files
         if error or not parsed.ok then
             return unknown
         end if
+        if type(parsed.value) != "record" then
+            ' A session gdash cannot read is a session gdash does not have --
+            ' and one shaped wrongly would raise in gdash_session.active, which
+            ' runs on every request.
+            return unknown
+        end if
         return parsed.value
     end function
 

@@ -102,10 +102,25 @@ program main( args )
     made = gdash_paths.ensure_dir(p.log_dir)
     made = gdash_paths.ensure_dir(p.run_dir)
 
-    ' `serve` belongs to `web`, so it is qualified like any other function from
-    ' another library. It was reachable bare until gbasic 554e22e; the rule
-    ' that changed is the one that stops a bare name resolving into somebody
-    ' else's library, which is what cost this project an afternoon in GDASH-0.
-    h = web.serve(gdash_web)
+    ' The worker count comes from the environment, not the source.
+    '
+    ' A `server` head takes literals, so until gbasic ca5df46 the count was
+    ' fixed at 1 unless somebody edited this file -- and gdash's own
+    ' multi-worker suite had to copy src/ to a scratch directory and rewrite
+    ' the literal there, because committing a second copy of the routing table
+    ' would have been two sources of truth for routing (finding G6-7).
+    '
+    ' `web.configure` returns another declaration with deployment settings
+    ' merged in, so `web.routes`, `web.dispatch` and the outline still work on
+    ' the result. It also VALIDATES: `app.options.workesr = 4` would have been
+    ' accepted in silence, created a field nothing reads, and left the server
+    ' on the declared value.
+    workers = number(default(env("GDASH_WORKERS"), "1"))
+    if workers < 1 then
+        ' `workers: 0` raises since gbasic ca5df46 rather than quietly serving
+        ' single-process. An operator who typed 0 meant one, not a dead server.
+        workers = 1
+    end if
+    h = web.serve(web.configure(gdash_web, { workers: workers }))
     print("gdash: listening on " + string(h.port))
 end program

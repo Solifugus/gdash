@@ -328,6 +328,12 @@ library gdash_refresh
         if error or not parsed.ok then
             return {}
         end if
+        if type(parsed.value) != "record" then
+            ' Connection profiles that are not an object are no profiles at
+            ' all; every dataset then fails by name on its own profile, which
+            ' is a better message than a raise.
+            return {}
+        end if
         return parsed.value
     end function
 

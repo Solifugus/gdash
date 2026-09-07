@@ -28,6 +28,10 @@ program main(args)
         exit(2)
     end if
     job = parsed.value
+    if type(job) != "record" then
+        print to error "job file is not an object"
+        exit(2)
+    end if
 
     profile = job["profile"]
     kind = profile["kind"]

@@ -39,6 +39,11 @@ library gdash_users
             return { ok: false, db: empty(), message: "users file is not valid JSON" }
         end if
         v = parsed.value
+        if type(v) != "record" then
+            ' A users file gdash cannot make sense of must not become a users
+            ' file with no users in it: that is a locked door quietly removed.
+            return { ok: false, db: empty(), message: "users file is not an object" }
+        end if
         if is_unknown(v["users"]) then
             return { ok: false, db: empty(), message: "users file has no 'users' object" }
         end if
