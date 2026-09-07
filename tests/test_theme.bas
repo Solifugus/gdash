@@ -47,7 +47,8 @@ program main(args)
     absent = gdash_theme.load_theme(p)
     s = gdash_test.ok(s, absent.ok, "no theme file is not an error")
     s = gdash_test.eq(s, count(gdash_theme.options_for(absent.theme)), 0, "and contributes no options, leaving the library's own")
-    s = gdash_test.eq(s, count(gdash_theme.palette_for(absent.theme, ["a", "b"], unknown)), 8, "falling back to the built-in eight-colour palette")
+    s = gdash_test.eq(s, count(gdash_theme.palette_for(absent.theme, ["a", "b"], unknown)), 2, "and returns exactly as many colours as there are series")
+    s = gdash_test.eq(s, gdash_theme.palette_for(absent.theme, ["a"], unknown)[0], gdash_theme.builtin_palette()[0], "taken from the built-in palette")
 
     ' --- a theme file ------------------------------------------------------
     made = gdash_paths.ensure_dir(p.config_dir)
@@ -74,7 +75,16 @@ program main(args)
     over["south"] = "#ff0000"
     pal = gdash_theme.palette_for(loaded.theme, ["north", "south", "east"], over)
     s = gdash_test.eq(s, join(pal, ","), "#111111,#ff0000,#222222", "an override takes its slot; the rest advance through the theme")
-    s = gdash_test.eq(s, join(gdash_theme.palette_for(loaded.theme, ["north"], unknown), ","), "#111111,#222222", "no override leaves the theme palette alone")
+    s = gdash_test.eq(s, join(gdash_theme.palette_for(loaded.theme, ["north"], unknown), ","), "#111111", "one series takes the theme's first colour and no more")
+    ' A SHORT THEME MUST NOT BREAK A CHART. The library refuses a palette
+    ' shorter than the series count, and that refusal would reach a viewer as
+    ' an error box. A short theme is extended from the built-ins rather than
+    ' cycled, so no two series share a colour.
+    three = gdash_theme.palette_for(loaded.theme, ["a", "b", "c"], unknown)
+    s = gdash_test.eq(s, count(three), 3, "a two-colour theme still fills three series")
+    s = gdash_test.eq(s, join(three, ","), "#111111,#222222," + gdash_theme.builtin_palette()[0], "extending from the built-ins rather than repeating itself")
+    s = gdash_test.ok(s, three[0] != three[2], "so no two series share a colour")
+
     junk = {}
     junk["south"] = "crimson"
     s = gdash_test.eq(s, join(gdash_theme.palette_for(loaded.theme, ["north", "south"], junk), ","), "#111111,#222222", "an unusable colour falls back rather than reaching the markup")

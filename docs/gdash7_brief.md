@@ -1,7 +1,8 @@
 # GDASH-7 — Chart vocabulary and rendering depth: phase brief
 
-**Status:** OPEN. Step-0 complete and written up in `gdash7_findings.md`
-(G7-1 … G7-7).
+**Status:** COMPLETE except §2.5, which is blocked on the platform and is
+recorded as such rather than worked around. Six of seven §5 criteria met.
+Findings in `gdash7_findings.md` (G7-1 … G7-10); DONE note in §7.
 **Narrows:** the GDASH-7 paragraph of `gdash_development_plan.md` (the phase
 the numbering note calls chart vocabulary; deployment is GDASH-8).
 **Authority:** `gdash_design.md` outranks this brief. The findings of GDASH-0
@@ -188,3 +189,62 @@ unmaintainable. Per-visual themes, dashboards-wide colour scales, and any
 palette editor. Animation, transitions, and hover states beyond a tooltip.
 Drill-through, cross-filtering between dashboards, and anything that needs a
 worker to remember a viewer.
+
+---
+
+## 7. DONE note
+
+**26 suites — 818 in-process assertions, 22 multi-worker, 9 concurrency, 152
+end-to-end** — green from a clean checkout; live Postgres 8/8; live LDAP 49
+plus 16 over HTTP.
+
+Six of seven §5 criteria met. The seventh (click-to-publish) has no premise
+and is written up rather than approximated.
+
+**Built:** the numeric-x refusal; the spec chain and six author-reachable
+options (`title`, `x_label`, `y_label`, `legend`, `stacked`, `grid`,
+`y_min`/`y_max`); the marks `area`, `scatter` and `pie`; a server-level theme
+with one per-series colour override; the downsampling section; and end-to-end
+coverage rendering every new mark through a server with a theme applied.
+
+**What the phase found, which is the measure of whether it was worth running:**
+
+- **gdash's `line` mark had never drawn a line** (G7-3). `_pivot` stringified
+  every x value, so `chart` received categories for every mark. `bar` did not
+  care; `line` drew nothing and returned a complete SVG. The reference
+  dashboard shipped blank from GDASH-0, and the test that should have caught
+  it asserted `contains(frag, "<svg")` — which an empty frame satisfies.
+- **A chart mark's `title` was accepted by the record and rendered by nobody.**
+- **gdash cost three times the chart library it was calling** (G7-9), because
+  `concat` copies (242× `append` at 20k), the x dedupe was O(n²), and arrays
+  are copy-on-write so `col = df[k]` / `col[slot] = v` / `df[k] = col` copies a
+  whole column per row. Found while writing documentation telling authors to
+  downsample.
+- **A short theme palette broke a chart**, with the library's operator-facing
+  "3 series but the palette has 2 colors" reaching a viewer as an error box.
+- **`options_for` returned a palette nothing read** — dead the day it was
+  written, found only by mutating it.
+
+**Deliberately not built** — §6 stands, and additionally:
+
+- **§2.5 interactivity** (G7-8). No mark carries an identifier, and
+  `chart_design.md` §11 says so on purpose. The record vocabulary is decided
+  and kept in §2.5-deferred so the work is a wiring job when the ask lands.
+- **`histogram`, `heatmap`, `sparkline`** (§2.3, with reasons).
+- **Axis tick formatting** (G7-4) — the ask is written; gdash documents the gap
+  rather than post-processing the library's SVG.
+- **The `fake`-backed dashboard was scoped down to nothing.** Its stated
+  purpose was giving charts enough rows and series to be worth clicking, and
+  clicking is deferred; legends, stacking and multi-series are covered by unit
+  tests and now by the end-to-end `charts` dashboard. Building a data
+  generator to exercise features already exercised would have been motion.
+- **No performance tuning beyond G7-9**, which was a defect rather than
+  tuning: the render path is now linear and dominated by the library.
+
+**Cross-repo, owed:** `gdash7_platform_ask_charts.md` carries three asks in
+priority order — ordinal x for line/area/scatter (which makes `line` usable for
+the commonest dashboard chart there is), an identifying attribute per mark
+(which unblocks §2.5), and axis tick formatting (which makes a money axis agree
+with the money beside it).
+
+**Design edits owed** (the maintainer's), unchanged from GDASH-6.

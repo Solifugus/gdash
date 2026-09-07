@@ -128,38 +128,57 @@ library gdash_theme
         return opts
     end function
 
+    ' The eight the library ships: Okabe-Ito, colourblind-safe by
+    ' construction. Used as the fallback and as the EXTENSION of a short theme.
+    function builtin_palette()
+        return ["#000000", "#E69F00", "#56B4E9", "#009E73",
+                "#F0E442", "#0072B2", "#D55E00", "#CC79A7"]
+    end function
+
     ' The palette a visual actually draws with, once a record has had its say.
     '
-    ' `chart` applies a palette in SERIES ORDER, so a per-series override is a
-    ' palette built to match the names being drawn: each name takes its named
-    ' colour if the record gave one, and otherwise the next unused colour from
-    ' the theme. Building it here means the record never has to know its own
-    ' position in the palette.
+    ' `chart` applies a palette in SERIES ORDER and REFUSES A CHART whose
+    ' palette is shorter than its series -- "3 series but the palette has 2
+    ' colors" reaching a viewer as an error box, which is an operator's problem
+    ' shown to the wrong person. So this always returns exactly as many colours
+    ' as there are names.
+    '
+    ' A short theme is EXTENDED from the built-in palette rather than cycled:
+    ' cycling would give two series the same colour, and two series you cannot
+    ' tell apart is a worse chart than one that used a colour the operator did
+    ' not pick. The theme is a preference, not a ceiling.
+    function _nth_colour(base, k)
+        if k < count(base) then
+            return base[k]
+        end if
+        extra = builtin_palette()
+        return extra[mod(k - count(base), count(extra))]
+    end function
+
     function palette_for(theme, names, colors)
         base = theme["palette"]
         if is_unknown(base) or count(base) = 0 then
-            base = ["#000000", "#E69F00", "#56B4E9", "#009E73",
-                    "#F0E442", "#0072B2", "#D55E00", "#CC79A7"]
+            base = builtin_palette()
         end if
-        if is_unknown(colors) then
+        if count(names) = 0 then
             return base
         end if
         out = []
         next_base = 0
         i = 0
         while i < count(names)
-            want = colors[names[i]]
+            want = unknown
+            if not is_unknown(colors) then
+                want = colors[names[i]]
+            end if
             if not is_unknown(want) and legal_color(want) then
                 out = concat(out, [string(want)])
             else
-                out = concat(out, [base[mod(next_base, count(base))]])
+                out = concat(out, [_nth_colour(base, next_base)])
                 next_base += 1
             end if
             i += 1
         end while
-        if count(out) = 0 then
-            return base
-        end if
         return out
     end function
 

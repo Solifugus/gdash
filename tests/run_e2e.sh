@@ -460,6 +460,63 @@ hasnt "$boss" "Only for ada" "and renders nothing for an identity it does not ma
 spoof="$(curl -s -b "$jarC" --max-time 10 "http://127.0.0.1:$PORT/d/team?user_email=ada@example.invalid")"
 hasnt "$spoof" "Only for ada" "a client-supplied user_email is ignored, not honoured"
 
+echo "--- the marks GDASH-7 added, over HTTP, with a theme ---"
+#
+# The new marks have unit coverage; this is the only place they are rendered by
+# a server, through the record, from a real staged database. The line-family
+# marks need a NUMERIC x (G7-3), which the SQL supplies -- the fixture's month
+# is text, which is exactly the case that used to draw nothing.
+python3 - "$ROOT" <<'MKCHARTS'
+import json, os, sys
+r = sys.argv[1]
+base = json.load(open('dashboards/sales/draft.json'))
+d = {"format": 1, "name": "charts", "title": "Every mark", "access": "open",
+     "datasets": {"orders": base["datasets"]["orders"]},
+     "params": {}, "controls": {}, "visuals": {}, "tabs": []}
+period = "cast(substr(month, 6, 2) as integer)"
+d["visuals"]["trend"] = {
+    "dataset": "orders",
+    "sql": f"select {period} as period, sum(amount) as total from orders group by period order by period",
+    "encoding": {"mark": "line", "x": "period", "y": "total",
+                 "title": "Trend", "x_label": "Month", "y_label": "Revenue"}}
+d["visuals"]["band"] = {
+    "dataset": "orders",
+    "sql": f"select {period} as period, region as region, sum(amount) as total "
+           f"from orders group by period, region order by period, region",
+    "encoding": {"mark": "area", "x": "period", "y": "total", "series": "region", "stacked": True}}
+d["visuals"]["points"] = {
+    "dataset": "orders",
+    "sql": f"select {period} as period, sum(amount) as total from orders group by period order by period",
+    "encoding": {"mark": "scatter", "x": "period", "y": "total", "grid": False}}
+d["visuals"]["share"] = {
+    "dataset": "orders",
+    "sql": "select region as region, sum(amount) as total from orders group by region order by region",
+    "encoding": {"mark": "pie", "label": "region", "value": "total", "title": "Share",
+                 "colors": {"west": "#ff00ff"}}}
+d["tabs"] = [{"name": "All", "layout": {"vert": [
+    {"visual": "trend"}, {"visual": "band"}, {"visual": "points"}, {"visual": "share"}]}}]
+os.makedirs(f'{r}/lib/dashboards/charts', exist_ok=True)
+json.dump(d, open(f'{r}/lib/dashboards/charts/draft.json', 'w'), indent=2)
+MKCHARTS
+cat > "$ROOT/etc/theme.json" <<'THEME'
+{ "format": 1, "palette": ["#123456", "#654321"], "font_size": 15 }
+THEME
+
+out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" validate charts 2>&1)"
+has "$out" "validates" "a dashboard using every new mark validates"
+"$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh charts >/dev/null 2>&1
+charts="$(curl -s --max-time 20 "http://127.0.0.1:$PORT/d/charts")"
+# `gdash-error` alone is a STYLESHEET RULE, present on every page -- the exact
+# hollow-assertion shape tests/assertion_audit.py exists to refuse. The needle
+# is the markup an error box actually emits.
+hasnt "$charts" 'class="gdash-error"' "and renders without an error box"
+has "$charts" "<path" "the line and area marks draw paths"
+has "$charts" "<circle" "the scatter draws points"
+has "$charts" ">Trend<" "a chart title reaches the SVG"
+has "$charts" ">Month<" "so does an axis label"
+has "$charts" "#123456" "the server theme's palette is used"
+has "$charts" "#ff00ff" "and a record's per-series colour overrides it"
+
 echo "--- preview-as (design §8) ---"
 # `team` is a draft and ada is in its edit_groups, so she is an editor of it.
 tokA3="$(sed -n 's/.*"csrf":"\([^"]*\)".*/\1/p' <<<"$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/whoami")")"
