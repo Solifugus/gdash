@@ -34,6 +34,22 @@ library gdash_paths
     ' both kinds. `list()` cannot serve: it returns an empty array for a
     ' missing directory rather than raising, so it cannot tell absent from
     ' empty.
+    ' The directory a path sits in. Path arithmetic belongs here with the rest
+    ' of it (CLAUDE.md: no path literal outside the resolver), and this one has
+    ' a caller that matters: gdash spawns a child interpreter and has to find
+    ' it beside itself rather than beside whatever directory it was started
+    ' from (finding G8-2).
+    function dir_of(path)
+        cut = _last_slash(path)
+        if cut < 0 then
+            return "."
+        end if
+        if cut = 0 then
+            return "/"
+        end if
+        return mid(path, 0, cut)
+    end function
+
     function path_exists(path)
         on error goto next
         f {file} = path

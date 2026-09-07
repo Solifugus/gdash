@@ -24,6 +24,10 @@ cd "$HERE/.."
 
 # The refresh parent starts a child interpreter; it finds it here.
 export GDASH_GBASIC="$GBASIC"
+# A test program runs out of tests/, but the refresh child lives in src/. In an
+# install they sit together and gdash finds the child beside itself; here the
+# override says where it actually is (finding G8-2).
+export GDASH_SRC="$HERE/../src"
 
 # The interpreter is built from a sibling repo that is under active
 # development, and a rebuild mid-run replaces this binary underneath us. That

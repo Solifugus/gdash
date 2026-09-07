@@ -22,13 +22,36 @@ library gdash_refresh
     load gdash_audit from "gdash_audit.bas"
     load gdash_record from "gdash_record.bas"
 
+    ' `process.self()` reports the ABSOLUTE path of the running interpreter and
+    ' script, however the process was invoked. That is what makes both of these
+    ' independent of the working directory.
     function _interpreter()
-        return default(env("GDASH_GBASIC"), "gbasic")
+        got = env("GDASH_GBASIC")
+        if not is_unknown(got) and string(got) != "" then
+            return string(got)
+        end if
+        return process.self().interpreter
     end function
 
+    ' The child lives beside whatever program is running -- gdash_cli.bas or
+    ' gdash_server.bas, both of which sit next to it.
+    '
+    ' THIS USED TO BE "src/gdash_refresh_child.bas", RELATIVE TO THE WORKING
+    ' DIRECTORY, so gdash could only refresh when started from the repository
+    ' root (finding G8-2). Installed anywhere, or started by a service manager
+    ' with any other working directory, every refresh failed with
+    ' "src/gdash_refresh_child.bas: No such file or directory". It was
+    ' invisible for eight phases because every process gdash starts is started
+    ' from the repo root -- exactly how G6-8 hid.
+    '
+    ' GDASH_SRC still overrides, which is how the test suite points at src/
+    ' while running a program out of tests/.
     function _child_script()
-        ' The child lives beside this module.
-        return default(env("GDASH_SRC"), "src") + "/gdash_refresh_child.bas"
+        got = env("GDASH_SRC")
+        if not is_unknown(got) and string(got) != "" then
+            return string(got) + "/gdash_refresh_child.bas"
+        end if
+        return gdash_paths.dir_of(process.self().script) + "/gdash_refresh_child.bas"
     end function
 
     function _discard_staging(staging)
