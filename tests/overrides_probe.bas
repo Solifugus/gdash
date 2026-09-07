@@ -48,6 +48,7 @@ program main(args)
     load gdash_diff from "../src/gdash_diff.bas"
     load gdash_app from "../src/gdash_app.bas"
     load gdash_session from "../src/gdash_session.bas"
+    load gdash_throttle from "../src/gdash_throttle.bas"
     load gdash_session_files from "../src/gdash_session_files.bas"
     load gdash_users from "../src/gdash_users.bas"
     load gdash_auth from "../src/gdash_auth.bas"

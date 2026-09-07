@@ -276,6 +276,20 @@ library gdash_paths
         return _join(p.config_dir, "theme.json")
     end function
 
+    ' Failed sign-in counters. Under /run because they are runtime state that
+    ' SHOULD be forgotten on reboot: a machine that has just restarted has no
+    ' business remembering that somebody mistyped a password last week.
+    function throttle_dir(p)
+        return _join(p.run_dir, "throttle")
+    end function
+
+    ' Keyed by a HASH of the username, not the username. Two reasons: a
+    ' username is not a safe filename, and a directory listing of /run should
+    ' not enumerate who has an account.
+    function throttle_file(p, key)
+        return _join(throttle_dir(p), key + ".json")
+    end function
+
     ' The auth providers. 0600 like users.json, because it holds a directory
     ' service account's password; absent means local accounts only, which is
     ' GDASH-4 unchanged and still fails closed.

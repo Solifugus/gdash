@@ -288,7 +288,7 @@ program main(args)
             print(result.notes[j])
             j += 1
         end while
-        print("schedule: " + string(result.checked) + " checked, " + string(result.refreshed) + " refreshed, " + string(result.unchanged) + " unchanged, " + string(result.failed) + " failed")
+        print("schedule: " + string(result.checked) + " checked, " + string(result.refreshed) + " refreshed, " + string(result.unchanged) + " unchanged, " + string(result.failed) + " failed, " + string(result.swept) + " sessions swept")
         if result.failed > 0 then
             exit(1)
         end if

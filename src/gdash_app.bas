@@ -25,6 +25,7 @@ library gdash_app
     load gdash_auth from "gdash_auth.bas"
     load gdash_authcfg from "gdash_authcfg.bas"
     load gdash_theme from "gdash_theme.bas"
+    load gdash_throttle from "gdash_throttle.bas"
     load gdash_audit from "gdash_audit.bas"
 
     function _root_of(req)
@@ -1051,6 +1052,18 @@ library gdash_app
         chain = gdash_authcfg.chain_from(p, cfg.config)
 
         who = string(default(f["user"], ""))
+
+        ' SLOW A GUESSER DOWN, per username, before spending a hash on them.
+        ' The wait applies whether or not the account exists, so it says
+        ' nothing about which -- the same rule as the one refusal message.
+        lim = gdash_throttle.throttle_limits()
+        key = gdash_throttle.key_for(who)
+        waiting = gdash_throttle.delay_remaining(gdash_throttle.read_attempts(p, key), epoch(), lim)
+        if waiting > 0 then
+            logged = gdash_audit.event(p, "login.throttled", { user: who, seconds: waiting })
+            return { status: 429, body: _login_html(p, v.sid, "Too many attempts. Try again in " + string(waiting) + " seconds.", target), headers: { "content-type": "text/html; charset=utf-8", "retry-after": string(waiting) } }
+        end if
+
         got = gdash_auth.sign_in(chain, who, string(default(f["pass"], "")))
         if not got.ok then
             ' The username is audited; the password is not, was not read into
@@ -1064,6 +1077,7 @@ library gdash_app
                 return { status: 503, body: _login_html(p, v.sid, got.message, target), headers: { "content-type": "text/html; charset=utf-8" } }
             end if
             logged = gdash_audit.event(p, "login.failed", { user: who })
+            stored = gdash_throttle.write_attempts(p, key, gdash_throttle.after_failure(gdash_throttle.read_attempts(p, key), epoch(), lim))
             return { status: 401, body: _login_html(p, v.sid, got.message, target), headers: { "content-type": "text/html; charset=utf-8" } }
         end if
 
@@ -1078,6 +1092,10 @@ library gdash_app
         if not bound.ok then
             return _refuse(500, "could not start a session")
         end if
+        ' A success forgets the failures. Somebody who mistypes twice and then
+        ' gets it right is not a threat, and leaving the counter standing would
+        ' make their next mistake more expensive than their first.
+        cleared = gdash_throttle.clear_attempts(p, key)
         logged = gdash_audit.event(p, "login", { user: got.identity.name, provider: got.provider })
         return { status: 303, headers: { "content-type": "text/html; charset=utf-8", "location": target }, body: "", cookies: [gdash_session.cookie("gdash_session", fresh.session.id, _secure(req), gdash_session.limits().absolute)] }
     end function

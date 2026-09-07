@@ -20,6 +20,9 @@ library gdash_refresh
     load gdash_store from "gdash_store.bas"
     load gdash_sched from "gdash_sched.bas"
     load gdash_audit from "gdash_audit.bas"
+    load gdash_session from "gdash_session.bas"
+    load gdash_session_files from "gdash_session_files.bas"
+    load gdash_throttle from "gdash_throttle.bas"
     load gdash_record from "gdash_record.bas"
 
     ' `process.self()` reports the ABSOLUTE path of the running interpreter and
@@ -332,7 +335,26 @@ library gdash_refresh
             end if
             i += 1
         end while
-        return { checked: checked, refreshed: refreshed, unchanged: unchanged, failed: failed, notes: notes }
+        ' EXPIRED SESSIONS, on the same pass. `gdash_session.sweep` has existed
+        ' and been tested since GDASH-4 and was called by nothing through three
+        ' phases; /run clearing on reboot bounds the mess without bounding it
+        ' well, and a machine that stays up for a year accumulates a file per
+        ' abandoned browser.
+        '
+        ' It belongs here for the same reason sweep_staging does: this is the
+        ' periodic maintenance pass, not the refresh pass, and both callers of
+        ' it get the sweep without either remembering to ask.
+        swept = gdash_session.sweep(gdash_session_files.store(p), epoch(), gdash_session.limits())
+        ' Forgotten sign-in counters go too. A guesser inventing usernames
+        ' would otherwise leave one file per invented name.
+        forgot = gdash_throttle.sweep_attempts(p, epoch(), gdash_throttle.throttle_limits())
+        if forgot > 0 then
+            notes = concat(notes, ["forgot " + string(forgot) + " sign-in counter(s)"])
+        end if
+        if swept > 0 then
+            notes = concat(notes, ["swept " + string(swept) + " expired session(s)"])
+        end if
+        return { checked: checked, refreshed: refreshed, unchanged: unchanged, failed: failed, notes: notes, swept: swept }
     end function
 
     ' Connection profiles are server-level and never live in a record

@@ -200,6 +200,21 @@ echo "--- crash residue is swept ---"
 printf 'not a database' > "$ROOT/cache/timed/published/orders__staging.db"
 "$GBASIC" src/gdash_cli.bas --root "$ROOT" schedule >/dev/null 2>&1
 if [[ -f "$ROOT/cache/timed/published/orders__staging.db" ]]; then echo "  FAIL crash residue is swept"; fail=$((fail+1)); else echo "  ok   crash residue is swept"; pass=$((pass+1)); fi
+# EXPIRED SESSIONS GO ON THE SAME PASS. gdash_session.sweep existed and was
+# tested from GDASH-4 and was called by nothing for three phases; /run clearing
+# on reboot bounds the mess without bounding it well, and a host that stays up
+# accumulates one file per abandoned browser.
+mkdir -p "$ROOT/run/sessions"
+stale="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+fresh="BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+now=$(date +%s)
+printf '{"format":1,"id":"%s","user":"","created":%s,"seen":%s,"data":{}}' "$stale" "$((now - 200000))" "$((now - 200000))" > "$ROOT/run/sessions/$stale.json"
+printf '{"format":1,"id":"%s","user":"","created":%s,"seen":%s,"data":{}}' "$fresh" "$now" "$now" > "$ROOT/run/sessions/$fresh.json"
+out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" schedule 2>&1)"
+if [[ -f "$ROOT/run/sessions/$stale.json" ]]; then echo "  FAIL an expired session is swept on the pass"; fail=$((fail+1)); else echo "  ok   an expired session is swept on the pass"; pass=$((pass+1)); fi
+if [[ -f "$ROOT/run/sessions/$fresh.json" ]]; then echo "  ok   and a live one is left alone"; pass=$((pass+1)); else echo "  FAIL a live session was swept too"; fail=$((fail+1)); fi
+has "$out" "sessions swept" "the pass reports what it swept"
+
 audit="$(cat "$ROOT/log/audit.log")"
 has "$audit" "sweep.staging" "and the sweep is audited"
 has "$audit" "refresh.failed" "so is a failed refresh"
@@ -392,6 +407,29 @@ has "$anon_who" "Sign in" "an anonymous viewer on an open dashboard is offered t
 who="$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/whoami")"
 has "$who" '"authenticated":true' "the browser is now authenticated"
 has "$who" '"user":"ada"' "as the user who signed in"
+
+echo "--- a guesser is slowed, a typist is not ---"
+# Three failures are free, because a person who mistypes twice and gets it
+# right should wait exactly as long as somebody who typed it right first time.
+# The fourth costs a second, and it costs it whether or not the account exists.
+jarT="$SCRATCH/throttle.txt"; rm -f "$jarT"
+formT="$(curl -s -c "$jarT" --max-time 10 "http://127.0.0.1:$PORT/login")"
+tokT="$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' <<<"$formT")"
+codes=""
+for i in 1 2 3 4 5; do
+    codes="$codes$(curl -s -o /dev/null -w '%{http_code}' -b "$jarT" -c "$jarT" --max-time 10 \
+        -X POST -d "csrf=$tokT&user=ada&pass=wrong-$i" "http://127.0.0.1:$PORT/login") "
+    tokT="$(sed -n 's/.*"csrf":"\([^"]*\)".*/\1/p' <<<"$(curl -s -b "$jarT" --max-time 10 "http://127.0.0.1:$PORT/whoami")")"
+done
+ok "three failures are free, then the guesser waits" "$codes" "401 401 401 429 429 "
+has "$(cat "$ROOT/log/audit.log")" '"event":"login.throttled"' "and the throttling is audited"
+
+# Per USERNAME, not per address: an intranet behind one NAT is one address, and
+# throttling an address throttles a floor. Same client, same cookie jar, a
+# different name -- unaffected.
+other="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarT" -c "$jarT" --max-time 10 \
+    -X POST -d "csrf=$tokT&user=bo&pass=fake-outsider-pw" "http://127.0.0.1:$PORT/login")"
+ok "another user from the same client is not throttled" "$other" "303"
 
 echo "--- per-dashboard groups ---"
 code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/d/team")"
