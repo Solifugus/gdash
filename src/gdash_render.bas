@@ -248,7 +248,33 @@ library gdash_render
             return "<div class=" + chr(34) + "gdash-value" + chr(34) + "><div class=" + chr(34) + "gdash-value-title" + chr(34) + ">" + html_escape(title) + "</div><div class=" + chr(34) + "gdash-value-number" + chr(34) + ">" + html_escape(shown) + "</div></div>"
         end if
 
-        if mark = "bar" or mark = "line" then
+        ' A pie has no axes: one value column, sliced by a label. It reuses
+        ' _pivot's money handling by going through it with the label as x and
+        ' no series, which is exactly the "one column per name" shape _pivot
+        ' already produces.
+        if mark = "pie" then
+            lch = enc["label"]
+            vch = enc["value"]
+            if not _has_column(row0, lch) then
+                return _err("visual '" + name + "': channel 'label' names column '" + string(lch) + "', which the query does not return")
+            end if
+            if not _has_column(row0, vch) then
+                return _err("visual '" + name + "': channel 'value' names column '" + string(vch) + "', which the query does not return")
+            end if
+            shaped = _pivot(rows, lch, vch, "", is_money, scale)
+            on error goto next
+            sp = chart.spec("pie", shaped.df)
+            sp = chart.x(sp, lch)
+            sp = chart.y(sp, [vch])
+            sp = chart.options(sp, _chart_options(enc, ""))
+            svg = chart.render(sp)
+            if error then
+                return _err("visual '" + name + "': chart library refused the data: " + error.message)
+            end if
+            return svg
+        end if
+
+        if contains(["bar", "line", "area", "scatter"], mark) then
             xch = enc["x"]
             ych = enc["y"]
             if not _has_column(row0, xch) then

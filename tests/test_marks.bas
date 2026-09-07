@@ -136,5 +136,37 @@ program main(args)
     s = gdash_test.ok(s, stacked != grouped, "stacked renders differently from grouped")
     s = gdash_test.eq(s, count(split(stacked, "<rect")) - 1, count(split(grouped, "<rect")) - 1, "with the same number of bars, in different places")
 
+    ' --- the marks GDASH-7 added (§2.3) ----------------------------------
+    '
+    ' Asserted on the ELEMENT each mark exists to draw, not on "<svg": an
+    ' empty frame is an svg, which is how a blank line chart survived six
+    ' phases (G7-3).
+    area_out = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "area", x: "m", y: "amt", series: "r" } }, ser_rows, "", {})
+    s = gdash_test.ok(s, not contains(area_out, "gdash-error"), "an area renders -- " + mid(area_out, 0, 110))
+    s = gdash_test.ok(s, count(split(area_out, "<path")) - 1 >= 2, "with a filled band per series")
+
+    scat = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "scatter", x: "m", y: "amt", series: "r" } }, ser_rows, "", {})
+    s = gdash_test.ok(s, not contains(scat, "gdash-error"), "a scatter renders")
+    s = gdash_test.eq(s, count(split(scat, "<circle")) - 1, 4, "with a point per row, not a line")
+    s = gdash_test.eq(s, count(split(scat, "<path")) - 1, 0, "and no path joining them")
+
+    ' area and scatter share line's axis, so they inherit its numeric-x rule.
+    for each mk in ["area", "scatter"]
+        cat_rows = [ { m: "Jan", amt: 1.0 }, { m: "Feb", amt: 2.0 } ]
+        out = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: mk, x: "m", y: "amt" } }, cat_rows, "", {})
+        s = gdash_test.contains_text(s, out, "holds text", "mark '" + mk + "' refuses a text x like line does")
+    next
+
+    pie_rows = [ { r: "north", amt: 10.0 }, { r: "south", amt: 5.0 }, { r: "east", amt: 22.0 } ]
+    pie_out = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "pie", label: "r", value: "amt", title: "Share" } }, pie_rows, "", {})
+    s = gdash_test.ok(s, not contains(pie_out, "gdash-error"), "a pie renders -- " + mid(pie_out, 0, 110))
+    s = gdash_test.eq(s, count(split(pie_out, "<path")) - 1, 3, "with a slice per label")
+    s = gdash_test.contains_text(s, pie_out, ">Share<", "and takes a title")
+    s = gdash_test.contains_text(s, pie_out, "north", "labelling its slices without a legend")
+
+    ' A pie names its channels differently, so a wrong one is caught by name.
+    pie_bad = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "pie", label: "nope", value: "amt" } }, pie_rows, "", {})
+    s = gdash_test.contains_text(s, pie_bad, "channel 'label' names column 'nope'", "a pie's label channel is checked against the query")
+
     exit(gdash_test.report(s))
 end program

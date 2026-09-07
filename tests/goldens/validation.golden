@@ -100,29 +100,43 @@ visual encoding missing
 visual mark missing
   ERROR visual 'v1' encoding has no 'mark'
 visual mark unknown
-  ERROR visual 'v1' uses mark 'sankey'; this build renders bar, line, value and table
+  ERROR visual 'v1' uses mark 'sankey'; this build renders bar, line, area, scatter, pie, value and table
 bar missing channels
   ERROR visual 'v1' mark 'bar' needs both 'x' and 'y' channels
 value missing channel
   ERROR visual 'v1' mark 'value' needs a 'value' channel
 table with channels
   ERROR visual 'v1' mark 'table' takes no x, y or series channel; it renders result columns in SELECT order
+area needs both channels
+  ERROR visual 'v1' mark 'area' needs both 'x' and 'y' channels
+scatter needs both channels
+  ERROR visual 'v1' mark 'scatter' needs both 'x' and 'y' channels
+pie needs label and value
+  ERROR visual 'v1' mark 'pie' needs both 'label' and 'value' channels
+pie given axes
+  ERROR visual 'v1' mark 'pie' takes 'label' and 'value', not 'x' and 'y'
+pie given a series
+  ERROR visual 'v1' mark 'pie' takes no 'series'; a pie is one series by construction
+stacked on a scatter
+  ERROR visual 'v1' sets 'stacked', which only mark 'bar' or 'area' uses
+legend on a pie
+  ERROR visual 'v1' sets 'legend'; a pie labels its slices directly and has no legend to turn on
 x_label on wrong mark
-  ERROR visual 'v1' sets 'x_label', which only mark 'bar' or 'line' uses
+  ERROR visual 'v1' sets 'x_label', which only a mark with axes uses
 y_label not text
   ERROR visual 'v1' has a 'y_label' that is not text
 legend on wrong mark
-  ERROR visual 'v1' sets 'legend', which only mark 'bar' or 'line' uses
+  ERROR visual 'v1' sets 'legend', which only a mark with axes uses
 grid not boolean
   ERROR visual 'v1' has a 'grid' that is not true or false
 stacked on wrong mark
-  ERROR visual 'v1' sets 'stacked', which only mark 'bar' uses
+  ERROR visual 'v1' sets 'stacked', which only mark 'bar' or 'area' uses
 y_min not a number
   ERROR visual 'v1' has a 'y_min' that is not a number
 y_min at or above y_max
   ERROR visual 'v1' has 'y_min' at or above 'y_max'; the axis would have no height
 series on wrong mark
-  ERROR visual 'v1' sets 'series', which only mark 'bar' or 'line' uses
+  ERROR visual 'v1' sets 'series', which only marks with axes use
 format unknown
   ERROR visual 'v1' uses format 'sparkline'; this build renders currency, number, percent and text
 formats on wrong mark

@@ -402,11 +402,25 @@ library gdash_record
                 mk = enc["mark"]
                 if is_unknown(mk) then
                     errors = concat(errors, ["visual '" + vn + "' encoding has no 'mark'"])
-                else if not contains(["bar", "line", "value", "table"], mk) then
-                    errors = concat(errors, ["visual '" + vn + "' uses mark '" + string(mk) + "'; this build renders bar, line, value and table"])
-                else if mk = "bar" or mk = "line" then
+                else if not contains(["bar", "line", "area", "scatter", "pie", "value", "table"], mk) then
+                    errors = concat(errors, ["visual '" + vn + "' uses mark '" + string(mk) + "'; this build renders bar, line, area, scatter, pie, value and table"])
+                else if contains(["bar", "line", "area", "scatter"], mk) then
                     if is_unknown(enc["x"]) or is_unknown(enc["y"]) then
                         errors = concat(errors, ["visual '" + vn + "' mark '" + string(mk) + "' needs both 'x' and 'y' channels"])
+                    end if
+                else if mk = "pie" then
+                    ' A pie has no axes: it slices ONE value column by a label.
+                    ' The library refuses two value columns at render time with
+                    ' a clear message; refusing here means the author does not
+                    ' need a database to find out (design §1).
+                    if is_unknown(enc["label"]) or is_unknown(enc["value"]) then
+                        errors = concat(errors, ["visual '" + vn + "' mark 'pie' needs both 'label' and 'value' channels"])
+                    end if
+                    if not is_unknown(enc["x"]) or not is_unknown(enc["y"]) then
+                        errors = concat(errors, ["visual '" + vn + "' mark 'pie' takes 'label' and 'value', not 'x' and 'y'"])
+                    end if
+                    if not is_unknown(enc["series"]) then
+                        errors = concat(errors, ["visual '" + vn + "' mark 'pie' takes no 'series'; a pie is one series by construction"])
                     end if
                 else if mk = "value" then
                     if is_unknown(enc["value"]) then
@@ -426,14 +440,14 @@ library gdash_record
                 ' The library merges unknown keys silently (G7-5), so a typo
                 ' would be accepted and do nothing. Refusing here is what makes
                 ' `y_lable` a message instead of a mystery.
-                chart_marks = ["bar", "line"]
+                chart_marks = ["bar", "line", "area", "scatter"]
                 i2 = 0
                 text_opts = ["x_label", "y_label"]
                 while i2 < count(text_opts)
                     ok2 = text_opts[i2]
                     if not is_unknown(enc[ok2]) then
                         if not contains(chart_marks, mk) then
-                            errors = concat(errors, ["visual '" + vn + "' sets '" + ok2 + "', which only mark 'bar' or 'line' uses"])
+                            errors = concat(errors, ["visual '" + vn + "' sets '" + ok2 + "', which only a mark with axes uses"])
                         else if type(enc[ok2]) != "string" then
                             errors = concat(errors, ["visual '" + vn + "' has a '" + ok2 + "' that is not text"])
                         end if
@@ -446,8 +460,14 @@ library gdash_record
                 while i2 < count(flag_opts)
                     ok2 = flag_opts[i2]
                     if not is_unknown(enc[ok2]) then
-                        if not contains(chart_marks, mk) then
-                            errors = concat(errors, ["visual '" + vn + "' sets '" + ok2 + "', which only mark 'bar' or 'line' uses"])
+                        if mk = "pie" and ok2 = "legend" then
+                            ' Verified against the library: a pie renders the
+                            ' same bytes with legend true or false, because it
+                            ' labels its slices directly. Accepting the key
+                            ' would be accepting one that does nothing.
+                            errors = concat(errors, ["visual '" + vn + "' sets 'legend'; a pie labels its slices directly and has no legend to turn on"])
+                        else if not contains(chart_marks, mk) then
+                            errors = concat(errors, ["visual '" + vn + "' sets '" + ok2 + "', which only a mark with axes uses"])
                         else if type(enc[ok2]) != "boolean" then
                             errors = concat(errors, ["visual '" + vn + "' has a '" + ok2 + "' that is not true or false"])
                         end if
@@ -458,8 +478,8 @@ library gdash_record
                 ' 'stacked' is narrower still: stacking a line means an area
                 ' chart, which this build does not render.
                 if not is_unknown(enc["stacked"]) then
-                    if mk != "bar" then
-                        errors = concat(errors, ["visual '" + vn + "' sets 'stacked', which only mark 'bar' uses"])
+                    if mk != "bar" and mk != "area" then
+                        errors = concat(errors, ["visual '" + vn + "' sets 'stacked', which only mark 'bar' or 'area' uses"])
                     else if type(enc["stacked"]) != "boolean" then
                         errors = concat(errors, ["visual '" + vn + "' has a 'stacked' that is not true or false"])
                     end if
@@ -473,7 +493,7 @@ library gdash_record
                     ok2 = range_opts[i2]
                     if not is_unknown(enc[ok2]) then
                         if not contains(chart_marks, mk) then
-                            errors = concat(errors, ["visual '" + vn + "' sets '" + ok2 + "', which only mark 'bar' or 'line' uses"])
+                            errors = concat(errors, ["visual '" + vn + "' sets '" + ok2 + "', which only a mark with axes uses"])
                         else if type(enc[ok2]) != "number" then
                             errors = concat(errors, ["visual '" + vn + "' has a '" + ok2 + "' that is not a number"])
                         end if
@@ -488,8 +508,10 @@ library gdash_record
 
                 ' 'series' belongs only to marks that can fan out.
                 if not is_unknown(enc["series"]) then
-                    if not contains(["bar", "line"], mk) then
-                        errors = concat(errors, ["visual '" + vn + "' sets 'series', which only mark 'bar' or 'line' uses"])
+                    ' `pie` has already refused this with a message of its
+                    ' own; two errors for one mistake is noise.
+                    if not contains(["bar", "line", "area", "scatter", "pie"], mk) then
+                        errors = concat(errors, ["visual '" + vn + "' sets 'series', which only marks with axes use"])
                     end if
                 end if
 
