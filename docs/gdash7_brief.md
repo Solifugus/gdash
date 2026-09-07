@@ -94,7 +94,19 @@ red). Everything else is the deployment's business, not the dashboard's.
 
 Absent file means the library's defaults, which are already colourblind-safe.
 
-### 2.5 Interactivity, within design §5
+### 2.5 Interactivity — BLOCKED, see finding G7-8
+
+**Not built.** Both halves need a way to tell which mark was hit, and the
+library emits no identifier on any mark — deliberately, as a stated v1
+non-goal. The three workarounds (rewriting its SVG, matching by DOM order,
+recomputing hit regions) are each worse than waiting, and the fourth that looks
+reasonable — a clickable category strip in gdash's own markup — is the `select`
+control gdash already ships, wearing a hat.
+
+The ask is written. What follows is what the scope WOULD have been, kept so the
+record vocabulary is already decided when the premise arrives:
+
+### 2.5-deferred Interactivity, within design §5
 
 Workers share no in-memory state, so both of these ride the existing
 mechanisms and neither invents a new one:

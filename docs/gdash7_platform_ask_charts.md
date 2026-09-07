@@ -74,6 +74,39 @@ documents the gap and waits.
 
 ---
 
+## 3. A mark carries nothing that identifies it
+
+```
+<rect x="54.48" y="12" width="240.64" height="324" fill="#000000"/>
+```
+
+Geometry and fill, no `id`, `class`, `data-` attribute or `<title>`. So a
+caller cannot answer "which bar was clicked" or "which slice is under the
+pointer" without either matching on DOM order (true until a legend adds swatch
+rects) or reimplementing the layout to compute hit regions (guaranteed to
+drift).
+
+`chart_design.md` §11 already anticipates this:
+
+> interactivity, tooltips, zoom, animation (SVG can host them later via a
+> separate opt-in; the core stays static and JS-free)
+
+### The ask
+
+That opt-in, at its smallest: **an option that adds an identifying attribute to
+each data mark** — something like `data-key="north"` for the category and
+`data-series="revenue"` for the column, on rects, paths, circles and slices.
+
+It keeps the core static and JS-free: attributes are markup, and the
+JavaScript stays the caller's. It is also the whole of what a caller needs —
+given a key on the element, tooltips and click-to-filter are ordinary DOM work.
+
+gdash has **not** built its interactivity around a workaround, and would rather
+ship nothing than ship SVG rewriting or DOM-order matching. Its
+click-to-publish-a-param feature is deferred to whenever this lands.
+
+---
+
 ## Smaller note: `chart.options` accepts unknown keys silently
 
 `options()` merges whatever record it is given, so `ylabel` instead of

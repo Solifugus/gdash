@@ -128,3 +128,52 @@ write it down — and the check turned a false finding about legends into a real
 one about empty plots. Recorded because the near-miss is the same shape as
 G6-12: a measurement that agrees with itself across several cases is not
 thereby correct, and identical numbers are a smell, not a confirmation.
+
+## G7-8 — the interactivity half of §2.5 has no premise, and the library says so on purpose
+
+Both deliverables — a tooltip on a bar, and a click that publishes a param —
+need one thing: **a way to tell which mark was hit**. The library emits none.
+
+```
+<rect x="54.48" y="12" width="240.64" height="324" fill="#000000"/>
+<rect x="355.28" y="174" width="240.64" height="162" fill="#000000"/>
+```
+
+Geometry and fill. No `id`, no `class`, no `data-` attribute, no `<title>` — a
+search of all 1402 lines finds exactly one `<title>`, and it is in the
+standalone-HTML wrapper, not on a mark. And this is deliberate:
+`chart_design.md` §11 lists as v1 non-goals
+
+> interactivity, tooltips, zoom, animation (SVG can host them later via a
+> separate opt-in; the core stays static and JS-free)
+
+**Ruling: not built, and not worked around.** The three ways to do it anyway
+are all worse than waiting:
+
+- **Rewrite the library's SVG in gdash.** The brief already forbids this for
+  axis formatting, and the reason is the same: rewriting somebody else's
+  markup with a regular expression is how a rendering layer becomes
+  unmaintainable, and it would break on the next release that reorders an
+  attribute.
+- **Match marks by DOM order.** The bars are the only `<rect>` in a minimal
+  chart, but a legend adds swatch rects and a grid adds lines; "the third rect
+  is the second bar" is true until it is not, and nothing would announce the
+  change.
+- **Compute hit regions in gdash.** That needs the plot's margins, scales and
+  tick decisions — a second implementation of the library's layout, guaranteed
+  to drift.
+
+A **fourth** option deserves naming because it looks reasonable and is not:
+render a clickable strip of category labels beneath the chart, in gdash's own
+markup. It would work. It is also, almost exactly, the `select` control gdash
+already ships — a list of a column's values that publishes a param on click.
+Shipping it would add a second way to do one thing and call it a feature.
+
+The ask is in `gdash7_platform_ask_charts.md`: an **opt-in** that emits a
+stable identifying attribute per data mark. That fits the design doc's own
+sentence — attributes are static markup, and the JavaScript stays the caller's
+problem, which is where gdash wants it anyway.
+
+Recorded as GDASH-5's LDAP was: the phase narrows around the part the missing
+premise never touched, rather than designing something else and calling it the
+deliverable.
