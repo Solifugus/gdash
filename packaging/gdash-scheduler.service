@@ -1,0 +1,37 @@
+[Unit]
+Description=gdash refresh pass
+Documentation=file:@DOCDIR@/gdash_operations.md
+
+[Service]
+# One pass, then exit. The cadence is the timer's, not a loop inside gdash --
+# there is no server-side timer to hang a schedule on (finding G2-1), and a
+# oneshot that exits is a schedule an operator can see in `systemctl
+# list-timers` rather than infer from a running process.
+Type=oneshot
+User=gdash
+Group=gdash
+
+StateDirectory=gdash
+CacheDirectory=gdash
+LogsDirectory=gdash
+RuntimeDirectory=gdash
+RuntimeDirectoryPreserve=yes
+WorkingDirectory=/var/lib/gdash
+
+EnvironmentFile=-/etc/gdash/environment
+ExecStart=@BINDIR@/gdash schedule
+
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+CapabilityBoundingSet=

@@ -1,0 +1,64 @@
+[Unit]
+Description=gdash dashboard server
+Documentation=file:@DOCDIR@/gdash_operations.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gdash
+Group=gdash
+
+# The four writable roles (design §6). systemd creates each with the right
+# owner and mode, which is why this unit needs no ReadWritePaths for them:
+# StateDirectory and friends are already writable under ProtectSystem=strict.
+#   /var/lib/gdash    precious -- the entire backup set
+#   /var/cache/gdash  staged data; safe to lose, it refetches
+#   /var/log/gdash    the audit log
+#   /run/gdash        sessions; cleared on reboot, which is a session's lifetime
+StateDirectory=gdash
+CacheDirectory=gdash
+LogsDirectory=gdash
+RuntimeDirectory=gdash
+
+# EXPLICIT, because gdash spent eight phases assuming it (finding G8-2). It no
+# longer needs a particular working directory -- it finds its own files -- but
+# a connection profile may name a relative path, and this is where that
+# resolves from.
+WorkingDirectory=/var/lib/gdash
+
+Environment=GDASH_WORKERS=4
+EnvironmentFile=-/etc/gdash/environment
+ExecStart=@BINDIR@/gdash-server
+
+Restart=on-failure
+RestartSec=2s
+# A worker that raises is killed and replaced by the supervisor (PLAT-WEB
+# let-it-crash); this Restart is for the supervisor itself.
+
+# --- hardening ---------------------------------------------------------
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+
+# NO CAP_NET_BIND_SERVICE. gdash listens on 8780, which needs no capability,
+# and granting one nothing uses is a permission somebody inherits later. To
+# serve on 443 directly, add these two lines -- but a reverse proxy is the
+# usual answer and needs neither:
+#   AmbientCapabilities=CAP_NET_BIND_SERVICE
+#   CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

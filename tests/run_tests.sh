@@ -113,6 +113,17 @@ if [[ "${GDASH_SKIP_E2E:-0}" != "1" ]]; then
     fi
 fi
 
+# The install, at real FHS paths. Opt-in: it needs root, which means a
+# container, which means podman. Named here so `make check` mentions it rather
+# than leaving the install untested and unmentioned.
+if [[ "${GDASH_FHS_TEST:-0}" == "1" ]]; then
+    echo "--- FHS install ---"
+    ran=$((ran + 1))
+    if ! "$HERE/run_fhs.sh"; then
+        failed=$((failed + 1))
+    fi
+fi
+
 # The races. Three pieces of gdash exist because two things can happen at
 # once; until GDASH-6 none of them had ever had two things happen at once.
 if [[ "${GDASH_SKIP_E2E:-0}" != "1" ]]; then

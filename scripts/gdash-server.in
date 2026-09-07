@@ -1,0 +1,15 @@
+#!/bin/sh
+# gdash — the server, as a service manager starts it.
+#
+# Separate from the `gdash` wrapper because they are different programs with
+# different lifetimes: one is an administrator's command that exits, the other
+# is a daemon. Sharing an entry point would mean a subcommand that never
+# returns, which reads wrong in a unit file and worse in `ps`.
+set -eu
+GBASIC="${GDASH_GBASIC:-gbasic}"
+command -v "$GBASIC" >/dev/null 2>&1 || {
+    echo "gdash: the gBASIC interpreter '$GBASIC' is not on PATH" >&2
+    echo "       set GDASH_GBASIC in /etc/gdash/environment" >&2
+    exit 2
+}
+exec "$GBASIC" "@LIBDIR@/gdash_server.bas" "$@"

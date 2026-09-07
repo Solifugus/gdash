@@ -1,0 +1,15 @@
+#!/bin/sh
+# gdash — the administrator's command.
+#
+# The library path is substituted at install time. The interpreter comes from
+# GDASH_GBASIC when set, and from PATH otherwise; gdash itself finds its
+# refresh child beside this library rather than beside the working directory
+# (finding G8-2), so this wrapper needs no cd and sets no GDASH_SRC.
+set -eu
+GBASIC="${GDASH_GBASIC:-gbasic}"
+command -v "$GBASIC" >/dev/null 2>&1 || {
+    echo "gdash: the gBASIC interpreter '$GBASIC' is not on PATH" >&2
+    echo "       set GDASH_GBASIC to its location" >&2
+    exit 2
+}
+exec "$GBASIC" "@LIBDIR@/gdash_cli.bas" "$@"
