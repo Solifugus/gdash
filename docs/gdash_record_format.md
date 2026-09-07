@@ -196,6 +196,49 @@ all for a categorical x and returns a complete, empty-looking chart. That is a
 platform limitation gdash reports rather than hides; if it lifts, the refusal
 goes away and a period-labelled time series becomes a line chart.
 
+### Large results: downsample in SQL
+
+A chart of a hundred thousand points is a SQL problem, not a rendering one.
+Design §2 puts shape in the query, and that includes how much of it there is.
+
+Measured on this build, a single-series line chart:
+
+| points | render |
+|---|---|
+| 500 | ~0.1 s |
+| 1000 | ~0.3 s |
+| 2000 | ~0.5 s |
+| 4000 | ~1.0 s |
+
+Roughly linear, dominated by the chart library's own SVG assembly. A few
+thousand points is comfortable; a hundred thousand is not, and it would not be
+readable either — a 640-pixel-wide chart cannot show more points than it has
+pixels.
+
+**Bucket and aggregate**, so the query returns one row per thing the eye can
+actually resolve:
+
+```sql
+-- daily rows, one point per week
+select cast(strftime('%W', day) as integer) as week,
+       sum(amount)                          as total
+from   orders
+group  by week
+order  by week
+
+-- a long numeric series, one point per hundredth of its range
+select cast(reading / 100 as integer) * 100 as bucket,
+       avg(value)                           as value
+from   samples
+group  by bucket
+order  by bucket
+```
+
+**gdash does no aggregation of its own** and will not grow any: a `group by`
+you wrote is a decision you can see, read and change, and one gdash inferred
+would be a second place shape is decided. If a chart is slow, the query is
+returning more than the chart can draw.
+
 ### Colour, and the theme
 
 A dashboard describes what it shows; **how it looks belongs to the

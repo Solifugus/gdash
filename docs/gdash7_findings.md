@@ -177,3 +177,64 @@ problem, which is where gdash wants it anyway.
 Recorded as GDASH-5's LDAP was: the phase narrows around the part the missing
 premise never touched, rather than designing something else and calling it the
 deliverable.
+
+## G7-9 — `concat` is 242× slower than `append`, and gdash's pivot used it per row
+
+Measured on this build, twenty thousand elements:
+
+```
+append 20k:   40 ms      (mutates in place, returns the array)
+concat 20k: 9723 ms      (copies)
+```
+
+`_pivot` used `concat` in three per-row loops, deduped x values with a
+`contains(keys, xv)` scan per row (O(n²) on top), and — worst of all — slotted
+each value with `col = df[key]` / `col[slot] = v` / `df[key] = col`. **Arrays
+are copy-on-write**, so that last pattern copies the whole column on every
+row, and a mutation through an alias is not even visible:
+
+```
+outer = [[1, 2, 3], [4, 5, 6]]
+inner = outer[0]
+inner[0] = 99
+outer[0][0] = 99        ->  false
+```
+
+A read-append-write-back loop measures 467 ms at four thousand iterations for
+that reason alone.
+
+At two thousand points the chart library spent 298 ms rendering and gdash spent
+**870 ms on top of it** — three times the library's own cost, to reshape data
+the library then drew. Fixed by using `append`, replacing the dedupe scan with
+a `seen` record, and inverting the loops so each column is built as a local
+that nothing else holds and assigned to the frame once:
+
+| points | overhead before | overhead after |
+|---|---|---|
+| 500 | — | 26 ms |
+| 1000 | — | 78 ms |
+| 2000 | **870 ms** | **110 ms** |
+| 4000 | — | 148 ms |
+
+Linear now, and the library dominates, which is the right shape: gdash should
+cost less than the thing it is calling.
+
+**This was found while writing documentation telling authors to downsample.**
+That is the part worth recording. The §2.6 deliverable is a SQL pattern for
+large results, and measuring the cost to write it honestly is what exposed
+that three quarters of the cost was gdash copying arrays. Advising someone to
+work around your own defect is not advice.
+
+## G7-10 — a measurement I could not reproduce, and did not publish
+
+The first pass at G7-9 produced "1000 points: 0.8 ms" from one script while
+another gave 217 ms for the same work — a 250× disagreement. I could not
+explain it and did not use it. The reproducible measurement puts both paths in
+**one script, on identical data, and checks the output sizes match** before
+comparing times.
+
+Recorded because the temptation was real: the fast number was the flattering
+one, and it appeared first. Two measurements that disagree by two orders of
+magnitude mean at least one is measuring something other than what it claims,
+and the way to find out is to make them share everything except the thing
+being compared.

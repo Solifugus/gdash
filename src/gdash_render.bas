@@ -95,9 +95,19 @@ library gdash_render
     ' `x_numeric` is what the caller uses to refuse rather than render an
     ' empty frame.
     function _pivot(rows, xch, ych, sch, is_money, scale)
+        ' `append` MUTATES IN PLACE; `concat` COPIES. Measured on this build:
+        ' twenty thousand appends take 40ms and twenty thousand concats take
+        ' 9.7 SECONDS -- 242x. Every loop here runs once per row, so the
+        ' difference is the difference between a chart and a timeout.
+        '
+        ' The `seen` record replaces a `contains(keys, xv)` scan per row, which
+        ' was O(n^2) on top of that. Together they were costing three times the
+        ' chart library's own rendering (finding G7-9).
         xs = []
         keys = []
         names = []
+        seen = {}
+        seen_names = {}
         x_numeric = true
         i = 0
         while i < count(rows)
@@ -106,14 +116,16 @@ library gdash_render
             if type(raw_x) != "number" then
                 x_numeric = false
             end if
-            if not contains(keys, xv) then
-                keys = concat(keys, [xv])
-                xs = concat(xs, [raw_x])
+            if is_unknown(seen[xv]) then
+                seen[xv] = count(keys)
+                keys = append(keys, xv)
+                xs = append(xs, raw_x)
             end if
             if sch != "" then
                 sv = string(rows[i][sch])
-                if not contains(names, sv) then
-                    names = concat(names, [sv])
+                if is_unknown(seen_names[sv]) then
+                    seen_names[sv] = true
+                    names = append(names, sv)
                 end if
             end if
             i += 1
@@ -122,39 +134,45 @@ library gdash_render
             names = [ych]
         end if
 
+        ' ONE PASS PER COLUMN, NOT ONE WRITE-BACK PER ROW.
+        '
+        ' Arrays are copy-on-write, so `col = df[key]` / `col[slot] = v` /
+        ' `df[key] = col` copies the whole column on every row -- a read-append-
+        ' write-back loop measures 467ms at four thousand iterations, and a
+        ' mutation through an alias is not even visible. Building each column
+        ' as a LOCAL that nothing else holds, and assigning it to the frame
+        ' once, keeps the writes in place (finding G7-9).
         df = {}
         df[xch] = xs
         c = 0
         while c < count(names)
+            nm = names[c]
             col = []
             r = 0
             while r < count(keys)
-                col = concat(col, [unknown])
+                col = append(col, unknown)
                 r += 1
             end while
-            df[names[c]] = col
+            i = 0
+            while i < count(rows)
+                key = ych
+                if sch != "" then
+                    key = string(rows[i][sch])
+                end if
+                if key = nm then
+                    slot = seen[string(rows[i][xch])]
+                    if is_money then
+                        col[slot] = number(gdash_format.minor_to_decimal(rows[i][ych + "__text"], scale))
+                    else
+                        col[slot] = rows[i][ych]
+                    end if
+                end if
+                i += 1
+            end while
+            df[nm] = col
             c += 1
         end while
 
-        i = 0
-        while i < count(rows)
-            xv = string(rows[i][xch])
-            slot = find(keys, xv)
-            key = ych
-            if sch != "" then
-                key = string(rows[i][sch])
-            end if
-            if is_money then
-                raw = rows[i][ych + "__text"]
-                v = number(gdash_format.minor_to_decimal(raw, scale))
-            else
-                v = rows[i][ych]
-            end if
-            col = df[key]
-            col[slot] = v
-            df[key] = col
-            i += 1
-        end while
         return { xs: xs, keys: keys, names: names, df: df, x_numeric: x_numeric }
     end function
 
