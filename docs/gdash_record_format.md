@@ -196,6 +196,47 @@ all for a categorical x and returns a complete, empty-looking chart. That is a
 platform limitation gdash reports rather than hides; if it lifts, the refusal
 goes away and a period-labelled time series becomes a line chart.
 
+### Colour, and the theme
+
+A dashboard describes what it shows; **how it looks belongs to the
+deployment**, so that a company's dashboards agree with each other without
+every record repeating the same palette.
+
+`/etc/gdash/theme.json` — server-level, not restricted (it holds no
+credential):
+
+```json
+{ "format": 1,
+  "palette": ["#111111", "#E69F00", "#56B4E9"],
+  "font_size": 14 }
+```
+
+**Absent means the chart library's own defaults**, which are the Okabe–Ito
+palette — colourblind-safe by construction, and a better default than gdash
+would have picked for itself. A theme file is an override, never a requirement.
+
+**Malformed also means the defaults**, plus an error in the audit log. That is
+the opposite of the ruling for `users.json`, where a file gdash cannot read is
+a locked door quietly removed and everything fails closed. The difference is
+that one governs access and the other governs appearance: refusing to serve a
+dashboard because its colours are unreadable would be a worse failure than
+serving it in the wrong colours.
+
+A record may override **one** thing — the colour of a named series or pie
+slice:
+
+```json
+"encoding": { "mark": "line", "x": "period", "y": "total", "series": "region",
+              "colors": { "south": "#d55e00" } }
+```
+
+Because "that series is red in every other report in the company" is a real
+reason, and nothing else about appearance is. A colour is `#abc` or `#1a2b3c`;
+named colours and `rgb()` are refused, because the value goes straight into SVG
+markup and a short checkable grammar is what keeps it from being an injection
+surface. A name the record does not colour takes the next **unused** theme
+colour, so overriding one series never silently recolours another.
+
 ### Formats
 
 `format` (scalar marks) or `formats` (a `table`'s column → format map) selects
@@ -617,6 +658,12 @@ stacked on a scatter
   ERROR visual 'v1' sets 'stacked', which only mark 'bar' or 'area' uses
 legend on a pie
   ERROR visual 'v1' sets 'legend'; a pie labels its slices directly and has no legend to turn on
+colors on wrong mark
+  ERROR visual 'v1' sets 'colors', which only a mark that draws series or slices uses
+colors not an object
+  ERROR visual 'v1' has a 'colors' that is not an object of name to colour
+colors with a bad colour
+  ERROR visual 'v1' colours 'north' as 'crimson'; a colour is '#1a2b3c' or '#abc'
 x_label on wrong mark
   ERROR visual 'v1' sets 'x_label', which only a mark with axes uses
 y_label not text

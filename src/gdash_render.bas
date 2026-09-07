@@ -21,6 +21,7 @@ library gdash_render
     ' against; an installed build needs a real answer here, recorded as a
     ' finding.
     load chart
+    load gdash_theme from "gdash_theme.bas"
     load gdash_store from "gdash_store.bas"
     load gdash_format from "gdash_format.bas"
 
@@ -164,7 +165,7 @@ library gdash_render
     ' The legend defaults to ON when a `series` channel fanned the query out
     ' into several columns, and OFF otherwise -- one line needs no key to tell
     ' you which line it is. An explicit `legend` in the record wins either way.
-    function _chart_options(enc, sch)
+    function _chart_options(enc, sch, theme, names)
         opts = {}
         t = string(default(enc["title"], ""))
         if t != "" then
@@ -194,10 +195,19 @@ library gdash_render
         if not is_unknown(enc["y_max"]) then
             opts["y_max"] = enc["y_max"]
         end if
+
+        ' The deployment's look, then the record's one override. font_size
+        ' comes from the theme alone: a dashboard has no business deciding how
+        ' big the type is on somebody else's wall.
+        themed = gdash_theme.options_for(theme)
+        if not is_unknown(themed["font_size"]) then
+            opts["font_size"] = themed["font_size"]
+        end if
+        opts["palette"] = gdash_theme.palette_for(theme, names, enc["colors"])
         return opts
     end function
 
-    function render_visual(name, visual, rows, db_path, attach)
+    function render_visual(name, visual, rows, db_path, attach, theme)
         enc = visual["encoding"]
         mark = enc["mark"]
 
@@ -266,7 +276,7 @@ library gdash_render
             sp = chart.spec("pie", shaped.df)
             sp = chart.x(sp, lch)
             sp = chart.y(sp, [vch])
-            sp = chart.options(sp, _chart_options(enc, ""))
+            sp = chart.options(sp, _chart_options(enc, "", theme, shaped.xs))
             svg = chart.render(sp)
             if error then
                 return _err("visual '" + name + "': chart library refused the data: " + error.message)
@@ -314,7 +324,7 @@ library gdash_render
             sp = chart.spec(mark, shaped.df)
             sp = chart.x(sp, xch)
             sp = chart.y(sp, shaped.names)
-            sp = chart.options(sp, _chart_options(enc, sch))
+            sp = chart.options(sp, _chart_options(enc, sch, theme, shaped.names))
             svg = chart.render(sp)
             if error then
                 return _err("visual '" + name + "': chart library refused the data: " + error.message)

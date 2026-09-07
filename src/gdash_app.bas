@@ -24,6 +24,7 @@ library gdash_app
     load gdash_users from "gdash_users.bas"
     load gdash_auth from "gdash_auth.bas"
     load gdash_authcfg from "gdash_authcfg.bas"
+    load gdash_theme from "gdash_theme.bas"
     load gdash_audit from "gdash_audit.bas"
 
     function _root_of(req)
@@ -360,7 +361,7 @@ library gdash_app
         return out
     end function
 
-    function _visual_fragment(p, name, mode, rec, vis_name, values)
+    function _visual_fragment(p, name, mode, rec, vis_name, values, theme)
         v = rec["visuals"][vis_name]
         db = gdash_paths.dataset_db(p, name, mode, v["dataset"])
         if not gdash_paths.path_exists(db) then
@@ -371,7 +372,7 @@ library gdash_app
         if not res.ok then
             return "<div class=" + chr(34) + "gdash-error" + chr(34) + ">query failed: " + res.message + "</div>"
         end if
-        return gdash_render.render_visual(vis_name, v, res.rows, db, attach)
+        return gdash_render.render_visual(vis_name, v, res.rows, db, attach, theme)
     end function
 
     function _control_fragment(p, name, mode, rec, ctl_name, values)
@@ -428,16 +429,16 @@ library gdash_app
         return "flex:" + string(w) + " 1 0"
     end function
 
-    function _layout(p, name, mode, rec, node, values)
+    function _layout(p, name, mode, rec, node, values, theme)
         if not is_unknown(node["vert"]) then
-            return _container(p, name, mode, rec, node, node["vert"], values, "gdash-vert")
+            return _container(p, name, mode, rec, node, node["vert"], values, "gdash-vert", theme)
         end if
         if not is_unknown(node["horiz"]) then
-            return _container(p, name, mode, rec, node, node["horiz"], values, "gdash-horiz")
+            return _container(p, name, mode, rec, node, node["horiz"], values, "gdash-horiz", theme)
         end if
         if not is_unknown(node["visual"]) then
             vn = node["visual"]
-            return "<div class=" + chr(34) + "gdash-cell" + chr(34) + " style=" + chr(34) + _child_style(node) + chr(34) + " data-visual=" + chr(34) + vn + chr(34) + ">" + _visual_fragment(p, name, mode, rec, vn, values) + "</div>"
+            return "<div class=" + chr(34) + "gdash-cell" + chr(34) + " style=" + chr(34) + _child_style(node) + chr(34) + " data-visual=" + chr(34) + vn + chr(34) + ">" + _visual_fragment(p, name, mode, rec, vn, values, theme) + "</div>"
         end if
         if not is_unknown(node["control"]) then
             return "<div class=" + chr(34) + "gdash-cell" + chr(34) + " style=" + chr(34) + _child_style(node) + chr(34) + ">" + _control_fragment(p, name, mode, rec, node["control"], values) + "</div>"
@@ -445,11 +446,11 @@ library gdash_app
         return ""
     end function
 
-    function _container(p, name, mode, rec, node, kids, values, cls)
+    function _container(p, name, mode, rec, node, kids, values, cls, theme)
         out = []
         i = 0
         while i < count(kids)
-            out = concat(out, [_layout(p, name, mode, rec, kids[i], values)])
+            out = concat(out, [_layout(p, name, mode, rec, kids[i], values, theme)])
             i += 1
         end while
 
@@ -758,6 +759,15 @@ library gdash_app
         p = got.p
         mode = got.mode
         asked = _request_opens(p, name, mode, rec)
+        ' Read ONCE per page, not once per visual: a dashboard with six charts
+        ' would otherwise open the same small file six times. A malformed
+        ' theme is logged and ignored -- colours are decoration, and refusing
+        ' to serve a dashboard over them would be the worse failure.
+        themed = gdash_theme.load_theme(p)
+        theme = themed.theme
+        if not themed.ok then
+            logged = gdash_audit.event(p, "theme.invalid", { reason: join(themed.errors, "; ") })
+        end if
         values = gdash_record.resolve_params(rec, req.query, _effective_identity(got, name))
 
         tabs = rec["tabs"]
@@ -777,7 +787,7 @@ library gdash_app
                 hidden = ""
             end if
             navs = concat(navs, ["<button class=" + chr(34) + "gdash-tab" + sel + chr(34) + " data-tab=" + chr(34) + string(ti) + chr(34) + " onclick=" + chr(34) + "gdashTab(this)" + chr(34) + ">" + gdash_render.html_escape(tname) + "</button>"])
-            panes = concat(panes, ["<div class=" + chr(34) + "gdash-pane" + chr(34) + " data-pane=" + chr(34) + string(ti) + chr(34) + hidden + ">" + _layout(p, name, mode, rec, tabs[ti]["layout"], values) + "</div>"])
+            panes = concat(panes, ["<div class=" + chr(34) + "gdash-pane" + chr(34) + " data-pane=" + chr(34) + string(ti) + chr(34) + hidden + ">" + _layout(p, name, mode, rec, tabs[ti]["layout"], values, theme) + "</div>"])
             ti += 1
         end while
         tabbar = ""
@@ -825,6 +835,8 @@ library gdash_app
             supplied = {}
         end if
         values = gdash_record.resolve_params(rec, supplied, _effective_identity(got, name))
+        themed = gdash_theme.load_theme(p)
+        theme = themed.theme
 
         changed = keys(supplied)
         moving = []
@@ -844,7 +856,7 @@ library gdash_app
         frags = {}
         i = 0
         while i < count(moving)
-            frags[moving[i]] = _visual_fragment(p, name, mode, rec, moving[i], values)
+            frags[moving[i]] = _visual_fragment(p, name, mode, rec, moving[i], values, theme)
             i += 1
         end while
         return _json({ fragments: frags, rerendered: moving })

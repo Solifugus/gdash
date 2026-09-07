@@ -24,7 +24,7 @@ program main(args)
     s = gdash_test.eq(s, string(gdash_render.exact_columns(gt)), string(["total"]), "currency channel crosses exactly")
     res = gdash_store.select_rows(live, gt["sql"], {}, gdash_render.exact_columns(gt), {})
     s = gdash_test.ok(s, res.ok, "value query runs")
-    frag = gdash_render.render_visual("grand_total", gt, res.rows, live, {})
+    frag = gdash_render.render_visual("grand_total", gt, res.rows, live, {}, {})
     s = gdash_test.contains_text(s, frag, "gdash-value", "value mark renders a value fragment")
     ' 1250.75+900.25+1100.00+640.10+725.90+310.05 = 4927.05
     s = gdash_test.contains_text(s, frag, "$4,927.05", "value mark shows the exact total")
@@ -34,7 +34,7 @@ program main(args)
     s = gdash_test.eq(s, string(gdash_render.exact_columns(bm)), string(["total"]), "bar's y channel crosses exactly")
     bres = gdash_store.select_rows(live, bm["sql"], { region: "west" }, gdash_render.exact_columns(bm), {})
     s = gdash_test.ok(s, bres.ok, "bar query runs")
-    bfrag = gdash_render.render_visual("by_month", bm, bres.rows, live, {})
+    bfrag = gdash_render.render_visual("by_month", bm, bres.rows, live, {}, {})
     s = gdash_test.contains_text(s, bfrag, "<svg", "bar mark renders SVG")
     s = gdash_test.ok(s, not contains(bfrag, "gdash-error"), "bar mark rendered without error")
     ' Two marks, two fragment kinds, from one record shape: the dispatch is real.
@@ -45,19 +45,19 @@ program main(args)
     s = gdash_test.eq(s, count(bres.rows), 3, "west has three months")
     nres = gdash_store.select_rows(live, bm["sql"], { region: "north" }, gdash_render.exact_columns(bm), {})
     s = gdash_test.eq(s, count(nres.rows), 1, "north has one month")
-    nfrag = gdash_render.render_visual("by_month", bm, nres.rows, live, {})
+    nfrag = gdash_render.render_visual("by_month", bm, nres.rows, live, {}, {})
     s = gdash_test.ok(s, nfrag != bfrag, "a different param value renders a different chart")
 
     ' --- channel validation at query time, the F4 fallback ---
     broken = { dataset: "orders", sql: "select month as month, sum(amount) as total from orders group by month", encoding: { mark: "bar", x: "month", y: "ghost", format: "currency" } }
     bres2 = gdash_store.select_rows(live, broken["sql"], {}, [], {})
-    bad = gdash_render.render_visual("broken", broken, bres2.rows, live, {})
+    bad = gdash_render.render_visual("broken", broken, bres2.rows, live, {}, {})
     s = gdash_test.contains_text(s, bad, "gdash-error", "a channel naming no column is refused")
     s = gdash_test.contains_text(s, bad, "which the query does not return", "and says what is wrong")
 
     ' --- empty result is not an error ---
     eres = gdash_store.select_rows(live, bm["sql"], { region: "nowhere" }, gdash_render.exact_columns(bm), {})
-    s = gdash_test.contains_text(s, gdash_render.render_visual("by_month", bm, eres.rows, live, {}), "No data", "empty result renders as empty, not broken")
+    s = gdash_test.contains_text(s, gdash_render.render_visual("by_month", bm, eres.rows, live, {}, {}), "No data", "empty result renders as empty, not broken")
 
     ' --- markup is escaped, not interpolated ---
     ctl = rec["controls"]["region_picker"]

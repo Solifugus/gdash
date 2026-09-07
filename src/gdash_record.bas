@@ -12,6 +12,7 @@
 library gdash_record
 
     load gdash_sql from "gdash_sql.bas"
+    load gdash_theme from "gdash_theme.bas"
     load gdash_format from "gdash_format.bas"
     load gdash_store from "gdash_store.bas"
 
@@ -503,6 +504,27 @@ library gdash_record
                 if type(enc["y_min"]) = "number" and type(enc["y_max"]) = "number" then
                     if enc["y_min"] >= enc["y_max"] then
                         errors = concat(errors, ["visual '" + vn + "' has 'y_min' at or above 'y_max'; the axis would have no height"])
+                    end if
+                end if
+
+                ' A record may override colour and nothing else about the
+                ' look: `colors` maps a series value (or a pie's label) to a
+                ' colour. The rest is the deployment's theme, so that a
+                ' company's dashboards agree with each other.
+                if not is_unknown(enc["colors"]) then
+                    if not contains(["bar", "line", "area", "scatter", "pie"], mk) then
+                        errors = concat(errors, ["visual '" + vn + "' sets 'colors', which only a mark that draws series or slices uses"])
+                    else if not _is_object(enc["colors"]) then
+                        errors = concat(errors, ["visual '" + vn + "' has a 'colors' that is not an object of name to colour"])
+                    else
+                        cnames = keys(enc["colors"])
+                        k2 = 0
+                        while k2 < count(cnames)
+                            if not gdash_theme.legal_color(enc["colors"][cnames[k2]]) then
+                                errors = concat(errors, ["visual '" + vn + "' colours '" + cnames[k2] + "' as '" + string(enc["colors"][cnames[k2]]) + "'; a colour is '#1a2b3c' or '#abc'"])
+                            end if
+                            k2 += 1
+                        end while
                     end if
                 end if
 

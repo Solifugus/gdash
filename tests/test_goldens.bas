@@ -176,6 +176,10 @@ program main(args)
     lines = concat(lines, [emit_case("stacked on a scatter", vis_case({ dataset: "d1", sql: "select a, b from d1", encoding: { mark: "scatter", x: "a", y: "b", stacked: true } }))])
     lines = concat(lines, [emit_case("legend on a pie", vis_case({ dataset: "d1", sql: "select a, b from d1", encoding: { mark: "pie", label: "a", value: "b", legend: true } }))])
 
+    lines = concat(lines, [emit_case("colors on wrong mark", vis_case({ dataset: "d1", sql: "select a from d1", encoding: { mark: "value", value: "a", colors: { x: "#abc" } } }))])
+    lines = concat(lines, [emit_case("colors not an object", vis_case({ dataset: "d1", sql: "select a, b from d1", encoding: { mark: "bar", x: "a", y: "b", colors: "red" } }))])
+    lines = concat(lines, [emit_case("colors with a bad colour", vis_case({ dataset: "d1", sql: "select a, b from d1", encoding: { mark: "bar", x: "a", y: "b", colors: { north: "crimson" } } }))])
+
     lines = concat(lines, [emit_case("x_label on wrong mark", vis_case({ dataset: "d1", sql: "select a from d1", encoding: { mark: "value", value: "a", x_label: "X" } }))])
     lines = concat(lines, [emit_case("y_label not text", vis_case({ dataset: "d1", sql: "select a, b from d1", encoding: { mark: "bar", x: "a", y: "b", y_label: 7 } }))])
     lines = concat(lines, [emit_case("legend on wrong mark", vis_case({ dataset: "d1", sql: "select a from d1", encoding: { mark: "table", legend: true } }))])

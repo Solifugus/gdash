@@ -253,6 +253,13 @@ library gdash_paths
         return _join(p.config_dir, "users.json")
     end function
 
+    ' The theme. Unlike users.json, auth.json and the secret, this holds no
+    ' credential -- it is a palette and a font size -- so it is not restricted
+    ' and an operator may read it.
+    function theme_file(p)
+        return _join(p.config_dir, "theme.json")
+    end function
+
     ' The auth providers. 0600 like users.json, because it holds a directory
     ' service account's password; absent means local accounts only, which is
     ' GDASH-4 unchanged and still fails closed.

@@ -40,6 +40,7 @@ program main(args)
     load gdash_format from "../src/gdash_format.bas"
     load gdash_record from "../src/gdash_record.bas"
     load gdash_render from "../src/gdash_render.bas"
+    load gdash_theme from "../src/gdash_theme.bas"
     load gdash_sched from "../src/gdash_sched.bas"
     load gdash_audit from "../src/gdash_audit.bas"
     load gdash_refresh from "../src/gdash_refresh.bas"

@@ -45,7 +45,7 @@ program main(args)
     ' `main` -- silently, and only when there are two datasets (finding G2-3).
     s = gdash_test.eq(s, gdash_render.money_scale(ordersdb, attach), 2, "the money scale survives the attachment")
 
-    frag = gdash_render.render_visual("by_manager", v, res.rows, ordersdb, attach)
+    frag = gdash_render.render_visual("by_manager", v, res.rows, ordersdb, attach, {})
     s = gdash_test.contains_text(s, frag, "Ada Okonjo", "the fragment names a value only the second dataset knows")
     s = gdash_test.contains_text(s, frag, "<svg", "and it is a chart")
 

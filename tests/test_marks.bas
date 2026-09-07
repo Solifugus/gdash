@@ -24,7 +24,7 @@ program main(args)
     v = { dataset: "orders", sql: sq, encoding: { mark: "bar", x: "month", y: "total", series: "region", format: "currency" } }
     res = gdash_store.select_rows(live, sq, {}, gdash_render.exact_columns(v), {})
     s = gdash_test.ok(s, res.ok, "series query runs")
-    frag = gdash_render.render_visual("trend", v, res.rows, live, {})
+    frag = gdash_render.render_visual("trend", v, res.rows, live, {}, {})
     s = gdash_test.contains_text(s, frag, "<svg", "a series bar renders SVG")
     s = gdash_test.ok(s, not contains(frag, "gdash-error"), "without error -- " + mid(frag, 0, 120))
     s = gdash_test.ok(s, count(split(frag, "<rect")) - 1 > 1, "with a bar per series value, not an empty frame")
@@ -33,7 +33,7 @@ program main(args)
     nq = "select cast(substr(month, 6, 2) as integer) as period, sum(amount) as total from orders group by period order by period"
     nv = { dataset: "orders", sql: nq, encoding: { mark: "line", x: "period", y: "total", format: "currency" } }
     nres = gdash_store.select_rows(live, nq, {}, gdash_render.exact_columns(nv), {})
-    nfrag = gdash_render.render_visual("trend_num", nv, nres.rows, live, {})
+    nfrag = gdash_render.render_visual("trend_num", nv, nres.rows, live, {}, {})
     s = gdash_test.ok(s, not contains(nfrag, "gdash-error"), "a line over a numeric x renders -- " + mid(nfrag, 0, 120))
     s = gdash_test.eq(s, count(split(nfrag, "<path")) - 1, 1, "and draws exactly one path, which is the line")
 
@@ -41,7 +41,7 @@ program main(args)
     ' the viewer would read a blank plot as "no data" and the author as
     ' "working".
     cv = { dataset: "orders", sql: sq, encoding: { mark: "line", x: "month", y: "total", series: "region", format: "currency" } }
-    cfrag = gdash_render.render_visual("trend", cv, res.rows, live, {})
+    cfrag = gdash_render.render_visual("trend", cv, res.rows, live, {}, {})
     s = gdash_test.contains_text(s, cfrag, "gdash-error", "a line over a text x is refused")
     s = gdash_test.contains_text(s, cfrag, "column 'month' holds text", "naming the column")
     s = gdash_test.contains_text(s, cfrag, "mark 'bar' for categories", "and what to do instead")
@@ -63,20 +63,20 @@ program main(args)
     ' renders differing somewhere is a weaker claim than one having the bars
     ' the other's series produced.
     vb = { dataset: "orders", sql: sq, encoding: { mark: "bar", x: "month", y: "total", format: "currency" } }
-    bfrag = gdash_render.render_visual("trendbar", vb, res.rows, live, {})
+    bfrag = gdash_render.render_visual("trendbar", vb, res.rows, live, {}, {})
     s = gdash_test.contains_text(s, bfrag, "<svg", "bar renders without a series channel too")
     s = gdash_test.ok(s, (count(split(bfrag, "<rect")) - 1) < (count(split(frag, "<rect")) - 1), "and draws fewer bars than the same query fanned out by series")
 
     ' a series channel naming no column is refused
     vbad = { dataset: "orders", sql: sq, encoding: { mark: "line", x: "month", y: "total", series: "ghost" } }
-    s = gdash_test.contains_text(s, gdash_render.render_visual("x", vbad, res.rows, live, {}), "which the query does not return", "bad series channel refused")
+    s = gdash_test.contains_text(s, gdash_render.render_visual("x", vbad, res.rows, live, {}, {}), "which the query does not return", "bad series channel refused")
 
     ' --- table: SELECT order, per-column formats ---
     tq = "select region as region, month as month, sum(amount) as total from orders group by region, month order by region, month"
     vt = { dataset: "orders", sql: tq, encoding: { mark: "table", title: "Detail", formats: { total: "currency" } } }
     tres = gdash_store.select_rows(live, tq, {}, gdash_render.exact_columns(vt), {})
     s = gdash_test.eq(s, string(gdash_render.exact_columns(vt)), string(["total"]), "currency column crosses exactly")
-    tfrag = gdash_render.render_visual("detail", vt, tres.rows, live, {})
+    tfrag = gdash_render.render_visual("detail", vt, tres.rows, live, {}, {})
     s = gdash_test.contains_text(s, tfrag, "<table>", "table mark renders a table")
     s = gdash_test.contains_text(s, tfrag, "$1,250.75", "money column formatted as currency")
     ' SELECT order preserved, and the exactness helper column is not shown
@@ -87,7 +87,7 @@ program main(args)
 
     ' formats accept the long form with options
     vt2 = { dataset: "orders", sql: tq, encoding: { mark: "table", formats: { total: { name: "number", decimals: 0 } } } }
-    t2 = gdash_render.render_visual("d2", vt2, tres.rows, live, {})
+    t2 = gdash_render.render_visual("d2", vt2, tres.rows, live, {}, {})
     s = gdash_test.ok(s, not contains(t2, "$"), "number format is not currency")
 
     ' an unformatted column renders as its raw text
@@ -104,35 +104,35 @@ program main(args)
     ser_rows = [ { m: 1, r: "north", amt: 10.0 }, { m: 1, r: "south", amt: 5.0 },
                  { m: 2, r: "north", amt: 40.0 }, { m: 2, r: "south", amt: 20.0 } ]
 
-    plain = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt" } }, num_rows, "", {})
-    labelled = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt", title: "Revenue", x_label: "Period", y_label: "Dollars" } }, num_rows, "", {})
+    plain = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt" } }, num_rows, "", {}, {})
+    labelled = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt", title: "Revenue", x_label: "Period", y_label: "Dollars" } }, num_rows, "", {}, {})
     s = gdash_test.ok(s, not contains(plain, ">Revenue<"), "a chart with no title carries none")
     s = gdash_test.contains_text(s, labelled, ">Revenue<", "a title reaches the SVG")
     s = gdash_test.contains_text(s, labelled, ">Period<", "so does an x label")
     s = gdash_test.contains_text(s, labelled, ">Dollars<", "and a y label")
 
     ' The legend follows the series channel unless the record says otherwise.
-    fan = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt", series: "r" } }, ser_rows, "", {})
+    fan = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt", series: "r" } }, ser_rows, "", {}, {})
     s = gdash_test.contains_text(s, fan, "north", "a series channel turns the legend on by itself")
-    quiet = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt", series: "r", legend: false } }, ser_rows, "", {})
+    quiet = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt", series: "r", legend: false } }, ser_rows, "", {}, {})
     s = gdash_test.ok(s, not contains(quiet, "north"), "and the record can turn it off")
     s = gdash_test.ok(s, not contains(plain, ">amt<"), "one line needs no legend to say which line it is")
-    named = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt", legend: true } }, num_rows, "", {})
+    named = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt", legend: true } }, num_rows, "", {}, {})
     s = gdash_test.contains_text(s, named, ">amt<", "but the record can ask for one anyway")
 
     ' A range the data does not reach must still appear on the axis; that is
     ' the whole point of setting one.
-    ranged = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt", y_min: 0, y_max: 100 } }, num_rows, "", {})
+    ranged = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt", y_min: 0, y_max: 100 } }, num_rows, "", {}, {})
     s = gdash_test.contains_text(s, ranged, ">100<", "y_max appears as a tick even though no row reaches it")
     s = gdash_test.ok(s, not contains(plain, ">100<"), "and does not appear without it")
 
     ' Grid lines are <line> elements, so removing the grid removes some.
-    gridless = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt", grid: false } }, num_rows, "", {})
+    gridless = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt", grid: false } }, num_rows, "", {}, {})
     s = gdash_test.ok(s, (count(split(gridless, "<line")) - 1) < (count(split(plain, "<line")) - 1), "grid: false draws fewer lines")
 
     ' Stacking changes where the bars are, not how many.
-    stacked = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "bar", x: "m", y: "amt", series: "r", stacked: true } }, ser_rows, "", {})
-    grouped = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "bar", x: "m", y: "amt", series: "r" } }, ser_rows, "", {})
+    stacked = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "bar", x: "m", y: "amt", series: "r", stacked: true } }, ser_rows, "", {}, {})
+    grouped = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "bar", x: "m", y: "amt", series: "r" } }, ser_rows, "", {}, {})
     s = gdash_test.ok(s, stacked != grouped, "stacked renders differently from grouped")
     s = gdash_test.eq(s, count(split(stacked, "<rect")) - 1, count(split(grouped, "<rect")) - 1, "with the same number of bars, in different places")
 
@@ -141,11 +141,11 @@ program main(args)
     ' Asserted on the ELEMENT each mark exists to draw, not on "<svg": an
     ' empty frame is an svg, which is how a blank line chart survived six
     ' phases (G7-3).
-    area_out = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "area", x: "m", y: "amt", series: "r" } }, ser_rows, "", {})
+    area_out = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "area", x: "m", y: "amt", series: "r" } }, ser_rows, "", {}, {})
     s = gdash_test.ok(s, not contains(area_out, "gdash-error"), "an area renders -- " + mid(area_out, 0, 110))
     s = gdash_test.ok(s, count(split(area_out, "<path")) - 1 >= 2, "with a filled band per series")
 
-    scat = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "scatter", x: "m", y: "amt", series: "r" } }, ser_rows, "", {})
+    scat = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "scatter", x: "m", y: "amt", series: "r" } }, ser_rows, "", {}, {})
     s = gdash_test.ok(s, not contains(scat, "gdash-error"), "a scatter renders")
     s = gdash_test.eq(s, count(split(scat, "<circle")) - 1, 4, "with a point per row, not a line")
     s = gdash_test.eq(s, count(split(scat, "<path")) - 1, 0, "and no path joining them")
@@ -153,19 +153,19 @@ program main(args)
     ' area and scatter share line's axis, so they inherit its numeric-x rule.
     for each mk in ["area", "scatter"]
         cat_rows = [ { m: "Jan", amt: 1.0 }, { m: "Feb", amt: 2.0 } ]
-        out = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: mk, x: "m", y: "amt" } }, cat_rows, "", {})
+        out = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: mk, x: "m", y: "amt" } }, cat_rows, "", {}, {})
         s = gdash_test.contains_text(s, out, "holds text", "mark '" + mk + "' refuses a text x like line does")
     next
 
     pie_rows = [ { r: "north", amt: 10.0 }, { r: "south", amt: 5.0 }, { r: "east", amt: 22.0 } ]
-    pie_out = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "pie", label: "r", value: "amt", title: "Share" } }, pie_rows, "", {})
+    pie_out = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "pie", label: "r", value: "amt", title: "Share" } }, pie_rows, "", {}, {})
     s = gdash_test.ok(s, not contains(pie_out, "gdash-error"), "a pie renders -- " + mid(pie_out, 0, 110))
     s = gdash_test.eq(s, count(split(pie_out, "<path")) - 1, 3, "with a slice per label")
     s = gdash_test.contains_text(s, pie_out, ">Share<", "and takes a title")
     s = gdash_test.contains_text(s, pie_out, "north", "labelling its slices without a legend")
 
     ' A pie names its channels differently, so a wrong one is caught by name.
-    pie_bad = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "pie", label: "nope", value: "amt" } }, pie_rows, "", {})
+    pie_bad = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "pie", label: "nope", value: "amt" } }, pie_rows, "", {}, {})
     s = gdash_test.contains_text(s, pie_bad, "channel 'label' names column 'nope'", "a pie's label channel is checked against the query")
 
     exit(gdash_test.report(s))

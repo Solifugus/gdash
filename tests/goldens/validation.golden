@@ -121,6 +121,12 @@ stacked on a scatter
   ERROR visual 'v1' sets 'stacked', which only mark 'bar' or 'area' uses
 legend on a pie
   ERROR visual 'v1' sets 'legend'; a pie labels its slices directly and has no legend to turn on
+colors on wrong mark
+  ERROR visual 'v1' sets 'colors', which only a mark that draws series or slices uses
+colors not an object
+  ERROR visual 'v1' has a 'colors' that is not an object of name to colour
+colors with a bad colour
+  ERROR visual 'v1' colours 'north' as 'crimson'; a colour is '#1a2b3c' or '#abc'
 x_label on wrong mark
   ERROR visual 'v1' sets 'x_label', which only a mark with axes uses
 y_label not text
