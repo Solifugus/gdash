@@ -57,7 +57,12 @@ program main(args)
     s = gdash_test.ok(s, loaded.ok, "a valid theme loads")
     opts = gdash_theme.options_for(loaded.theme)
     s = gdash_test.eq(s, opts["font_size"], 16, "contributing its font size")
-    s = gdash_test.eq(s, join(opts["palette"], ","), "#111111,#222222", "and its palette")
+    ' The palette is NOT among the options a theme contributes directly: it has
+    ' to be built against the series being drawn, so palette_for is its
+    ' accessor and is asserted below. options_for returned it too until a
+    ' mutation showed nothing noticed when it stopped.
+    s = gdash_test.eq(s, count(opts), 1, "and nothing else -- the palette is palette_for's job")
+    s = gdash_test.eq(s, join(gdash_theme.palette_for(loaded.theme, ["a", "b"], unknown), ","), "#111111,#222222", "which returns the theme's palette when no record overrides it")
 
     ' --- per-series override, in series order ------------------------------
     '

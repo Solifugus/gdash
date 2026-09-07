@@ -106,16 +106,21 @@ library gdash_theme
         return { ok: true, theme: parsed.value, errors: [] }
     end function
 
-    ' The chart options a theme contributes. Only keys the theme actually
-    ' carries, because chart merges blindly and an `unknown` would overwrite a
-    ' good default with nothing (finding G7-5).
+    ' The chart options a theme contributes DIRECTLY -- which is font size and
+    ' nothing else. Only keys the theme actually carries, because chart merges
+    ' blindly and an `unknown` would overwrite a good default with nothing
+    ' (finding G7-5).
+    '
+    ' The palette is NOT here, deliberately: it cannot be a plain theme value
+    ' because a record may override individual series, so it has to be built
+    ' against the names being drawn. `palette_for` is its accessor. This
+    ' function returned it too until a mutation test showed that nothing
+    ' noticed when it stopped -- it was dead the day it was written, because
+    ' the render path already called palette_for.
     function options_for(theme)
         opts = {}
         if is_unknown(theme) then
             return opts
-        end if
-        if not is_unknown(theme["palette"]) then
-            opts["palette"] = theme["palette"]
         end if
         if not is_unknown(theme["font_size"]) then
             opts["font_size"] = theme["font_size"]
