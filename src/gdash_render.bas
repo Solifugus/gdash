@@ -157,6 +157,46 @@ library gdash_render
         return { xs: xs, keys: keys, names: names, df: df, x_numeric: x_numeric }
     end function
 
+    ' Encoding -> chart options. Only keys the record actually carries are
+    ' passed: chart merges blindly (G7-5), so sending an `unknown` would
+    ' overwrite a sensible default with nothing.
+    '
+    ' The legend defaults to ON when a `series` channel fanned the query out
+    ' into several columns, and OFF otherwise -- one line needs no key to tell
+    ' you which line it is. An explicit `legend` in the record wins either way.
+    function _chart_options(enc, sch)
+        opts = {}
+        t = string(default(enc["title"], ""))
+        if t != "" then
+            opts["title"] = t
+        end if
+        xl = string(default(enc["x_label"], ""))
+        if xl != "" then
+            opts["x_label"] = xl
+        end if
+        yl = string(default(enc["y_label"], ""))
+        if yl != "" then
+            opts["y_label"] = yl
+        end if
+        opts["legend"] = sch != ""
+        if not is_unknown(enc["legend"]) then
+            opts["legend"] = enc["legend"] = true
+        end if
+        if not is_unknown(enc["stacked"]) then
+            opts["stacked"] = enc["stacked"] = true
+        end if
+        if not is_unknown(enc["grid"]) then
+            opts["grid"] = enc["grid"] = true
+        end if
+        if not is_unknown(enc["y_min"]) then
+            opts["y_min"] = enc["y_min"]
+        end if
+        if not is_unknown(enc["y_max"]) then
+            opts["y_max"] = enc["y_max"]
+        end if
+        return opts
+    end function
+
     function render_visual(name, visual, rows, db_path, attach)
         enc = visual["encoding"]
         mark = enc["mark"]
@@ -239,12 +279,17 @@ library gdash_render
                 return _err("visual '" + name + "': mark '" + mark + "' needs a numeric 'x', and column '" + string(xch) + "' holds text -- use mark 'bar' for categories, or make the query return a number")
             end if
 
+            ' THE SPEC CHAIN, not the convenience wrappers. `chart.bar(df, x,
+            ' ycols)` takes no options at all, so every option in the record --
+            ' title, axis labels, legend, stacked, range, grid -- is reachable
+            ' only this way (finding G7-2). Until now a chart mark's `title`
+            ' was accepted by the record and rendered by nobody.
             on error goto next
-            if mark = "bar" then
-                svg = chart.bar(shaped.df, xch, shaped.names)
-            else
-                svg = chart.line(shaped.df, xch, shaped.names)
-            end if
+            sp = chart.spec(mark, shaped.df)
+            sp = chart.x(sp, xch)
+            sp = chart.y(sp, shaped.names)
+            sp = chart.options(sp, _chart_options(enc, sch))
+            svg = chart.render(sp)
             if error then
                 return _err("visual '" + name + "': chart library refused the data: " + error.message)
             end if

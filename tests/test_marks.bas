@@ -93,5 +93,48 @@ program main(args)
     ' an unformatted column renders as its raw text
     s = gdash_test.contains_text(s, tfrag, "west", "unformatted column passes through")
 
+    ' --- chart options reach the SVG (GDASH-7 §2.2) ----------------------
+    '
+    ' Each option is asserted by rendering WITH IT AND WITHOUT IT and requiring
+    ' the difference the option names. Asserting that a string is present would
+    ' pass for a stylesheet, an empty frame, or a title that happened to repeat
+    ' elsewhere -- which is how a line chart stayed blank for six phases
+    ' (G7-3), and what GDASH-6's audit was about.
+    num_rows = [ { m: 1, amt: 10.0 }, { m: 2, amt: 40.0 }, { m: 3, amt: 25.0 } ]
+    ser_rows = [ { m: 1, r: "north", amt: 10.0 }, { m: 1, r: "south", amt: 5.0 },
+                 { m: 2, r: "north", amt: 40.0 }, { m: 2, r: "south", amt: 20.0 } ]
+
+    plain = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt" } }, num_rows, "", {})
+    labelled = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt", title: "Revenue", x_label: "Period", y_label: "Dollars" } }, num_rows, "", {})
+    s = gdash_test.ok(s, not contains(plain, ">Revenue<"), "a chart with no title carries none")
+    s = gdash_test.contains_text(s, labelled, ">Revenue<", "a title reaches the SVG")
+    s = gdash_test.contains_text(s, labelled, ">Period<", "so does an x label")
+    s = gdash_test.contains_text(s, labelled, ">Dollars<", "and a y label")
+
+    ' The legend follows the series channel unless the record says otherwise.
+    fan = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt", series: "r" } }, ser_rows, "", {})
+    s = gdash_test.contains_text(s, fan, "north", "a series channel turns the legend on by itself")
+    quiet = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt", series: "r", legend: false } }, ser_rows, "", {})
+    s = gdash_test.ok(s, not contains(quiet, "north"), "and the record can turn it off")
+    s = gdash_test.ok(s, not contains(plain, ">amt<"), "one line needs no legend to say which line it is")
+    named = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt", legend: true } }, num_rows, "", {})
+    s = gdash_test.contains_text(s, named, ">amt<", "but the record can ask for one anyway")
+
+    ' A range the data does not reach must still appear on the axis; that is
+    ' the whole point of setting one.
+    ranged = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt", y_min: 0, y_max: 100 } }, num_rows, "", {})
+    s = gdash_test.contains_text(s, ranged, ">100<", "y_max appears as a tick even though no row reaches it")
+    s = gdash_test.ok(s, not contains(plain, ">100<"), "and does not appear without it")
+
+    ' Grid lines are <line> elements, so removing the grid removes some.
+    gridless = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt", grid: false } }, num_rows, "", {})
+    s = gdash_test.ok(s, (count(split(gridless, "<line")) - 1) < (count(split(plain, "<line")) - 1), "grid: false draws fewer lines")
+
+    ' Stacking changes where the bars are, not how many.
+    stacked = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "bar", x: "m", y: "amt", series: "r", stacked: true } }, ser_rows, "", {})
+    grouped = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "bar", x: "m", y: "amt", series: "r" } }, ser_rows, "", {})
+    s = gdash_test.ok(s, stacked != grouped, "stacked renders differently from grouped")
+    s = gdash_test.eq(s, count(split(stacked, "<rect")) - 1, count(split(grouped, "<rect")) - 1, "with the same number of bars, in different places")
+
     exit(gdash_test.report(s))
 end program

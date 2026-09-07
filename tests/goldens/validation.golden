@@ -107,6 +107,20 @@ value missing channel
   ERROR visual 'v1' mark 'value' needs a 'value' channel
 table with channels
   ERROR visual 'v1' mark 'table' takes no x, y or series channel; it renders result columns in SELECT order
+x_label on wrong mark
+  ERROR visual 'v1' sets 'x_label', which only mark 'bar' or 'line' uses
+y_label not text
+  ERROR visual 'v1' has a 'y_label' that is not text
+legend on wrong mark
+  ERROR visual 'v1' sets 'legend', which only mark 'bar' or 'line' uses
+grid not boolean
+  ERROR visual 'v1' has a 'grid' that is not true or false
+stacked on wrong mark
+  ERROR visual 'v1' sets 'stacked', which only mark 'bar' uses
+y_min not a number
+  ERROR visual 'v1' has a 'y_min' that is not a number
+y_min at or above y_max
+  ERROR visual 'v1' has 'y_min' at or above 'y_max'; the axis would have no height
 series on wrong mark
   ERROR visual 'v1' sets 'series', which only mark 'bar' or 'line' uses
 format unknown

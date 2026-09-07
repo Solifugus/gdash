@@ -153,6 +153,31 @@ result order. A missing `(x, series)` pair renders as a **gap**, not a zero.
 `table` takes no `x`/`y`/`series`: the SQL is the single place shape is
 decided, so setting one is refused rather than ignored.
 
+### Chart options
+
+Marks `bar` and `line` accept these; every one is refused on a mark that
+cannot use it, and refused again if it is the wrong type.
+
+| key | type | meaning |
+|---|---|---|
+| `title` | text | Drawn inside the chart. Until GDASH-7 a chart mark's title was accepted and rendered by nobody. |
+| `x_label` / `y_label` | text | Axis labels. |
+| `legend` | boolean | Defaults to **on when a `series` channel is bound**, off otherwise — one line needs no key to say which line it is. |
+| `stacked` | boolean | `bar` only. Stacking a line would be an area chart, which this build does not render. |
+| `grid` | boolean | Gridlines. On by default. |
+| `y_min` / `y_max` | number | Axis range. `y_min` at or above `y_max` is refused. |
+
+**A range is the author's decision and gdash does not supply one.** An axis
+that does not start at zero can mislead, and an axis forced to zero can bury
+the signal; which is honest depends on what the chart is for, so the record
+says or the library decides.
+
+**A `line` needs a numeric `x`.** Given a text column it is refused, by name,
+with the suggestion to use `bar` — because the chart library draws nothing at
+all for a categorical x and returns a complete, empty-looking chart. That is a
+platform limitation gdash reports rather than hides; if it lifts, the refusal
+goes away and a period-labelled time series becomes a line chart.
+
 ### Formats
 
 `format` (scalar marks) or `formats` (a `table`'s column → format map) selects
@@ -560,6 +585,20 @@ value missing channel
   ERROR visual 'v1' mark 'value' needs a 'value' channel
 table with channels
   ERROR visual 'v1' mark 'table' takes no x, y or series channel; it renders result columns in SELECT order
+x_label on wrong mark
+  ERROR visual 'v1' sets 'x_label', which only mark 'bar' or 'line' uses
+y_label not text
+  ERROR visual 'v1' has a 'y_label' that is not text
+legend on wrong mark
+  ERROR visual 'v1' sets 'legend', which only mark 'bar' or 'line' uses
+grid not boolean
+  ERROR visual 'v1' has a 'grid' that is not true or false
+stacked on wrong mark
+  ERROR visual 'v1' sets 'stacked', which only mark 'bar' uses
+y_min not a number
+  ERROR visual 'v1' has a 'y_min' that is not a number
+y_min at or above y_max
+  ERROR visual 'v1' has 'y_min' at or above 'y_max'; the axis would have no height
 series on wrong mark
   ERROR visual 'v1' sets 'series', which only mark 'bar' or 'line' uses
 format unknown

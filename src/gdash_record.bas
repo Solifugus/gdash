@@ -421,6 +421,71 @@ library gdash_record
                     end if
                 end if
 
+                ' --- chart options (GDASH-7 §2.2) ---------------------
+                '
+                ' The library merges unknown keys silently (G7-5), so a typo
+                ' would be accepted and do nothing. Refusing here is what makes
+                ' `y_lable` a message instead of a mystery.
+                chart_marks = ["bar", "line"]
+                i2 = 0
+                text_opts = ["x_label", "y_label"]
+                while i2 < count(text_opts)
+                    ok2 = text_opts[i2]
+                    if not is_unknown(enc[ok2]) then
+                        if not contains(chart_marks, mk) then
+                            errors = concat(errors, ["visual '" + vn + "' sets '" + ok2 + "', which only mark 'bar' or 'line' uses"])
+                        else if type(enc[ok2]) != "string" then
+                            errors = concat(errors, ["visual '" + vn + "' has a '" + ok2 + "' that is not text"])
+                        end if
+                    end if
+                    i2 += 1
+                end while
+
+                i2 = 0
+                flag_opts = ["legend", "grid"]
+                while i2 < count(flag_opts)
+                    ok2 = flag_opts[i2]
+                    if not is_unknown(enc[ok2]) then
+                        if not contains(chart_marks, mk) then
+                            errors = concat(errors, ["visual '" + vn + "' sets '" + ok2 + "', which only mark 'bar' or 'line' uses"])
+                        else if type(enc[ok2]) != "boolean" then
+                            errors = concat(errors, ["visual '" + vn + "' has a '" + ok2 + "' that is not true or false"])
+                        end if
+                    end if
+                    i2 += 1
+                end while
+
+                ' 'stacked' is narrower still: stacking a line means an area
+                ' chart, which this build does not render.
+                if not is_unknown(enc["stacked"]) then
+                    if mk != "bar" then
+                        errors = concat(errors, ["visual '" + vn + "' sets 'stacked', which only mark 'bar' uses"])
+                    else if type(enc["stacked"]) != "boolean" then
+                        errors = concat(errors, ["visual '" + vn + "' has a 'stacked' that is not true or false"])
+                    end if
+                end if
+
+                ' An axis range is the author's decision -- a truthful axis is
+                ' a judgement, not a default -- but it has to be a range.
+                i2 = 0
+                range_opts = ["y_min", "y_max"]
+                while i2 < count(range_opts)
+                    ok2 = range_opts[i2]
+                    if not is_unknown(enc[ok2]) then
+                        if not contains(chart_marks, mk) then
+                            errors = concat(errors, ["visual '" + vn + "' sets '" + ok2 + "', which only mark 'bar' or 'line' uses"])
+                        else if type(enc[ok2]) != "number" then
+                            errors = concat(errors, ["visual '" + vn + "' has a '" + ok2 + "' that is not a number"])
+                        end if
+                    end if
+                    i2 += 1
+                end while
+                if type(enc["y_min"]) = "number" and type(enc["y_max"]) = "number" then
+                    if enc["y_min"] >= enc["y_max"] then
+                        errors = concat(errors, ["visual '" + vn + "' has 'y_min' at or above 'y_max'; the axis would have no height"])
+                    end if
+                end if
+
                 ' 'series' belongs only to marks that can fan out.
                 if not is_unknown(enc["series"]) then
                     if not contains(["bar", "line"], mk) then
