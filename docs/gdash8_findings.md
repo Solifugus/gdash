@@ -89,3 +89,33 @@ GTK dependency to serve dashboards deserves to be told why.
 file's syntax and directive names a real check without a service manager, a
 reboot, or root. That is not the same as running under systemd, and the DONE
 note will say which of the two the phase achieved.
+
+## G8-6 — a TLS-configured server listens in cleartext
+
+`web.configure` accepts `cert` and `key`, stores them (the merged declaration's
+`options` carries both), and `serve` ignores them — it reads the TLS pair from
+the pre-registered head instead. Measured with one certificate, both ways:
+
+```
+cert/key IN THE HEAD          https=200   http=000    TLS on, cleartext refused
+cert/key VIA web.configure    https=000   http=200    TLS OFF, cleartext served
+```
+
+`port` and `workers` from the same merge do take effect, which is what makes it
+hard to notice: everything else you configure works.
+
+**gdash refuses to start when TLS is configured**, rather than serve cleartext
+while printing "TLS from …". It cannot verify — the record `serve` returns has
+no TLS field — so it cannot pretend. An operator who configured TLS and got
+cleartext is worse off than one who was told to use a reverse proxy: the first
+believes they are encrypted.
+
+The refusal is temporary and says so, and the test that pins it will go red
+when the platform carries the pair through, which is how gdash will notice.
+Reported in `gdash8_platform_report_tls.md`.
+
+Worth naming the near miss: the first version of this code printed
+`gdash: TLS from /path/cert.pem` and served cleartext. It was written, it ran,
+and the log line was a lie. What caught it was refusing to write "TLS is
+configurable" into the operations document without running it — which is the
+rule this phase's brief opens with.

@@ -121,6 +121,58 @@ program main( args )
         ' single-process. An operator who typed 0 meant one, not a dead server.
         workers = 1
     end if
-    h = web.serve(web.configure(gdash_web, { workers: workers }))
+    settings = { workers: workers }
+
+    ' Port and address, because 8780 in the source is a decision an operator
+    ' has to be able to make differently -- behind a proxy, on a second
+    ' instance, or bound to one interface rather than all of them.
+    if trim(string(default(env("GDASH_PORT"), ""))) != "" then
+        settings["port"] = number(env("GDASH_PORT"))
+    end if
+    if trim(string(default(env("GDASH_ADDRESS"), ""))) != "" then
+        settings["address"] = string(env("GDASH_ADDRESS"))
+    end if
+
+    ' TLS IS THE PLATFORM'S; gdash's whole job is to pass the pair through.
+    ' Acquisition, renewal and rotation belong to the deployment, and a
+    ' dashboard server that tried to own them would own them badly.
+    '
+    ' BOTH OR NEITHER. Half a pair is a configuration mistake, and starting in
+    ' cleartext because the key was missing is the failure that matters: the
+    ' operator believes the thing is encrypted. Design §6 recommends TLS rather
+    ' than requiring it, so no TLS at all is allowed -- silently downgrading
+    ' from configured TLS is not.
+    cert = trim(string(default(env("GDASH_TLS_CERT"), "")))
+    keyf = trim(string(default(env("GDASH_TLS_KEY"), "")))
+    if cert != "" and keyf = "" then
+        print to error "gdash: GDASH_TLS_CERT is set but GDASH_TLS_KEY is not; refusing to start in cleartext"
+        exit(2)
+    end if
+    if keyf != "" and cert = "" then
+        print to error "gdash: GDASH_TLS_KEY is set but GDASH_TLS_CERT is not; refusing to start in cleartext"
+        exit(2)
+    end if
+    if cert != "" then
+        ' REFUSING RATHER THAN SERVING IN THE CLEAR (finding G8-6).
+        '
+        ' `web.configure` accepts `cert` and `key` and stores them --
+        ' cfg.options carries them -- but `serve` reads TLS from the
+        ' pre-registered head instead, so a configured pair is silently
+        ' ignored and the server listens in cleartext. Verified both ways at
+        ' gbasic ca5df46: the same pair in the head gives HTTPS 200 and refuses
+        ' plain HTTP; via configure it gives HTTPS nothing and plain HTTP 200.
+        '
+        ' gdash cannot detect this from what serve returns -- the server record
+        ' has no TLS field -- so it cannot verify and must not pretend. An
+        ' operator who configured TLS and got cleartext is worse off than one
+        ' who was told to use a proxy: the first believes they are encrypted.
+        print to error "gdash: TLS is configured, and this build cannot honour it."
+        print to error "       web.configure accepts cert/key but serve ignores them (gbasic ca5df46),"
+        print to error "       so starting would listen in CLEARTEXT while looking encrypted."
+        print to error "       Terminate TLS at a reverse proxy until the platform carries it through."
+        exit(2)
+    end if
+
+    h = web.serve(web.configure(gdash_web, settings))
     print("gdash: listening on " + string(h.port))
 end program

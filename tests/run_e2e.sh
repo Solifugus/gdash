@@ -408,6 +408,19 @@ who="$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/whoami")"
 has "$who" '"authenticated":true' "the browser is now authenticated"
 has "$who" '"user":"ada"' "as the user who signed in"
 
+echo "--- TLS ---"
+# gdash refuses to start under a TLS configuration this platform cannot honour
+# (finding G8-6): web.configure accepts cert/key and serve ignores them, so
+# starting would listen in cleartext while looking encrypted.
+#
+# WHEN THIS ASSERTION FAILS, THE PLATFORM HAS PROBABLY BEEN FIXED. Re-measure
+# with tests in gdash8_platform_report_tls.md and remove the refusal.
+tls_out="$(GDASH_ROOT="$ROOT" GDASH_TLS_CERT=/nonexistent/cert.pem GDASH_TLS_KEY=/nonexistent/key.pem \
+    "$GBASIC" src/gdash_server.bas 2>&1)"
+has "$tls_out" "cannot honour it" "a TLS configuration is refused rather than served in the clear"
+half="$(GDASH_ROOT="$ROOT" GDASH_TLS_CERT=/nonexistent/cert.pem "$GBASIC" src/gdash_server.bas 2>&1)"
+has "$half" "refusing to start in cleartext" "and half a pair is refused for its own reason"
+
 echo "--- a guesser is slowed, a typist is not ---"
 # Three failures are free, because a person who mistypes twice and gets it
 # right should wait exactly as long as somebody who typed it right first time.
