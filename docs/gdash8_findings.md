@@ -119,3 +119,43 @@ Worth naming the near miss: the first version of this code printed
 and the log line was a lie. What caught it was refusing to write "TLS is
 configurable" into the operations document without running it — which is the
 rule this phase's brief opens with.
+
+## G8-7 — in-flight requests survive a shutdown; `on drain` fires in only one shape
+
+The brief said to measure what `on drain` guarantees before claiming anything.
+SIGTERM to the supervisor, one second into a four-second handler, repeated at
+both worker counts:
+
+| workers | in-flight request | `on drain` fired |
+|---|---|---|
+| 1 | completed, 200, full body | yes |
+| 4 | completed, 200, full body | **no** |
+| 1 | completed, 200, full body | yes |
+| 4 | completed, 200, full body | **no** |
+
+**gdash gets graceful shutdown for free, and adds no drain hook.** Two reasons,
+and the first is sufficient: workers share no in-memory state (design §5), so
+there is nothing to flush — the sessions are files, the staged data is files,
+and a half-finished refresh leaves its staging file for the next pass to sweep.
+The second is that a hook firing in only one configuration is worse than no
+hook, because it is tested single-process and shipped multi-process.
+
+So the upgrade story is: **`systemctl restart` completes the requests it is
+serving.** That sentence is now measured rather than hoped, which is the whole
+reason the brief asked for a measurement instead of a claim.
+
+The inconsistency is reported for the next caller, who will have state to flush
+and will test it at one worker.
+
+## G8-8 — a measurement voided by a rebuild, and repeated
+
+The first multi-worker attempt returned `code=000` everywhere and a log saying
+`gbasic: No such file or directory` — the interpreter was being rebuilt
+underneath the test. The result was discarded rather than interpreted.
+
+Recorded because the temptation was to read it as "the supervisor drops
+in-flight requests", which is a plausible and completely wrong conclusion that
+would have gone into the operations document. It is the same lesson as G7-10,
+in a phase whose brief opens with "nothing is claimed that has not run" -- the
+corollary being that something which ran on a moving platform has not run
+either.

@@ -1,4 +1,6 @@
-# For the gbasic session — `web.configure` accepts cert/key and `serve` ignores them
+# For the gbasic session — two from gdash's deployment phase
+
+## 1. `web.configure` accepts cert/key and `serve` ignores them
 
 **A server configured for TLS listens in cleartext.** The configuration is
 accepted, stored, and silently not applied, so the operator believes the thing
@@ -64,3 +66,37 @@ told to use a reverse proxy: the first believes they are encrypted.
 
 gdash is not blocked — a reverse proxy is the usual deployment anyway — and it
 has a test that will go red when this is fixed, which is how it will notice.
+
+---
+
+## 2. `on drain` does not fire under `workers: N`
+
+The reference says "`on drain ... end on` runs once when draining begins", and
+`serve` with `workers: N` "ticks until asked to stop, then drains". Measured at
+`ca5df46`, SIGTERM to the supervisor one second into a four-second handler,
+repeated:
+
+| workers | in-flight request | `on drain` fired |
+|---|---|---|
+| 1 | completed, 200, full body | **yes** |
+| 4 | completed, 200, full body | **no** |
+| 1 | completed, 200, full body | **yes** |
+| 4 | completed, 200, full body | **no** |
+
+**The important half is good news and worth saying first**: an in-flight
+request completes in both shapes. A four-second handler interrupted at one
+second still returned 200 with its whole body, and every process exited. That
+is a real graceful shutdown and callers get it for free.
+
+The hook is the inconsistent part. It runs single-process and not under the
+supervisor — which is the shape anything real deploys in, so a caller who
+tested at `workers: 1` would ship a hook that never runs.
+
+gdash **is not affected and is not asking for a fix on its own account**:
+workers share no in-memory state by design (§5), so there is nothing for gdash
+to flush at shutdown, and it deliberately adds no drain hook rather than adding
+one that fires in only one configuration. Reported because the next caller will
+have state to flush, will test it single-process, and will be wrong.
+
+Either the hook should fire in both shapes, or the reference should say which
+one it means.
