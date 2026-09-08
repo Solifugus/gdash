@@ -1,0 +1,7 @@
+# Written in gBASIC (github.com/Solifugus/gbasic). Linguist has no gBASIC
+# language and its .bas heuristic mislabels these as FreeBASIC, so opt out
+# of language statistics rather than publish a wrong label.
+*.bas    linguist-detectable=false
+*.out    linguist-generated
+*.golden linguist-generated
+
