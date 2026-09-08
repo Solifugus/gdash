@@ -159,3 +159,35 @@ would have gone into the operations document. It is the same lesson as G7-10,
 in a phase whose brief opens with "nothing is claimed that has not run" -- the
 corollary being that something which ran on a moving platform has not run
 either.
+
+## G8-9 — the SSE ceiling is exactly the worker count, and G6-10 is closed
+
+GDASH-6 could not separate worker pinning from `curl` buffering and left the
+number unknown. Counting how many streams "opened" was the wrong measurement.
+The right one is small and decisive: hold every worker with a stream, then ask
+for an ordinary page.
+
+Two workers, two streams, both confirmed established:
+
+```
+baseline GET /                    200
+GET /  while both held            000  (no answer in 8s)
+GET /d/sales while both held      200  in 4.6s -- served only after a stream expired
+```
+
+**An open dashboard holds a worker for as long as it is open.** gdash's page
+opens an `EventSource`, so every browser tab with a dashboard on it occupies
+one worker, and a request arriving when all workers are held is not queued
+briefly — it is not answered until somebody closes a tab.
+
+The sizing rule follows and is not a guess: **workers must exceed the number of
+dashboards open at once**, with headroom for ordinary requests on top. A
+four-worker gdash serves three simultaneous viewers.
+
+That is the sentence the plan asked to be "stated plainly", and it is a real
+constraint rather than a caveat: an office of twenty people leaving dashboards
+open on a wall needs more than twenty workers, and each is a process.
+
+Recorded as a limitation rather than fixed. Making a stream cost less than a
+worker is the platform's architecture, not gdash's — and the honest thing in an
+operations document is the number, not a workaround.

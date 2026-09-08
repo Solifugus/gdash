@@ -259,6 +259,12 @@ turned back on its author.
 
 ## G6-10 — concurrent SSE streams do not establish reliably, and the ceiling is unresolved
 
+**Closed in GDASH-8 (G8-9).** The ceiling is exactly the worker count: an open
+dashboard holds a worker for as long as it is open. The measurement below was
+the wrong one -- counting how many streams established confounded worker
+pinning with curl buffering. The right one is to hold every worker with a
+stream and then ask for an ordinary page, which is not answered at all.
+
 Every live stream pins a worker for its lifetime — `gdash_app.events` says so
 in a comment, and design §5 names the ceiling. What was not known is the number.
 

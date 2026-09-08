@@ -95,6 +95,32 @@ PW
           echo "MARK no-curl"
       fi
 
+      # --- BACKUP AND RESTORE, PERFORMED --------------------------------
+      #
+      # The claim is that /var/lib/gdash is the entire backup set and
+      # /var/cache/gdash refetches. Neither is worth writing in an operations
+      # document unless it has been done, so it is done here: back up, destroy
+      # both, restore only the backup, and require the dashboard to come back.
+      tar -C / -czf /tmp/gdash-backup.tgz var/lib/gdash 2>/dev/null && echo "MARK backup-made"
+      rm -rf /var/lib/gdash /var/cache/gdash
+      [ ! -d /var/lib/gdash ] && echo "MARK destroyed"
+      tar -C / -xzf /tmp/gdash-backup.tgz 2>/dev/null && echo "MARK restored"
+
+      # The record and its history came back with it.
+      gdash validate sales 2>&1 | grep -q "validates" && echo "MARK restored-validates"
+      gdash snapshots sales 2>&1 | grep -q "0001.json" && echo "MARK restored-history"
+
+      # The cache did NOT come back -- and must not need to.
+      [ ! -d /var/cache/gdash ] && echo "MARK cache-gone"
+      gdash refresh sales 2>&1 | grep -q "version" && echo "MARK cache-refetched"
+      # Under published/, not draft/: `refresh` refreshes what the dashboard
+      # SERVES, and by this point it has been published. Asserted as "a staged
+      # database exists again" rather than naming a mode, because the mode
+      # belongs to the publish lifecycle and not to this claim.
+      # (No apostrophes in here: the whole container script is one
+      # single-quoted shell argument, and one apostrophe ends it silently.)
+      [ -n "$(find /var/cache/gdash -name orders.db 2>/dev/null | head -1)" ] && echo "MARK cache-rebuilt"
+
       # And it comes back off cleanly.
       # -C /src because everything above deliberately ran from /, which is the
       # point of the suite -- and which also moves `make`.
@@ -120,6 +146,16 @@ want snapshot-in-state         "into /var/lib/gdash, which is the backup set"
 want users-in-etc              "accounts land in /etc/gdash"
 want users-restricted          "at mode 0600"
 want served                    "and the server answers a dashboard request"
+echo "--- backup and restore, performed ---"
+want backup-made        "/var/lib/gdash tars up"
+want destroyed          "and both data directories can be destroyed"
+want restored           "the backup restores"
+want restored-validates "the dashboard is back"
+want restored-history   "with its published history"
+want cache-gone         "the cache was NOT in the backup"
+want cache-refetched    "and a refresh rebuilds it from the source"
+want cache-rebuilt      "so /var/cache is genuinely disposable"
+
 echo "--- uninstall ---"
 want uninstalled               "make uninstall removes the program"
 want data-survived-uninstall   "and leaves the dashboards alone"
