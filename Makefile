@@ -48,6 +48,9 @@ install:
 	# The data roles. systemd's StateDirectory= and friends create and chown
 	# these for the service, but the CLI is run by an administrator before the
 	# service has ever started, so they exist from the install onward.
+	$(INSTALL) -d -m 0755 $(DESTDIR)$(DOCDIR)
+	$(INSTALL) -m 0644 docs/gdash_operations.md $(DESTDIR)$(DOCDIR)/
+	$(INSTALL) -m 0644 docs/gdash_record_format.md $(DESTDIR)$(DOCDIR)/
 	$(INSTALL) -d -m 0755 $(DESTDIR)$(CONFDIR)
 	$(INSTALL) -d -m 0755 $(DESTDIR)$(STATEDIR)
 	$(INSTALL) -d -m 0755 $(DESTDIR)$(STATEDIR)/dashboards
@@ -65,6 +68,7 @@ uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/gdash
 	rm -f $(DESTDIR)$(BINDIR)/gdash-server
 	rm -rf $(DESTDIR)$(LIBDIR)
+	rm -rf $(DESTDIR)$(DOCDIR)
 	rm -f $(DESTDIR)$(UNITDIR)/gdash.service
 	rm -f $(DESTDIR)$(UNITDIR)/gdash-scheduler.service
 	rm -f $(DESTDIR)$(UNITDIR)/gdash-scheduler.timer
