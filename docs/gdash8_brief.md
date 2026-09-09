@@ -1,8 +1,7 @@
 # GDASH-8 — Deployment and operations: phase brief
 
-**Status:** OPEN. Step-0 complete and written up in `gdash8_findings.md`
-(G8-1 … G8-5). It found one blocker, which is fixed: gdash could only refresh
-when started from its own repository.
+**Status:** COMPLETE, with one criterion met only statically and said so.
+Findings in `gdash8_findings.md` (G8-1 … G8-9); DONE note in §7.
 **Narrows:** the GDASH-8 paragraph of `gdash_development_plan.md` (the phase
 the numbering note calls deployment; it was GDASH-7 before GDASH-6 was
 inserted).
@@ -167,3 +166,47 @@ gdash is one host with a filesystem, and design §5 is built on that. A
 container image as a supported artifact: the container here is test tooling,
 and shipping one is a distribution decision that would need its own lifecycle.
 Init systems other than systemd.
+
+---
+
+## 7. DONE note
+
+**27 suites — 851 in-process assertions, 22 multi-worker, 9 concurrency, 160
+end-to-end** — green from a clean checkout; live Postgres 8/8; live LDAP 49 plus
+16 over HTTP; the opt-in FHS runner 22.
+
+Seven of eight §5 criteria met in full. The third — the units — is met
+**statically only**, and §10 of the operations document says so: every directive
+passes `systemd-analyze verify`, the templating is checked, and no `systemctl
+start` has happened, because there is no systemd in the container the suite
+uses. "The unit is well-formed" and "the service has started" are different
+sentences and only the first is true.
+
+**Built:** a Makefile honouring `DESTDIR` and `PREFIX`; two wrappers so an
+operator types `gdash`; three templated, hardened systemd units; the FHS runner;
+the session sweep on the maintenance pass; rate limiting per username; port,
+address and TLS as configuration; and `docs/gdash_operations.md`.
+
+**What the phase found:**
+
+- **gdash could only refresh from its own repository** (G8-2) — the child
+  interpreter was located relative to the working directory. Second instance of
+  G6-8, hidden the same way.
+- **A TLS-configured server listened in cleartext** (G8-6). `web.configure`
+  accepts `cert`/`key`, `serve` ignores them. gdash refuses to start rather
+  than print "TLS from …" and serve plaintext.
+- **The SSE ceiling is the worker count** (G8-9), closing G6-10. An open
+  dashboard holds a worker; four workers serve three viewers.
+- **In-flight requests survive a restart** (G8-7), measured at one worker and
+  four. `on drain` fires only at one, so gdash adds no hook.
+- **Backup and restore is performed, not asserted** — the runner destroys both
+  data directories and brings the dashboard back from the tarball.
+
+**Deliberately not built** — §6 stands, and additionally: **Excel as an import
+source**, ruled out by the maintainer as better served by importing into a
+database first; and **anything beyond one live source**, which is the next
+phase rather than this one.
+
+**Cross-repo, owed:** `gdash8_platform_report_tls.md` carries two — `serve`
+ignoring a configured TLS pair, and `on drain` firing in only one shape. The
+three chart asks from GDASH-7 are still open.
