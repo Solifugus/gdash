@@ -39,6 +39,7 @@ program main(args)
     load gdash_authcfg from "gdash_authcfg.bas"
     load gdash_auth from "gdash_auth.bas"
     load gdash_auth_ldap from "gdash_auth_ldap.bas"
+    load gdash_source_odbc from "gdash_source_odbc.bas"
 
     p = gdash_paths.from_args(args)
 
@@ -61,6 +62,68 @@ program main(args)
             i += 1
         end if
     end while
+
+    ' --- a source, checked ------------------------------------------------
+    '
+    ' The shape `auth check` established: connect, ask the smallest possible
+    ' question, and say what came back. Without it the first evidence that a
+    ' driver is missing is a refresh failing at 3am with a SQLSTATE.
+    '
+    ' It prints NO CONNECTION STRING. That string carries PWD=.
+    if verb = "source" then
+        sub = ""
+        if count(rest) > 0 then
+            sub = rest[0]
+        end if
+        if sub != "check" then
+            print to error "usage: gdash --root <dir> source check [profile]"
+            exit(2)
+        end if
+        profiles = gdash_refresh.load_profiles(p)
+        have = sort(keys(profiles))
+        if count(rest) < 2 then
+            if count(have) = 0 then
+                print("no connection profiles in " + gdash_paths.connections_file(p))
+                exit(0)
+            end if
+            j = 0
+            while j < count(have)
+                print(have[j] + "  kind: " + string(default(profiles[have[j]]["kind"], "(none)")))
+                j += 1
+            end while
+            print("")
+            print("give a profile to test it: gdash source check <profile>")
+            exit(0)
+        end if
+        pname = rest[1]
+        prof = profiles[pname]
+        if is_unknown(prof) then
+            print to error "no connection profile named '" + pname + "'"
+            exit(1)
+        end if
+        kind = string(default(prof["kind"], ""))
+        print(pname + ": kind " + kind)
+        if kind != "odbc" then
+            print("  only 'odbc' profiles can be checked from here; a '" + kind + "' profile is exercised by a refresh")
+            exit(0)
+        end if
+        drivers = gdash_source_odbc.describe_drivers()
+        print("  drivers this host can load: " + join(drivers, ", "))
+        dsns = gdash_source_odbc.describe_sources()
+        if count(dsns) > 0 then
+            print("  configured DSNs: " + join(dsns, ", "))
+        else
+            print("  configured DSNs: none -- name a Driver= in the connection string")
+        end if
+        got = gdash_source_odbc.fetch(prof, "select 1 as probe")
+        if not got.ok then
+            print to error "  FAILED: " + got.message
+            exit(1)
+        end if
+        print("  connected, and a trivial query answered " + string(count(got.rows)) + " row(s)")
+        print("  values arrive as: " + type(got.rows[0][0]) + " (money depends on this being text)")
+        exit(0)
+    end if
 
     ' --- the auth configuration -------------------------------------------
     '

@@ -73,6 +73,21 @@ library gdash_store
         if frac != "" and not _digits_only(frac) then
             return { ok: false, minor: "", message: "not a decimal number: '" + string(value) + "'" }
         end if
+        ' TRAILING ZEROS ARE NOT EXCESS PRECISION. `1250.7500` at scale 2 is
+        ' exactly 1250.75 and loses nothing by being stored as 125075; refusing
+        ' it would refuse the most ordinary money column there is, a
+        ' numeric(19,4) reported in cents.
+        '
+        ' Found by comparing two origins (finding G9-6): Postgres renders that
+        ' value as "1250.7500" and an ODBC driver renders it as "1250.75", so
+        ' the same source data was accepted through one and refused through the
+        ' other. The check counted CHARACTERS after the point; what design §4
+        ' means by "excess decimals are rejected, not rounded" is significant
+        ' ones. 1250.7512 at scale 2 is still refused, which is the property
+        ' that matters.
+        while len(frac) > scale and ends_with(frac, "0")
+            frac = mid(frac, 0, len(frac) - 1)
+        end while
         if len(frac) > scale then
             return { ok: false, minor: "", message: "value '" + string(value) + "' has " + string(len(frac)) + " decimal places; column scale is " + string(scale) + " (rejected, not rounded)" }
         end if

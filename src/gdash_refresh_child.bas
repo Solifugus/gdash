@@ -43,6 +43,12 @@ program main(args)
         ' require the pg module to be present or a server to exist.
         load gdash_source_pg from "gdash_source_pg.bas"
         got = gdash_source_pg.fetch(profile, job["sql"])
+    else if kind = "odbc" then
+        ' Loaded only on the branch that needs it, as postgres is: a hermetic
+        ' run must not require the odbc module, and a build without unixODBC
+        ' must still serve dashboards from the sources it does have.
+        load gdash_source_odbc from "gdash_source_odbc.bas"
+        got = gdash_source_odbc.fetch(profile, job["sql"])
     else
         print to error "unknown profile kind: " + string(kind)
         exit(3)

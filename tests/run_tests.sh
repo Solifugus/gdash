@@ -113,6 +113,16 @@ if [[ "${GDASH_SKIP_E2E:-0}" != "1" ]]; then
     fi
 fi
 
+# The ODBC origin, through a real driver manager. Opt-in, but the cheapest of
+# the live runners: the SQLite driver reads a file, so there is no service.
+if [[ "${GDASH_ODBC_TEST:-0}" == "1" ]]; then
+    echo "--- ODBC ---"
+    ran=$((ran + 1))
+    if ! "$HERE/run_odbc.sh"; then
+        failed=$((failed + 1))
+    fi
+fi
+
 # The install, at real FHS paths. Opt-in: it needs root, which means a
 # container, which means podman. Named here so `make check` mentions it rather
 # than leaving the install untested and unmentioned.
