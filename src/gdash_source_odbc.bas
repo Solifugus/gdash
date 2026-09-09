@@ -19,7 +19,11 @@
 
 library gdash_source_odbc
 
-    load odbc
+    ' `load odbc` is inside the functions that speak to a driver rather than at
+    ' the library level, so a gbasic built without unixODBC still loads gdash
+    ' and fails only when an ODBC profile is actually used -- guarded, with a
+    ' message. It also lets the hermetic suite test everything up to the wire
+    ' on a host with no drivers at all. Same shape as gdash_auth_ldap.
 
     ' A connection string, however the profile spells it. `dsn` is the older
     ' shape an operator with a configured odbc.ini expects; `connection` is the
@@ -44,6 +48,10 @@ library gdash_source_odbc
         end if
 
         on error goto next
+        load odbc
+        if error then
+            return { ok: false, columns: [], rows: [], message: "this build has no odbc support" }
+        end if
         conn = odbc.connect(target)
         if error then
             ' The driver's message names a host and a SQLSTATE. The connection
@@ -89,6 +97,10 @@ library gdash_source_odbc
     ' What `gdash source check` reports. Never the connection string.
     function describe_drivers()
         on error goto next
+        load odbc
+        if error then
+            return []
+        end if
         got = odbc.drivers()
         if error then
             return []
@@ -104,6 +116,10 @@ library gdash_source_odbc
 
     function describe_sources()
         on error goto next
+        load odbc
+        if error then
+            return []
+        end if
         got = odbc.sources()
         if error then
             return []

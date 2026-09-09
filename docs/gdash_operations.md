@@ -14,13 +14,18 @@ libpq5 libsqlite3-0 libodbc2 libldap-2.5-0 libcurl3-gnutls
 libssl3 libxml2 libcrypt1 libgirepository-2.0-0
 ```
 
-Two of those deserve an explanation rather than a silent install:
+Three of those deserve an explanation rather than a silent install:
 
 - **`libldap`** is needed only if you use directory authentication. Local
   accounts need nothing from it.
 - **`libgirepository`** comes from the interpreter's GUI support, which a
   dashboard server never uses. It is a dependency of the interpreter, not of
   gdash.
+- **`libodbc`** is needed only if a connection profile has `"kind": "odbc"` —
+  and then **the driver for your database must be installed too**, which is a
+  separate package per vendor (`msodbcsql18`, `odbc-mariadb`,
+  `libsqliteodbc`, …). `gdash source check <profile>` lists what the host can
+  actually load, which turns "it will not connect" into a sentence.
 
 ## 2. Install
 
@@ -152,6 +157,7 @@ nothing.
 | sign-in says "try again in N seconds" | rate limiting after three failed attempts | expires after 15 quiet minutes |
 | sign-in says "unavailable" | the directory is down — **not** a wrong password | `audit.log`, `login.unavailable` |
 | a chart is blank with an error box | a `line` mark over a text x column | use `bar`, or return a number |
+| a refresh says "cannot connect to source" | wrong host, or the ODBC driver is not installed | `gdash source check <profile>` |
 | everything refuses after an edit | a record failed validation | `gdash validate <name>` |
 
 The audit log is JSON lines: logins, failures, throttling, publishes,
@@ -169,6 +175,7 @@ gdash snapshots <name>           # what has been published
 gdash diff <name> [from] [to]    # what changed between two versions
 gdash user add|passwd|groups|disable|enable|remove|list
 gdash auth check <username>      # what the directory actually returns
+gdash source check [profile]     # which drivers the host has, and whether it connects
 gdash schedule                   # one refresh pass, by hand
 ```
 

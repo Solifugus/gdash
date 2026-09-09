@@ -46,6 +46,36 @@ sibling dataset so it can be named unqualified (§4), and SQLite attaches at mos
 ten databases beside the one being queried. The twelfth is refused at load
 rather than at render.
 
+### Where a dataset comes from
+
+`profile` names an entry in `/etc/gdash/connections.json`. gdash **imports**
+from a source on a schedule and stages the result in SQLite; it never queries a
+source to answer a page. So a profile is an origin, not a database gdash
+speaks:
+
+```json
+{ "warehouse": { "kind": "postgres", "host": "db", "database": "erp",
+                 "user": "gdash", "password": "…" },
+  "legacy":    { "kind": "odbc",
+                 "connection": "Driver=ODBC Driver 18 for SQL Server;Server=…;UID=…;PWD=…" },
+  "byDsn":     { "kind": "odbc", "dsn": "warehouse" } }
+```
+
+| kind | reaches |
+|---|---|
+| `postgres` | PostgreSQL directly |
+| `odbc` | anything with a driver installed on the host — SQL Server, MySQL, MariaDB, Oracle, DB2, Snowflake, SQLite |
+| `fixture` | a JSON file; the test seam, not a deployment source |
+
+An `odbc` profile names either a `connection` string or a `dsn`. A DSN needs
+`odbc.ini` configured; a connection string does not, and a host with drivers
+and no DSNs is the ordinary case. Run `gdash source check <profile>` to see
+which drivers the host can actually load.
+
+**A connection string is a credential** — it carries `PWD=`. It lives in
+`connections.json` at 0600 and appears in no record, no log, no error message
+and no diagnostic.
+
 ### Refresh policies
 
 `refresh` is a string, and its companions are sibling keys rather than a nested
