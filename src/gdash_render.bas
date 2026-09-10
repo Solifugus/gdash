@@ -82,6 +82,64 @@ library gdash_render
     ' everything else about shape. A missing (x, series) pair stays `unknown`,
     ' which the chart library renders as a gap rather than a zero; a zero
     ' would be a claim the data never made.
+    ' ONE ENTRY PER ROW, nothing deduplicated -- which is what a scatter is.
+    ' The frame keeps every point, and a series channel gives each series its
+    ' own y column with a gap where a row belongs to a different series, so no
+    ' row is dropped and none is invented.
+    function _points(rows, xch, ych, sch, is_money, scale)
+        xs = []
+        names = []
+        seen_names = {}
+        x_numeric = true
+        i = 0
+        while i < count(rows)
+            raw_x = rows[i][xch]
+            if type(raw_x) != "number" then
+                x_numeric = false
+            end if
+            xs = append(xs, raw_x)
+            if sch != "" then
+                sv = string(rows[i][sch])
+                if is_unknown(seen_names[sv]) then
+                    seen_names[sv] = true
+                    names = append(names, sv)
+                end if
+            end if
+            i += 1
+        end while
+        if sch = "" then
+            names = [ych]
+        end if
+
+        df = {}
+        df[xch] = xs
+        c = 0
+        while c < count(names)
+            nm = names[c]
+            col = []
+            i = 0
+            while i < count(rows)
+                mine = sch = ""
+                if sch != "" then
+                    mine = string(rows[i][sch]) = nm
+                end if
+                if mine then
+                    if is_money then
+                        col = append(col, number(gdash_format.minor_to_decimal(rows[i][ych + "__text"], scale)))
+                    else
+                        col = append(col, rows[i][ych])
+                    end if
+                else
+                    col = append(col, unknown)
+                end if
+                i += 1
+            end while
+            df[nm] = col
+            c += 1
+        end while
+        return { xs: xs, keys: xs, names: names, df: df, x_numeric: x_numeric, collapsed: "" }
+    end function
+
     ' Returns { xs, keys, names, df, x_numeric }.
     '
     ' `keys` is the string form of each x value, used for slotting rows; `xs`
@@ -108,6 +166,8 @@ library gdash_render
         names = []
         seen = {}
         seen_names = {}
+        seen_pairs = {}
+        collapsed = ""
         x_numeric = true
         i = 0
         while i < count(rows)
@@ -120,6 +180,29 @@ library gdash_render
                 seen[xv] = count(keys)
                 keys = append(keys, xv)
                 xs = append(xs, raw_x)
+            end if
+            ' A repeat that MATTERS is the same (x, series) pair twice, because
+            ' that is what lands in one slot and loses a row. Two regions at
+            ' the same month are fine; one region twice at one month is not.
+            '
+            ' TWO LEVELS, NOT A JOINED KEY. The first version built
+            ' `xv + chr(0) + series` and collided every pair sharing an x,
+            ' because a NUL truncates a record key (finding G6-16) -- gdash's
+            ' own finding, met from the other side. Any other separator is a
+            ' character that can appear in the data.
+            sv = ych
+            if sch != "" then
+                sv = string(rows[i][sch])
+            end if
+            at_x = seen_pairs[xv]
+            if is_unknown(at_x) then
+                at_x = {}
+            end if
+            if is_unknown(at_x[sv]) then
+                at_x[sv] = true
+                seen_pairs[xv] = at_x
+            else if collapsed = "" then
+                collapsed = xv
             end if
             if sch != "" then
                 sv = string(rows[i][sch])
@@ -173,7 +256,7 @@ library gdash_render
             c += 1
         end while
 
-        return { xs: xs, keys: keys, names: names, df: df, x_numeric: x_numeric }
+        return { xs: xs, keys: keys, names: names, df: df, x_numeric: x_numeric, collapsed: collapsed }
     end function
 
     ' Encoding -> chart options. Only keys the record actually carries are
@@ -319,25 +402,29 @@ library gdash_render
                 end if
             end if
 
-            shaped = _pivot(rows, xch, ych, sch, is_money, scale)
-
-            ' A line places points along a numeric axis. Given categories it
-            ' draws NOTHING and still returns a complete chart -- axes,
-            ' gridlines, labels and no data (finding G7-3). An empty chart that
-            ' looks like a chart is worse than an error: the viewer reads it as
-            ' "no data" and the author reads it as "working". So gdash refuses
-            ' here, where it holds the rows and can name the column. `bar`
-            ' takes the same data correctly, and saying so is what turns the
-            ' message into a fix.
-            if mark != "bar" and not shaped.x_numeric then
-                return _err("visual '" + name + "': mark '" + mark + "' needs a numeric 'x', and column '" + string(xch) + "' holds text -- use mark 'bar' for categories, or make the query return a number")
+            ' A SCATTER IS ONE POINT PER ROW. _pivot slots values by unique x
+            ' and the last row wins, which silently dropped points: four
+            ' readings with two at the same x drew three circles (finding
+            ' G10-1). For a scatter that is data loss; for the marks that need
+            ' one value per slot it is an AGGREGATION, and design §2 puts
+            ' aggregation in the SQL -- so those refuse and name the column
+            ' rather than quietly keeping a row at random.
+            if mark = "scatter" then
+                shaped = _points(rows, xch, ych, sch, is_money, scale)
+            else
+                shaped = _pivot(rows, xch, ych, sch, is_money, scale)
+                if shaped.collapsed != "" then
+                    return _err("visual '" + name + "': mark '" + mark + "' needs one value per '" + string(xch) + "', and '" + shaped.collapsed + "' appears more than once -- aggregate it in the query (group by), or use mark 'scatter' to plot every row")
+                end if
             end if
 
-            ' THE SPEC CHAIN, not the convenience wrappers. `chart.bar(df, x,
-            ' ycols)` takes no options at all, so every option in the record --
-            ' title, axis labels, legend, stacked, range, grid -- is reachable
-            ' only this way (finding G7-2). Until now a chart mark's `title`
-            ' was accepted by the record and rendered by nobody.
+            ' The numeric-x refusal that stood here is GONE. It existed
+            ' because a text x made line, area and scatter draw nothing while
+            ' returning a complete chart (G7-3); since gbasic a1f6da5 they
+            ' place a non-numeric x at the same band centres `bar` uses, so a
+            ' line and a bar of one frame line up column for column. gdash
+            ' verified that against the installed library before deleting this.
+
             on error goto next
             sp = chart.spec(mark, shaped.df)
             sp = chart.x(sp, xch)
