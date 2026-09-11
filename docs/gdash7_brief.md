@@ -1,7 +1,9 @@
 # GDASH-7 — Chart vocabulary and rendering depth: phase brief
 
-**Status:** COMPLETE except §2.5, which is blocked on the platform and is
-recorded as such rather than worked around. Six of seven §5 criteria met.
+**Status:** COMPLETE. Six of seven §5 criteria were met in this phase; the
+seventh (§2.5, click-to-publish) was blocked on the platform, recorded rather
+than worked around, and **delivered in GDASH-10** once the library carried an
+identifier on each mark.
 Findings in `gdash7_findings.md` (G7-1 … G7-10); DONE note in §7.
 **Narrows:** the GDASH-7 paragraph of `gdash_development_plan.md` (the phase
 the numbering note calls chart vocabulary; deployment is GDASH-8).
