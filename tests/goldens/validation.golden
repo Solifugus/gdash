@@ -121,6 +121,14 @@ stacked on a scatter
   ERROR visual 'v1' sets 'stacked', which only mark 'bar' or 'area' uses
 legend on a pie
   ERROR visual 'v1' sets 'legend'; a pie labels its slices directly and has no legend to turn on
+publishes on a line
+  ERROR visual 'v1' sets 'publishes', which only marks 'bar', 'scatter' and 'pie' can do; a line's mark is a whole series, not a category
+publishes an undeclared param
+  ERROR visual 'v1' publishes ':ghost', which is not a declared param
+publishes a reserved param
+  ERROR visual 'v1' publishes ':user_email', which is reserved; the server supplies it from the authenticated identity
+publishes nothing in particular
+  ERROR visual 'v1' has a 'publishes' that is not a param name
 colors on wrong mark
   ERROR visual 'v1' sets 'colors', which only a mark that draws series or slices uses
 colors not an object

@@ -176,6 +176,11 @@ program main(args)
     lines = concat(lines, [emit_case("stacked on a scatter", vis_case({ dataset: "d1", sql: "select a, b from d1", encoding: { mark: "scatter", x: "a", y: "b", stacked: true } }))])
     lines = concat(lines, [emit_case("legend on a pie", vis_case({ dataset: "d1", sql: "select a, b from d1", encoding: { mark: "pie", label: "a", value: "b", legend: true } }))])
 
+    lines = concat(lines, [emit_case("publishes on a line", vis_case({ dataset: "d1", sql: "select a, b from d1", encoding: { mark: "line", x: "a", y: "b", publishes: "region" } }))])
+    lines = concat(lines, [emit_case("publishes an undeclared param", vis_case({ dataset: "d1", sql: "select a, b from d1", encoding: { mark: "bar", x: "a", y: "b", publishes: "ghost" } }))])
+    lines = concat(lines, [emit_case("publishes a reserved param", vis_case({ dataset: "d1", sql: "select a, b from d1", encoding: { mark: "bar", x: "a", y: "b", publishes: "user_email" } }))])
+    lines = concat(lines, [emit_case("publishes nothing in particular", vis_case({ dataset: "d1", sql: "select a, b from d1", encoding: { mark: "bar", x: "a", y: "b", publishes: 7 } }))])
+
     lines = concat(lines, [emit_case("colors on wrong mark", vis_case({ dataset: "d1", sql: "select a from d1", encoding: { mark: "value", value: "a", colors: { x: "#abc" } } }))])
     lines = concat(lines, [emit_case("colors not an object", vis_case({ dataset: "d1", sql: "select a, b from d1", encoding: { mark: "bar", x: "a", y: "b", colors: "red" } }))])
     lines = concat(lines, [emit_case("colors with a bad colour", vis_case({ dataset: "d1", sql: "select a, b from d1", encoding: { mark: "bar", x: "a", y: "b", colors: { north: "crimson" } } }))])

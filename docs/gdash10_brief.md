@@ -1,9 +1,7 @@
 # GDASH-10 — Chart follow-through: phase brief
 
-**Status:** OPEN, and BLOCKED on one command: the chart library at gbasic
-`a1f6da5` is not installed, and gdash loads `chart` from the installed stdlib
-by design (G6-8). Verified against the repo copy; nothing below can be tested
-until `sudo make install` has run.
+**Status:** COMPLETE. All five §5 criteria met, verified against the
+INSTALLED library. Findings in `gdash10_findings.md`; DONE note in §7.
 **Narrows:** the deferred scope of GDASH-7 — §2.5, and the two limits its DONE
 note recorded as waiting on the platform.
 **Authority:** `gdash_design.md` outranks this brief.
@@ -118,3 +116,43 @@ axis option gdash cannot derive from something the record already says —
 adding `y_prefix` to the record would be a second place the format is
 declared. Legend interaction. Zoom and pan, which need state a worker cannot
 hold.
+
+---
+
+## 7. DONE note
+
+**28 suites green** against the installed library, which is the version of that
+sentence that counts: everything in §1 was first verified against a path gdash
+does not use, and re-verified after `make install`.
+
+All five §5 criteria met.
+
+**Built:** the numeric-x refusal removed; a scatter that keeps every row and
+three marks that refuse a repeat rather than aggregating silently; an axis
+derived from the record's own `format` and `currency`; and click-to-publish,
+blocked since GDASH-7 and now a wiring job exactly as its brief predicted.
+
+**What the phase found**, all four of it in `gdash10_findings.md`:
+
+- **A scatter lost points** behind the refusal that hid it — the refusal fired
+  first on precisely the data that would have shown the bug.
+- **The repeat detector collided with G6-16**, gdash's own finding, met from
+  the other side.
+- **The assertion audit refused two assertions I meant**, and moving them to
+  where the shim is produced was better than the allowlist that would have
+  kept them.
+- **The reference dashboard had been drawing nothing for eight phases**, behind
+  `contains(frag, "<svg")`.
+
+**Deliberately not built** — §6 stands, and additionally:
+
+- **Tooltips.** The attributes are there and it is client-side work, but
+  click-to-filter is what a dashboard is asked for and a tooltip is what a
+  dashboard is complimented on. Named so the absence is a decision.
+- **`publishes` on a line or area.** Measured, not assumed: their marks carry
+  no key because a path is a whole series. If the library ever puts a key on a
+  point of a line, this is one line of validation.
+- **Clearing a published param.** A click sets; nothing unsets except the
+  slicer. A "show all" affordance is a control, not a chart feature, and
+  inventing one here would put a second way to do it beside the `select` that
+  already exists.

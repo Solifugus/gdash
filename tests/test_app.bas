@@ -172,6 +172,19 @@ program main(args)
                             form: { user: "ada", pass: "wrong" } })
     s = gdash_test.eq(s, status_of(bad), 400, "a login without a CSRF token is refused before the password is read")
 
+    ' --- the shim, asserted where it is produced -------------------------
+    '
+    ' Not by fetching a page: the shim is on every page whatever the dashboard
+    ' contains, so a page assertion about it passes for the wrong reason and
+    ' the assertion audit refuses it -- correctly, even though the furniture is
+    ' exactly what was meant.
+    shim = gdash_app._shim()
+    s = gdash_test.contains_text(s, shim, "function gdashPublish(", "there is one publish path")
+    s = gdash_test.contains_text(s, shim, "gdashPublish(el.getAttribute('data-param'),el.value)", "a slicer goes through it")
+    s = gdash_test.contains_text(s, shim, "closest('[data-publishes]')", "and so does a click on a keyed mark")
+    s = gdash_test.contains_text(s, shim, "addEventListener('click'", "the listener is delegated, so it survives a fragment being replaced")
+    s = gdash_test.eq(s, count(split(shim, "location.pathname+'/params'")) - 1, 1, "and there is exactly ONE place a param is posted from")
+
     exit(gdash_test.report(s))
 end program
 

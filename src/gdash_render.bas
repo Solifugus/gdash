@@ -266,6 +266,21 @@ library gdash_render
     ' The legend defaults to ON when a `series` channel fanned the query out
     ' into several columns, and OFF otherwise -- one line needs no key to tell
     ' you which line it is. An explicit `legend` in the record wins either way.
+    ' A chart whose marks publish a param on click. The wrapper carries the
+    ' PARAM NAME; the marks carry the values, which the library put there. The
+    ' shim needs both and neither is guessable from the other.
+    '
+    ' Nothing is wrapped unless the record opted in, so a dashboard that has
+    ' not asked for this is byte-identical to before.
+    function _clickable(enc, svg)
+        pub = trim(string(default(enc["publishes"], "")))
+        if pub = "" then
+            return svg
+        end if
+        q = chr(34)
+        return "<div class=" + q + "gdash-clickable" + q + " data-publishes=" + q + html_escape(pub) + q + ">" + svg + "</div>"
+    end function
+
     function _chart_options(enc, sch, theme, names)
         opts = {}
         t = string(default(enc["title"], ""))
@@ -308,6 +323,14 @@ library gdash_render
         ' Only for marks with a y axis: a pie has none, and an option that
         ' cannot apply is one an author will wonder about.
         mk = string(default(enc["mark"], ""))
+
+        ' Identifiers on the marks ONLY when a visual asked to publish a param
+        ' from a click. Off otherwise, so every other chart's markup is
+        ' byte-identical to what it was before this existed.
+        if trim(string(default(enc["publishes"], ""))) != "" then
+            opts["mark_keys"] = true
+        end if
+
         if contains(["bar", "line", "area", "scatter"], mk) then
             fmt = string(default(enc["format"], ""))
             if fmt = "currency" then
@@ -412,7 +435,7 @@ library gdash_render
             if error then
                 return _err("visual '" + name + "': chart library refused the data: " + error.message)
             end if
-            return svg
+            return _clickable(enc, svg)
         end if
 
         if contains(["bar", "line", "area", "scatter"], mark) then
@@ -464,7 +487,7 @@ library gdash_render
             if error then
                 return _err("visual '" + name + "': chart library refused the data: " + error.message)
             end if
-            return svg
+            return _clickable(enc, svg)
         end if
 
         if mark = "table" then

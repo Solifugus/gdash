@@ -214,6 +214,16 @@ cannot use it, and refused again if it is the wrong type.
 | `stacked` | boolean | `bar` and `area` only. |
 | `grid` | boolean | Gridlines. On by default. |
 | `y_min` / `y_max` | number | Axis range. `y_min` at or above `y_max` is refused. |
+| `publishes` | text | A param a click on a mark publishes. `bar`, `scatter`, `pie` only. |
+
+**The axis follows the format; you do not set it twice.** A visual that says
+`format: "currency"` with a `currency` gets that currency's symbol on the axis
+and its own number of minor units — `$1,250.75`, and `¥1,251` for a currency
+with none. `format: "percent"` labels the axis `42%` where the value is stored
+as `0.42`, which is the same hundred the table multiplies by. There is no
+`y_prefix` in the record on purpose: a second place to declare the format is a
+second place to forget it, and then the axis and the numbers beside it
+disagree on one page.
 
 **A range is the author's decision and gdash does not supply one.** An axis
 that does not start at zero can mislead, and an axis forced to zero can bury
@@ -268,6 +278,32 @@ order  by bucket
 you wrote is a decision you can see, read and change, and one gdash inferred
 would be a second place shape is decided. If a chart is slow, the query is
 returning more than the chart can draw.
+
+### Click a mark, publish a param
+
+A `bar`, `scatter` or `pie` can name a param that a click on one of its marks
+publishes:
+
+```json
+"encoding": { "mark": "bar", "x": "region", "y": "total", "publishes": "region" }
+```
+
+A click then does exactly what moving a `select` control does — it publishes a
+param, and precisely the visuals whose SQL binds that param re-run. There is
+one publish path for both, so a click cannot become a second, subtly different
+way to change a param.
+
+**Only marks that are categories.** A `line` cannot publish: its mark is a
+whole series, not a category, so a click on it has nothing to mean. That is
+measured against the chart library rather than assumed — a bar, a point and a
+slice each carry their value, a line's path does not.
+
+**A visual that does not set `publishes` is unchanged in every byte.** The
+identifiers the click needs are switched on per visual, so a dashboard that has
+not asked for this renders what it always rendered.
+
+The param must be declared, and may not be one of the reserved `user_*` —
+those come from the signed-in identity and a click may not overwrite them.
 
 ### Colour, and the theme
 
@@ -731,6 +767,14 @@ stacked on a scatter
   ERROR visual 'v1' sets 'stacked', which only mark 'bar' or 'area' uses
 legend on a pie
   ERROR visual 'v1' sets 'legend'; a pie labels its slices directly and has no legend to turn on
+publishes on a line
+  ERROR visual 'v1' sets 'publishes', which only marks 'bar', 'scatter' and 'pie' can do; a line's mark is a whole series, not a category
+publishes an undeclared param
+  ERROR visual 'v1' publishes ':ghost', which is not a declared param
+publishes a reserved param
+  ERROR visual 'v1' publishes ':user_email', which is reserved; the server supplies it from the authenticated identity
+publishes nothing in particular
+  ERROR visual 'v1' has a 'publishes' that is not a param name
 colors on wrong mark
   ERROR visual 'v1' sets 'colors', which only a mark that draws series or slices uses
 colors not an object

@@ -568,6 +568,56 @@ has "$charts" ">Month<" "so does an axis label"
 has "$charts" "#123456" "the server theme's palette is used"
 has "$charts" "#ff00ff" "and a record's per-series colour overrides it"
 
+echo "--- click to publish a param ---"
+#
+# The click is browser JavaScript and this runner has no browser. What it CAN
+# assert is every piece the click depends on: the markup contract that tells it
+# which param and which value, the listener that reads them, and the endpoint
+# it posts to answering the value a click would send. If all three hold, the
+# only untested step is the browser dispatching a click event.
+python3 - "$ROOT" <<'MKCLICK'
+import json, sys
+r = sys.argv[1]
+p = f'{r}/lib/dashboards/team/draft.json'
+d = json.load(open(p))
+d['params'] = dict(d.get('params') or {}, region={'default': 'west'})
+d['visuals']['by_region'] = {
+    'dataset': 'orders',
+    'sql': 'select region as region, sum(amount) as total from orders group by region order by region',
+    'encoding': {'mark': 'bar', 'x': 'region', 'y': 'total', 'publishes': 'region',
+                 'format': 'currency', 'currency': 'USD'}}
+d['visuals']['picked'] = {
+    'dataset': 'orders',
+    'sql': "select sum(amount) as total from orders where region = :region",
+    'encoding': {'mark': 'value', 'value': 'total', 'format': 'currency',
+                 'currency': 'USD', 'title': 'Picked region'}}
+d['tabs'][0]['layout']['vert'].append({'visual': 'by_region'})
+d['tabs'][0]['layout']['vert'].append({'visual': 'picked'})
+json.dump(d, open(p, 'w'), indent=2)
+MKCLICK
+"$GBASIC" src/gdash_cli.bas --root "$ROOT" validate team >/dev/null 2>&1
+page="$(curl -s -b "$jarA" --max-time 20 "http://127.0.0.1:$PORT/d/team")"
+has "$page" 'data-publishes="region"' "a publishing chart names its param in the page"
+has "$page" "data-key=" "and its bars carry the values a click would send"
+# The shim's own content is asserted in tests/test_app.bas, where it is
+# PRODUCED. Asserting it by fetching a dashboard tests page furniture -- it is
+# on every page whatever the dashboard does -- which is what the assertion
+# audit refuses, correctly, even when the furniture is the thing you meant.
+
+# What the click does, done directly: the endpoint answers with re-rendered
+# fragments for exactly the visuals that bind the param.
+clicked="$(curl -s -b "$jarA" --max-time 20 -X POST -H 'content-type: application/json' \
+    -d '{"region":"east"}' "http://127.0.0.1:$PORT/d/team/params")"
+has "$clicked" '"picked"' "posting the clicked value re-renders the visual that binds it"
+hasnt "$clicked" '"by_region"' "and not the chart that published it, which does not bind it"
+
+# A chart that did not opt in carries nothing for a click to find.
+# The needle is the ATTRIBUTE WITH A VALUE, not the bare name: the shim's own
+# `closest('[data-publishes]')` puts the bare name on every page, so the first
+# version of this passed for the wrong reason -- which is what
+# tests/assertion_audit.py exists to refuse.
+hasnt "$(curl -s -b "$jarA" --max-time 20 "http://127.0.0.1:$PORT/d/sales")" 'data-publishes="' "a dashboard that did not ask for this has no click surface"
+
 echo "--- preview-as (design §8) ---"
 # `team` is a draft and ada is in its edit_groups, so she is an editor of it.
 tokA3="$(sed -n 's/.*"csrf":"\([^"]*\)".*/\1/p' <<<"$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/whoami")")"

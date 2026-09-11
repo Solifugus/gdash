@@ -545,12 +545,26 @@ library gdash_app
     function _shim()
         q = chr(34)
         js = ""
-        js = js + "function gdashParam(el){"
-        js = js + "var b={};b[el.getAttribute('data-param')]=el.value;"
+        ' ONE publish path, two ways in. A slicer and a click on a bar mean the
+        ' same thing -- "filter by this value" -- and routing them through one
+        ' function is what keeps a click from becoming a second, subtly
+        ' different way to change a param.
+        js = js + "function gdashPublish(name,value){"
+        js = js + "var b={};b[name]=value;"
         js = js + "fetch(location.pathname+'/params',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)})"
         js = js + ".then(function(r){return r.json()}).then(function(d){"
         js = js + "for(var k in d.fragments){var c=document.querySelector('[data-visual='+JSON.stringify(k)+']');if(c){c.innerHTML=d.fragments[k]}}"
         js = js + "});}"
+        js = js + "function gdashParam(el){gdashPublish(el.getAttribute('data-param'),el.value);}"
+        ' A click on a data mark inside a chart that opted in. Delegated, so it
+        ' keeps working after a fragment is replaced -- which is exactly what
+        ' publishing a param does to the visuals that bind it.
+        js = js + "document.addEventListener('click',function(ev){"
+        js = js + "var t=ev.target;if(!t||!t.closest){return}"
+        js = js + "var m=t.closest('[data-key]');if(!m){return}"
+        js = js + "var h=m.closest('[data-publishes]');if(!h){return}"
+        js = js + "gdashPublish(h.getAttribute('data-publishes'),m.getAttribute('data-key'));"
+        js = js + "});"
         js = js + "function gdashTab(b){var i=b.getAttribute('data-tab');"
         js = js + "var ts=document.querySelectorAll('.gdash-tab');for(var j=0;j<ts.length;j++){ts[j].classList.toggle('gdash-tab-active',ts[j]===b)}"
         js = js + "var ps=document.querySelectorAll('.gdash-pane');for(var k=0;k<ps.length;k++){ps[k].hidden=(ps[k].getAttribute('data-pane')!==i)}}"
@@ -582,6 +596,9 @@ library gdash_app
         s = s + ".gdash-who{float:right;font-size:12px;color:#666}"
         ' Loud on purpose. A preview that looks like the real dashboard is how
         ' somebody reports a number that was never theirs.
+        ' Only marks that publish something get a pointer: a cursor that
+        ' promises an interaction the chart does not have is a small lie.
+        s = s + ".gdash-clickable [data-key]{cursor:pointer}"
         s = s + ".gdash-preview{clear:both;margin:8px 0;padding:6px 10px;background:#fff8e1;border:1px solid #e0c060;font-size:12px}"
         s = s + ".gdash-preview input{font-size:12px;margin-right:4px}"
         s = s + ".gdash-notice{border:1px solid #c90;background:#fffbe6;border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:13px}"

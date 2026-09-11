@@ -507,6 +507,24 @@ library gdash_record
                     end if
                 end if
 
+                ' A click on a mark publishes a param. Only for marks whose
+                ' marks ARE categories: measured against the library, `bar`,
+                ' `scatter` and `pie` carry a data-key per category or point,
+                ' and a `line` carries none -- its mark is a whole series, so
+                ' there is nothing for a click to mean.
+                if not is_unknown(enc["publishes"]) then
+                    pubname = string(default(enc["publishes"], ""))
+                    if not contains(["bar", "scatter", "pie"], mk) then
+                        errors = concat(errors, ["visual '" + vn + "' sets 'publishes', which only marks 'bar', 'scatter' and 'pie' can do; a line's mark is a whole series, not a category"])
+                    else if type(enc["publishes"]) != "string" or trim(pubname) = "" then
+                        errors = concat(errors, ["visual '" + vn + "' has a 'publishes' that is not a param name"])
+                    else if not contains(param_names, pubname) and not is_reserved(pubname) then
+                        errors = concat(errors, ["visual '" + vn + "' publishes ':" + pubname + "', which is not a declared param"])
+                    else if is_reserved(pubname) then
+                        errors = concat(errors, ["visual '" + vn + "' publishes ':" + pubname + "', which is reserved; the server supplies it from the authenticated identity"])
+                    end if
+                end if
+
                 ' A record may override colour and nothing else about the
                 ' look: `colors` maps a series value (or a pie's label) to a
                 ' colour. The rest is the deployment's theme, so that a

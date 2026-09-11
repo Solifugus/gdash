@@ -247,5 +247,20 @@ program main(args)
     s = gdash_test.contains_text(s, pct, "%<", "a percent axis is labelled in percent")
     s = gdash_test.ok(s, not contains(pct, ">0.4"), "and not in the fraction it was stored as")
 
+    ' --- click to publish a param (GDASH-10 §2.3) ------------------------
+    '
+    ' Blocked since GDASH-7 because no mark carried an identifier. It does now,
+    ' and gdash turns them on ONLY for a visual that opted in -- so a dashboard
+    ' that has not asked for this renders exactly what it rendered before.
+    clicky = { dataset: "orders", sql: aq, encoding: { mark: "bar", x: "month", y: "total", publishes: "region" } }
+    cfrag2 = gdash_render.render_visual("m", clicky, ares.rows, live, {}, {})
+    s = gdash_test.contains_text(s, cfrag2, "data-publishes=" + chr(34) + "region" + chr(34), "a publishing visual names its param on the wrapper")
+    s = gdash_test.contains_text(s, cfrag2, "data-key=", "and its marks carry the values a click would publish")
+
+    quiet2 = gdash_render.render_visual("m", { dataset: "orders", sql: aq, encoding: { mark: "bar", x: "month", y: "total" } }, ares.rows, live, {}, {})
+    s = gdash_test.ok(s, not contains(quiet2, "data-key="), "a visual that did not opt in carries no keys")
+    s = gdash_test.ok(s, not contains(quiet2, "data-publishes"), "and no wrapper")
+    s = gdash_test.eq(s, quiet2, bare_axis, "its markup is byte-identical to before the feature existed")
+
     exit(gdash_test.report(s))
 end program
