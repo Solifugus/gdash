@@ -188,6 +188,14 @@ library gdash_format
     ' a ten-thousand-row one pays most of a second -- worth knowing before
     ' someone renders a table that large, and cheap enough not to restructure
     ' the format API around today (finding G4-13).
+    ' The symbol, for callers outside this module. `_symbol` stays internal
+    ' because it is one branch of the money formatter; this is the accessor,
+    ' and it exists so the chart axis can be DERIVED from the record's
+    ' `currency` rather than declared a second time (GDASH-10 §2.2).
+    function symbol_for(code)
+        return _symbol(code)
+    end function
+
     function minor_places(code)
         for each c in money.currencies()
             if c.code = code then

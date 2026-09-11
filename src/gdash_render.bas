@@ -297,6 +297,36 @@ library gdash_render
             opts["y_max"] = enc["y_max"]
         end if
 
+        ' AN AXIS THAT AGREES WITH THE NUMBERS BESIDE IT.
+        '
+        ' Derived, never declared. A visual already says `format: "currency"`
+        ' with a `currency`, or `format: "percent"` -- so the axis is decided
+        ' by what the record has already stated. Adding `y_prefix` to the
+        ' record would be a SECOND place the format lives, and the second one
+        ' is what gets forgotten and then disagrees with the first.
+        '
+        ' Only for marks with a y axis: a pie has none, and an option that
+        ' cannot apply is one an author will wonder about.
+        mk = string(default(enc["mark"], ""))
+        if contains(["bar", "line", "area", "scatter"], mk) then
+            fmt = string(default(enc["format"], ""))
+            if fmt = "currency" then
+                code = string(default(enc["currency"], ""))
+                if code != "" then
+                    opts["y_prefix"] = gdash_format.symbol_for(code)
+                    opts["y_decimals"] = gdash_format.minor_places(code)
+                end if
+            else if fmt = "percent" then
+                ' `_scale` is DISPLAY ONLY and moves no geometry, which is what
+                ' makes a fraction readable as a percentage without charting a
+                ' different number. gdash's percent_fmt multiplies by 100 for
+                ' the same reason, so the axis and the table agree.
+                opts["y_scale"] = 100
+                opts["y_suffix"] = "%"
+                opts["y_decimals"] = default(enc["decimals"], 1)
+            end if
+        end if
+
         ' The deployment's look, then the record's one override. font_size
         ' comes from the theme alone: a dashboard has no business deciding how
         ' big the type is on somebody else's wall.

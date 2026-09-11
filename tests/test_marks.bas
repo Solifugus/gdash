@@ -209,5 +209,43 @@ program main(args)
     s = gdash_test.eq(s, count(split(pts, "<circle")) - 1, 4, "a scatter draws every row, including two at the same x")
     s = gdash_test.ok(s, not contains(pts, "appears more than once"), "and never refuses a repeat, because it loses nothing")
 
+    ' --- the axis agrees with the numbers beside it (GDASH-10 §2.2) -------
+    '
+    ' DERIVED, NEVER DECLARED. The record already says a column is money and
+    ' which currency; the axis follows from that. A second place to declare it
+    ' is a second place to forget it, and then the axis and the table disagree
+    ' on the same page.
+    aq = "select month as month, sum(amount) as total from orders group by month order by month"
+    av = { dataset: "orders", sql: aq, encoding: { mark: "bar", x: "month", y: "total", format: "currency", currency: "USD" } }
+    ares = gdash_store.select_rows(live, aq, {}, gdash_render.exact_columns(av), {})
+    money_axis = gdash_render.render_visual("m", av, ares.rows, live, {}, {})
+    s = gdash_test.ok(s, not contains(money_axis, "gdash-error"), "a money chart renders -- " + mid(money_axis, 0, 110))
+    s = gdash_test.contains_text(s, money_axis, ">$", "and its axis carries the currency symbol")
+
+    ' Without the format, no symbol -- the assertion that the record is what
+    ' put it there.
+    bare = { dataset: "orders", sql: aq, encoding: { mark: "bar", x: "month", y: "total" } }
+    bare_axis = gdash_render.render_visual("m", bare, ares.rows, live, {}, {})
+    s = gdash_test.ok(s, not contains(bare_axis, ">$"), "a chart with no format has a plain axis")
+
+    ' A currency with no minor units gets none on the axis either: JPY is
+    ' whole yen, and an axis reading Y1,250.00 would be wrong about the money.
+    jv = { dataset: "orders", sql: aq, encoding: { mark: "bar", x: "month", y: "total", format: "currency", currency: "JPY" } }
+    jpy_axis = gdash_render.render_visual("m", jv, ares.rows, live, {}, {})
+    s = gdash_test.ok(s, not contains(jpy_axis, ".00<"), "a zero-decimal currency gets a zero-decimal axis")
+
+    ' A pie has no axis, so it takes no axis option -- and still renders.
+    pv2 = { dataset: "orders", sql: "select region as region, sum(amount) as total from orders group by region", label: "region", value: "total" }
+    pres = gdash_store.select_rows(live, "select region as region, sum(amount) as total from orders group by region", {}, [], {})
+    pie2 = gdash_render.render_visual("p", { dataset: "orders", sql: "x", encoding: { mark: "pie", label: "region", value: "total" } }, pres.rows, live, {}, {})
+    s = gdash_test.ok(s, not contains(pie2, "gdash-error"), "a pie takes no axis option and still renders -- " + mid(pie2, 0, 110))
+
+    ' Percent: the axis reads 42%, not 0.42, and gdash's own percent_fmt
+    ' multiplies by the same hundred -- so the chart and the table agree.
+    pct_rows = [ { m: "Jan", v: 0.42 }, { m: "Feb", v: 0.58 } ]
+    pct = gdash_render.render_visual("v", { dataset: "d", sql: "x", encoding: { mark: "bar", x: "m", y: "v", format: "percent" } }, pct_rows, "", {}, {})
+    s = gdash_test.contains_text(s, pct, "%<", "a percent axis is labelled in percent")
+    s = gdash_test.ok(s, not contains(pct, ">0.4"), "and not in the fraction it was stored as")
+
     exit(gdash_test.report(s))
 end program
