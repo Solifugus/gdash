@@ -9,9 +9,15 @@
 ' Workers share no in-memory state. Per-viewer interactivity therefore rides
 ' request/response: parameter values live in the page and travel with each
 ' request, and a param-change POST returns re-rendered fragments for exactly
-' the visuals that bind that param. SSE carries only global events, observed
-' through the filesystem by polling the per-dashboard version file, so any
-' worker can see them independently.
+' the visuals that bind that param. Global events are observed through the
+' filesystem -- the per-dashboard version file and the publish pointer -- so
+' any worker can answer for them independently.
+'
+' Design §5 names SSE as the carrier for those global events. It no longer is:
+' the browser polls /d/{name}/version instead, because a stream handler holds
+' its worker for as long as the tab is open (GDASH-11). The principle §5 is
+' actually protecting -- that the truth lives on disk and not in any worker's
+' memory -- is unchanged, and the sentence is the maintainer's to correct.
 '
 ' Every handler carries its own `load` lines: a module is visible only inside
 ' the block that loads it (finding F3).
@@ -78,12 +84,18 @@ server gdash_web( port: 8780 )
         return gdash_app.diff(req, req.params.name)
     end get
 
-    ' Global events only. The body polls the version file, so a refresh
-    ' performed by any worker (or by the CLI) is seen by all of them.
-    stream "/d/{name}/events"( req )
+    ' Global events, as two numbers the page polls (GDASH-11). This replaced
+    ' an SSE stream: the stream's body did exactly this read in a loop, and a
+    ' handler that loops is a worker that never comes back. With the default
+    ' single worker, one open dashboard meant nothing else was served at all.
+    '
+    ' There is no `stream` route any more, deliberately. An endpoint whose
+    ' only effect is to pin a worker leaves the ceiling reachable on purpose
+    ' by anyone allowed to open the dashboard.
+    get "/d/{name}/version"( req )
         load gdash_app from "gdash_app.bas"
-        return gdash_app.events(req, req.params.name)
-    end stream
+        return gdash_app.version_of(req, req.params.name)
+    end get
 
 end server
 

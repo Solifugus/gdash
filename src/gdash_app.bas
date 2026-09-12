@@ -6,11 +6,6 @@
 library gdash_app
 
     load crypto
-    ' `emit` belongs to `web`, like `serve` in gdash_server. Until gbasic
-    ' 554e22e a stream handler could call it bare; a function from another
-    ' library is now qualified, which is the rule that stops a bare name
-    ' resolving into somebody else's library.
-    load web
     load gdash_paths from "gdash_paths.bas"
     load gdash_record from "gdash_record.bas"
     load gdash_store from "gdash_store.bas"
@@ -542,7 +537,19 @@ library gdash_app
         return 0
     end function
 
-    function _shim()
+    ' A value on its way into a <script> block. JSON quotes it; the two angle
+    ' brackets are then spelled as escapes, because JSON does not escape them
+    ' and `</script>` inside a string literal ends the element whatever the
+    ' quoting says.
+    function _js_literal(s)
+        return replace(replace(encode(string(s)), "<", "\\u003c"), ">", "\\u003e")
+    end function
+
+    ' `v` and `pub` are the values as of THIS render, embedded rather than
+    ' learned on the first poll: a refresh that lands in the second between
+    ' rendering the page and the browser's first poll would otherwise be
+    ' invisible until the next one after that.
+    function _shim(v, pub)
         q = chr(34)
         js = ""
         ' ONE publish path, two ways in. A slicer and a click on a bar mean the
@@ -569,11 +576,26 @@ library gdash_app
         js = js + "var ts=document.querySelectorAll('.gdash-tab');for(var j=0;j<ts.length;j++){ts[j].classList.toggle('gdash-tab-active',ts[j]===b)}"
         js = js + "var ps=document.querySelectorAll('.gdash-pane');for(var k=0;k<ps.length;k++){ps[k].hidden=(ps[k].getAttribute('data-pane')!==i)}}"
         js = js + "function gdashNotice(){var b=document.getElementById('gdash-notice');if(b){b.hidden=false}}"
-        js = js + "var es=new EventSource(location.pathname+'/events');"
-        js = js + "es.onmessage=function(e){"
-        js = js + "if(e.data==='refresh'){location.reload()}"
-        js = js + "else if(e.data==='publish'){gdashNotice()}"
-        js = js + "};"
+        ' Global events, polled by the browser rather than by a worker held
+        ' open on its behalf (GDASH-11). The facts are the same two files;
+        ' what changed is which process does the waiting. One open dashboard
+        ' used to occupy a worker for as long as the tab was open, which at
+        ' the default worker count meant gdash answered nothing else.
+        '
+        ' Five seconds because this notice is not urgent: a refresh that a
+        ' viewer learns about five seconds late costs them nothing, and the
+        ' data they are looking at was already correct when it was served.
+        js = js + "var gdashV=" + _js_literal(v) + ",gdashP=" + _js_literal(pub) + ";"
+        js = js + "setInterval(function(){"
+        js = js + "fetch(location.pathname+'/version',{headers:{'accept':'application/json'}})"
+        js = js + ".then(function(r){return r.ok?r.json():null}).then(function(d){"
+        js = js + "if(!d){return}"
+        js = js + "if(String(d.v)!==gdashV){location.reload();return}"
+        ' A NOTICE, not a reload. Yanking the page out from under a pinned
+        ' viewer is the thing pinning exists to prevent (design §7): a new
+        ' version arrives on the next open, or when the viewer decides.
+        js = js + "if(String(d.pub)!==gdashP){gdashP=String(d.pub);gdashNotice()}"
+        js = js + "});},5000);"
         return js
     end function
 
@@ -822,7 +844,10 @@ library gdash_app
         ' Hidden until a publish is observed. The viewer decides when to move.
         html = html + "<div id=" + q + "gdash-notice" + q + " class=" + q + "gdash-notice" + q + " hidden>A new version of this dashboard has been published. <a href=" + q + "" + q + " onclick=" + q + "location.reload();return false" + q + ">Reload to see it.</a></div>"
         html = html + body
-        html = html + "<script>" + _shim() + "</script>"
+        ' Read after every fragment has rendered, so the baseline can only be
+        ' the same version the page shows or newer -- never older, which would
+        ' make the first poll reload a page that was already current.
+        html = html + "<script>" + _shim(gdash_store.read_version(gdash_paths.version_file(p, name, mode)), gdash_paths.read_pointer(p, name)) + "</script>"
         html = html + "</body></html>"
 
         ' Pin at session open (design §7). Re-set only when the browser is not
@@ -1139,48 +1164,27 @@ library gdash_app
         return _json({ authenticated: v.authed, user: v.name, groups: v.groups, admin: v.admin, csrf: gdash_session.csrf_for(secret_of(p), v.sid) })
     end function
 
-    ' Each stream body polls the per-dashboard version file and emits on
-    ' change. The rename-swap guarantees a notified reader sees complete data.
-    function events(req, name)
+    ' The two global facts a viewer's page needs to know it has gone stale:
+    ' the dataset version and the publish pointer. Both are read from the
+    ' filesystem, which is what design §5 actually requires -- any worker can
+    ' answer this, because the truth is on disk and not in anyone's memory.
+    '
+    ' This is the whole of what the SSE stream used to carry, and the loop
+    ' that read these two files now runs in the browser instead of in a
+    ' worker that never returns (GDASH-11). The rename-swap still guarantees
+    ' that a reader who sees a new version sees complete data.
+    '
+    ' Access is checked exactly as the page checks it. A version number is
+    ' small, but "this dashboard exists and its data moved at 14:02" is not
+    ' nothing, and an endpoint that answered more freely than the page would
+    ' be a way to watch a dashboard you cannot open.
+    function version_of(req, name)
         got = _load_dashboard(req, name, "view")
         if not got.ok then
-            return 0
+            return got.response
         end if
         p = got.p
-        vfile = gdash_paths.version_file(p, name, got.mode)
-        seen = gdash_store.read_version(vfile)
-        ' `current` is polled alongside the data version, so publish needs no
-        ' file of its own and a cache wipe cannot lose the signal.
-        seen_pub = gdash_paths.read_pointer(p, name)
-
-        alive = web.emit(req, "event: hello" + chr(10) + "data: " + string(seen) + chr(10) + chr(10))
-        ticks = 0
-        ' Every live stream pins a worker (design §5, the named ceiling), so a
-        ' stream whose client has gone must be noticed promptly. emit is the
-        ' only liveness signal there is -- its false return IS the protocol --
-        ' so a comment line goes out on a heartbeat even when nothing has
-        ' changed. Without it a departed reader would hold its worker until
-        ' the tick ceiling.
-        while alive and ticks < 7200
-            sleep(0.5)
-            now_v = gdash_store.read_version(vfile)
-            now_pub = gdash_paths.read_pointer(p, name)
-            if now_v != seen then
-                seen = now_v
-                alive = web.emit(req, "data: refresh" + chr(10) + chr(10))
-            else if now_pub != seen_pub then
-                ' A NOTICE, not a reload. Yanking the page out from under a
-                ' pinned viewer is the thing pinning exists to prevent
-                ' (design §7): new versions arrive on next open, or when the
-                ' viewer decides.
-                seen_pub = now_pub
-                alive = web.emit(req, "data: publish" + chr(10) + chr(10))
-            else if mod(ticks, 10) = 0 then
-                alive = web.emit(req, ": ping" + chr(10) + chr(10))
-            end if
-            ticks += 1
-        end while
-        return 0
+        return _json({ v: gdash_store.read_version(gdash_paths.version_file(p, name, got.mode)), pub: gdash_paths.read_pointer(p, name) })
     end function
 
 end library

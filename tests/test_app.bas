@@ -178,12 +178,44 @@ program main(args)
     ' contains, so a page assertion about it passes for the wrong reason and
     ' the assertion audit refuses it -- correctly, even though the furniture is
     ' exactly what was meant.
-    shim = gdash_app._shim()
+    shim = gdash_app._shim(3, "0007.json")
     s = gdash_test.contains_text(s, shim, "function gdashPublish(", "there is one publish path")
     s = gdash_test.contains_text(s, shim, "gdashPublish(el.getAttribute('data-param'),el.value)", "a slicer goes through it")
     s = gdash_test.contains_text(s, shim, "closest('[data-publishes]')", "and so does a click on a keyed mark")
     s = gdash_test.contains_text(s, shim, "addEventListener('click'", "the listener is delegated, so it survives a fragment being replaced")
     s = gdash_test.eq(s, count(split(shim, "location.pathname+'/params'")) - 1, 1, "and there is exactly ONE place a param is posted from")
+
+    ' --- the poll that replaced the held stream (GDASH-11) ----------------
+    '
+    ' The baseline is embedded at render time, not learned on the first poll.
+    ' A refresh landing in the second between the render and the first poll
+    ' would otherwise be invisible until the poll after that.
+    s = gdash_test.contains_text(s, shim, "var gdashV=\"3\"", "the shim carries the version it was rendered at")
+    s = gdash_test.contains_text(s, shim, "gdashP=\"0007.json\"", "and the publish pointer it was rendered at")
+    s = gdash_test.contains_text(s, shim, "location.pathname+'/version'", "and polls for both")
+    s = gdash_test.ok(s, not contains(shim, "EventSource"), "and holds no stream open, which is the worker it used to hold")
+    ' The two directions are not the same action: a data refresh reloads,
+    ' a publish only offers (design §7).
+    s = gdash_test.contains_text(s, shim, "if(String(d.v)!==gdashV){location.reload()", "a moved version reloads")
+    s = gdash_test.contains_text(s, shim, "if(String(d.pub)!==gdashP){gdashP=String(d.pub);gdashNotice()}", "a moved pointer only offers")
+
+    ' A value on its way into a <script> element. JSON quoting alone does not
+    ' escape angle brackets, and `</script>` inside a JS string literal ends
+    ' the element regardless of the quoting around it.
+    hostile = gdash_app._shim(1, "</script><script>alert(1)</script>")
+    s = gdash_test.ok(s, not contains(hostile, "</script>"), "no embedded value can close the script element")
+    s = gdash_test.contains_text(s, hostile, "\\u003c/script", "the bracket is spelled as an escape instead")
+
+    ' --- the version endpoint is as closed as the page --------------------
+    s = gdash_test.eq(s, status_of(gdash_app.version_of(req_for("/d/open/version", no_cookies(), {}), "open")), 200, "an open dashboard reports its version to a stranger")
+    s = gdash_test.contains_text(s, string(gdash_app.version_of(req_for("/d/open/version", no_cookies(), {}), "open").body), "\"v\":", "and the report names the dataset version")
+    s = gdash_test.eq(s, status_of(gdash_app.version_of(req_for("/d/team/version", no_cookies(), {}), "team")), 404, "a dashboard an anonymous viewer may not open does not leak its version")
+    s = gdash_test.eq(s, status_of(gdash_app.version_of(req_for("/d/team/version", session_cookie(bo_sid), {}), "team")), 403, "nor to a signed-in viewer outside its groups")
+    ' A NEW session: ada's first one was destroyed above, by the assertion
+    ' that disabling an account ends its session at once.
+    ada_again = gdash_session.create(store, "ada", epoch()).session.id
+    s = gdash_test.eq(s, status_of(gdash_app.version_of(req_for("/d/team/version", session_cookie(ada_again), {}), "team")), 200, "and reports it to the group that may see it")
+    s = gdash_test.eq(s, status_of(gdash_app.version_of(req_for("/d/x/version", no_cookies(), {}), "../../etc/users")), 400, "a version request naming a path is refused like any other")
 
     exit(gdash_test.report(s))
 end program

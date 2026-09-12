@@ -124,17 +124,44 @@ west="$(curl -s --max-time 10 -X POST -H 'content-type: application/json' -d '{"
 if [[ "$west" != "$resp" ]]; then echo "  ok   a different param value renders differently"; pass=$((pass+1));
 else echo "  FAIL a different param value renders differently"; fail=$((fail+1)); fi
 
-echo "--- SSE carries a refresh notification (design §5) ---"
-curl -s -N --max-time 6 "http://127.0.0.1:$PORT/d/sales/events" > "$SCRATCH/sse.txt" &
-SSE=$!
-sleep 1
+echo "--- global events reach the page by polling, not by a held stream (design §5) ---"
+# GDASH-11: the page used to hold an EventSource open, which held a worker for
+# as long as the tab was open. The same two facts now travel as JSON the
+# browser asks for. `jq` is not assumed; the fields are read with python3,
+# which this suite already requires.
+vfield(){ python3 -c "import json,sys; print(json.load(sys.stdin)[sys.argv[1]])" "$1"; }
+
+before="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/sales/version")"
+has "$before" '"v"' "the version endpoint answers with the dataset version"
+has "$before" '"pub"' "and the publish pointer, which is the other global fact"
+
 # Refetching identical data no longer bumps the version, so the notification
 # has to be driven by data that actually moved.
 repoint fixtures/orders_moved.json
 "$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh sales orders >/dev/null 2>&1
-sleep 2.5
-kill $SSE 2>/dev/null; wait $SSE 2>/dev/null
-has "$(cat "$SCRATCH/sse.txt")" "data: refresh" "SSE emitted on the version bump"
+after="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/sales/version")"
+if [[ "$(vfield v <<<"$after")" != "$(vfield v <<<"$before")" ]]; then
+    echo "  ok   a refresh performed by another process moves the version a page polls"; pass=$((pass+1))
+else echo "  FAIL the version did not move across a refresh"; fail=$((fail+1)); fi
+ok "and the publish pointer did not move with it" "$(vfield pub <<<"$after")" "$(vfield pub <<<"$before")"
+
+# The page has to carry the baseline it was rendered at, or its first poll
+# would compare against a version it learned a moment too late.
+page2="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/sales")"
+has "$page2" "var gdashV=\"$(vfield v <<<"$after")\"" "the page embeds the version it was rendered at"
+has "$page2" "location.pathname+'/version'" "and polls for changes to it"
+hasnt "$page2" "EventSource" "no page opens a stream any more -- that is the worker it used to hold"
+
+# The route is gone, not merely unused: an endpoint whose only effect is to
+# pin a worker is one any viewer could still point at.
+code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/d/sales/events")"
+ok "the stream route is gone" "$code" "404"
+
+# The version endpoint is as closed as the page it belongs to.
+code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/d/private/version")"
+ok "a dashboard an anonymous viewer may not open does not leak its version" "$code" "404"
+code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/d/nosuch/version")"
+ok "nor does one that does not exist answer differently" "$code" "404"
 
 echo "--- an unchanged refresh does not bump the version ---"
 before_v="$(cat "$ROOT/cache/sales/draft/version")"
@@ -223,15 +250,15 @@ hasnt "$audit" "fixtures/orders" "and no profile internals reach the log"
 echo "--- the scheduler process does the same on a period ---"
 "$GBASIC" --line-buffered src/gdash_scheduler.bas --root "$ROOT" --every 1 > "$SCRATCH/sched.log" 2>&1 &
 SCH=$!
-curl -s -N --max-time 8 "http://127.0.0.1:$PORT/d/timed/events" > "$SCRATCH/sse2.txt" &
-SSE2=$!
-sleep 1
+sched_before="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/timed/version" | vfield v)"
 repoint fixtures/orders_moved.json
 sleep 4
 kill $SCH 2>/dev/null; wait $SCH 2>/dev/null
-kill $SSE2 2>/dev/null; wait $SSE2 2>/dev/null
 has "$(cat "$SCRATCH/sched.log")" "timed.orders: refreshed" "the scheduler picked up the changed data by itself"
-has "$(cat "$SCRATCH/sse2.txt")" "data: refresh" "and every open tab was told over SSE, with no one pressing anything"
+sched_after="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/timed/version" | vfield v)"
+if [[ "$sched_after" != "$sched_before" ]]; then
+    echo "  ok   and every open tab would see it on its next poll, with no one pressing anything"; pass=$((pass+1))
+else echo "  FAIL the scheduler's refresh was not visible to a polling page"; fail=$((fail+1)); fi
 
 # ---------------------------------------------------------------------------
 # The §7 lifecycle over HTTP.
@@ -264,14 +291,17 @@ gone="$(curl -s -b "gdash_pin=8888.json" --max-time 10 "http://127.0.0.1:$PORT/d
 has "$gone" "second edition" "a pin whose snapshot is gone falls back to current"
 
 echo "--- publish nudges; it does not yank the page away ---"
-curl -s -N --max-time 8 "http://127.0.0.1:$PORT/d/timed/events" > "$SCRATCH/sse3.txt" &
-SSE3=$!
-sleep 1
+# The distinction the page acts on: `pub` moving reveals a notice, `v` moving
+# reloads. A publish must move exactly one of them, or a pinned viewer is
+# yanked onto a version they did not ask for (design §7).
+pub_before="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/timed/version")"
 "$GBASIC" src/gdash_cli.bas --root "$ROOT" publish timed >/dev/null 2>&1
-sleep 2.5
-kill $SSE3 2>/dev/null; wait $SSE3 2>/dev/null
-has "$(cat "$SCRATCH/sse3.txt")" "data: publish" "a publish is announced over SSE"
-hasnt "$(cat "$SCRATCH/sse3.txt")" "data: refresh" "and is NOT announced as a data refresh"
+pub_after="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/timed/version")"
+if [[ "$(vfield pub <<<"$pub_after")" != "$(vfield pub <<<"$pub_before")" ]]; then
+    echo "  ok   a publish moves the pointer a page polls"; pass=$((pass+1))
+else echo "  FAIL a publish did not move the pointer"; fail=$((fail+1)); fi
+ok "and is NOT announced as a data refresh" "$(vfield v <<<"$pub_after")" "$(vfield v <<<"$pub_before")"
+has "$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/timed")" "gdashNotice()" "and the page shows a notice rather than reloading"
 has "$fresh" 'id="gdash-notice"' "the page carries the banner the notice reveals"
 has "$fresh" 'class="gdash-notice" hidden>' "hidden until there is something to say"
 

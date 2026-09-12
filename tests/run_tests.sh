@@ -134,6 +134,18 @@ if [[ "${GDASH_FHS_TEST:-0}" == "1" ]]; then
     fi
 fi
 
+# The concurrency ceiling, at the DEFAULT worker count. For ten phases gdash
+# served one fewer viewer than it had workers and the default was one, and no
+# suite said so, because every suite that opened a stream opened only as many
+# as there were workers to spare.
+if [[ "${GDASH_SKIP_E2E:-0}" != "1" ]]; then
+    echo "--- concurrency ceiling ---"
+    ran=$((ran + 1))
+    if ! "$HERE/run_ceiling.sh"; then
+        failed=$((failed + 1))
+    fi
+fi
+
 # The races. Three pieces of gdash exist because two things can happen at
 # once; until GDASH-6 none of them had ever had two things happen at once.
 if [[ "${GDASH_SKIP_E2E:-0}" != "1" ]]; then

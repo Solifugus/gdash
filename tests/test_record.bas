@@ -211,14 +211,22 @@ program main(args)
     kw["datasets"] = kw_ds
     s = gdash_test.eq(s, count(gdash_record.check(kw).errors), 0, "a dataset named for a SQL keyword is accepted, by decision")
 
-    ' A NUL inside a record KEY does not survive: gBASIC strings are
-    ' binary-safe and the string builtins have been since 36cb538, but a
-    ' record key carrying a NUL comes back from keys() truncated at it, with
-    ' no error. So a dataset "a\0b" is really named "a" by the time anything
-    ' validates it -- legal, and not the name the author wrote.
+    ' A NUL inside a record KEY now survives, and the assertion is kept to
+    ' pin that. It used to fail: keys() returned the key truncated at the NUL
+    ' (G6-16), so a dataset the author named "a\0b" was really named "a" by
+    ' the time anything validated it -- legal, and not what was written. Fixed
+    ' in the platform after 36cb538 made strings binary-safe; the last place
+    ' where a NUL still changed a value silently is now closed.
+    '
+    ' Two keys differing only past a NUL must also stay two keys, because
+    ' truncation would have made them one and the second would have won.
     nul_key = {}
     nul_key["a" + chr(0) + "b"] = 1
-    s = gdash_test.eq(s, len(keys(nul_key)[0]), 1, "a NUL truncates a record key, silently")
+    s = gdash_test.eq(s, len(keys(nul_key)[0]), 3, "a record key keeps its NUL and everything after it")
+    s = gdash_test.eq(s, nul_key["a" + chr(0) + "b"], 1, "and reads back under the whole key")
+    nul_key["a"] = 2
+    s = gdash_test.eq(s, count(keys(nul_key)), 2, "a key that is the truncation is a different key")
+    s = gdash_test.eq(s, nul_key["a" + chr(0) + "b"], 1, "and setting it does not overwrite the longer one")
 
     ' --- volume: many of everything, and it must still finish -------------
     many = { format: 1, name: "b", datasets: {}, visuals: {}, controls: {}, params: {}, tabs: [] }

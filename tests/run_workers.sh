@@ -178,59 +178,37 @@ done
 wait "${pids[@]}" 2>/dev/null
 ok "eight concurrent renders all succeed" "$(cat "$SCRATCH"/render*.code | tr -d '\n')" "200200200200200200200200"
 
-# --- SSE: a global event observed through the filesystem ------------------
+# --- a global event observed through the filesystem ----------------------
 #
-# The claim, in one assertion: four streams held open on four different
-# workers must all see a change made by a FIFTH process that shares nothing
-# with any of them but a directory.
-# A BARE `wait` HERE WAITS FOR THE SERVER, which never exits. The stream pids
-# are named explicitly for that reason -- and named into their own array,
-# because `pids` is still holding the render curls.
-# TWO streams, not more. Two is enough to show that a stream on one worker
-# sees a change made by a process that is not a worker at all, which is the
-# claim. Larger counts were tried and could not be established reliably from a
-# shell -- see the finding on the stream ceiling, which is GDASH-8's to settle
-# alongside the worker-sizing documentation the plan already calls for.
+# The claim, in one assertion: viewers spread across all four workers must all
+# see a change made by a FIFTH process that shares nothing with any of them
+# but a directory.
 #
-# ESTABLISHING the streams is retried; OBSERVING the event is not. Opening two
-# concurrent streams fails outright perhaps one attempt in four even with
-# workers to spare, and that is a setup flake rather than the property under
-# test -- so it is retried, and the retry count is reported. If it were the
-# property, retrying would be cheating.
-attempt=0
-opened=0
-while [[ $attempt -lt 4 && $opened -lt 2 ]]; do
-    attempt=$((attempt + 1))
-    rm -f "$SCRATCH"/sse1.txt "$SCRATCH"/sse2.txt
-    touch "$SCRATCH/sse1.txt" "$SCRATCH/sse2.txt"
-    spids=(); for k in 1 2; do
-        curl -s -N --max-time 12 "http://127.0.0.1:$PORT/d/sales/events" > "$SCRATCH/sse$k.txt" 2>/dev/null & spids+=($!)
-    done
-    # Wait for the streams, not for the clock: a stream that connects AFTER the
-    # refresh reads the new version as its baseline and never reports a change,
-    # so the test would fail for a reason unrelated to what it tests. This is
-    # the lesson of G5-8, where an open port was mistaken for a working service.
-    for i in $(seq 1 24); do
-        opened=0
-        for k in 1 2; do grep -q "^event: hello" "$SCRATCH/sse$k.txt" 2>/dev/null && opened=$((opened+1)); done
-        [[ $opened -eq 2 ]] && break
-        sleep 0.25
-    done
-    if [[ $opened -lt 2 ]]; then
-        kill "${spids[@]}" 2>/dev/null; wait "${spids[@]}" 2>/dev/null
-    fi
-done
-ok "two concurrent streams open (attempt $attempt of at most 4)" "$opened" "2"
-
+# This used to be two held SSE streams, and two was the most that could be
+# established reliably -- because a held stream OCCUPIES a worker, so the
+# third stream on a four-worker server was competing with the suite's own
+# requests. That was recorded as a flake and retried. It was not a flake: it
+# was the ceiling, showing through the test that was meant to measure past it
+# (GDASH-11). With the poll in the browser there is no ceiling to work around
+# and no retry loop to explain, so the count goes up rather than down.
+before="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/sales/version")"
 python3 -c "
 import json,sys
 p='$ROOT/etc/connections.json'
 c=json.load(open(p)); c['warehouse']['path']='fixtures/orders_moved.json'; json.dump(c,open(p,'w'))"
 "$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh sales orders >/dev/null 2>&1
-wait "${spids[@]}" 2>/dev/null
+
+# Eight at once against four workers: every worker answers, and each answers
+# from the filesystem rather than from anything it remembers.
+vpids=(); for k in $(seq 1 8); do
+    curl -s --max-time 20 "http://127.0.0.1:$PORT/d/sales/version" > "$SCRATCH/ver$k.txt" 2>/dev/null & vpids+=($!)
+done
+wait "${vpids[@]}" 2>/dev/null
 saw=0
-for k in 1 2; do grep -q '^data: refresh' "$SCRATCH/sse$k.txt" && saw=$((saw+1)); done
-ok "every concurrent stream sees a refresh performed by another process" "$saw" "2"
+for k in $(seq 1 8); do
+    [[ "$(cat "$SCRATCH/ver$k.txt" 2>/dev/null)" != "$before" ]] && [[ -s "$SCRATCH/ver$k.txt" ]] && saw=$((saw+1))
+done
+ok "every worker reports a refresh performed by a process that is not a worker" "$saw" "8"
 
 # A leaked worker is residue, and residue is a failure. The suite already
 # asserts that it leaves no files behind; it now asserts that it leaves no
