@@ -23,6 +23,26 @@
 
 library gdash_format
 
+    ' A stored epoch as something a person reads. Lives here rather than in
+    ' gdash_app because the CLI's `list` needs the same answer, and two
+    ' renderings of "how old is this data" that could drift apart is exactly
+    ' the kind of small inconsistency that makes a status line untrustworthy.
+    '
+    ' 0 is "never", not 1970: every caller stores 0 for "has not happened".
+    function when(at)
+        if at = 0 then
+            return "never"
+        end if
+        on error goto next
+        t = from_epoch(at)
+        if error then
+            ' Unformattable is still information -- better the raw number than
+            ' a blank where a timestamp should be.
+            return string(at)
+        end if
+        return string(t)
+    end function
+
     function _fmt_digits(s)
         if s = "" then
             return false

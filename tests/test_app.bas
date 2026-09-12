@@ -185,6 +185,37 @@ program main(args)
     s = gdash_test.contains_text(s, shim, "addEventListener('click'", "the listener is delegated, so it survives a fragment being replaced")
     s = gdash_test.eq(s, count(split(shim, "location.pathname+'/params'")) - 1, 1, "and there is exactly ONE place a param is posted from")
 
+    ' --- the index lists only what the viewer may open --------------------
+    '
+    ' A LIST OF NAMES IS A DISCLOSURE. Design §8 refuses an anonymous viewer
+    ' with 404 rather than 403 precisely because "layoffs-q3 exists" is itself
+    ' information, so an index that named a dashboard somebody cannot open
+    ' would undo that in one line of HTML. The three records here are the
+    ' three cases: open to anyone, shared with a group, and admin-only.
+    ' A NEW session: ada's first one was destroyed above, by the assertion
+    ' that disabling an account ends its session at once.
+    ada_again = gdash_session.create(store, "ada", epoch()).session.id
+    anon_index = string(gdash_app.index_page(req_for("/", no_cookies(), {})).body)
+    s = gdash_test.contains_text(s, anon_index, "/d/open", "a stranger sees the dashboard that opted into open access")
+    s = gdash_test.ok(s, not contains(anon_index, "/d/team"), "and NOT one shared with a group they are not in")
+    s = gdash_test.ok(s, not contains(anon_index, "/d/locked"), "nor one with no access at all")
+
+    ada_index = string(gdash_app.index_page(req_for("/", session_cookie(ada_again), {})).body)
+    s = gdash_test.contains_text(s, ada_index, "/d/team", "a member sees the dashboard shared with their group")
+    s = gdash_test.contains_text(s, ada_index, "/d/open", "and the open one as well")
+    s = gdash_test.ok(s, not contains(ada_index, "/d/locked"), "and still not the one reserved to administrators")
+
+    bo_index = string(gdash_app.index_page(req_for("/", session_cookie(bo_sid), {})).body)
+    s = gdash_test.ok(s, not contains(bo_index, "/d/team"), "signing in does not by itself reveal a group's dashboard")
+
+    boss_index = string(gdash_app.index_page(req_for("/", session_cookie(boss_sid), {})).body)
+    s = gdash_test.contains_text(s, boss_index, "/d/locked", "an administrator sees the one nobody else may open")
+
+    ' The wording is identical whether nothing exists or nothing is shared:
+    ' "3 dashboards exist, none for you" is the disclosure this page avoids.
+    s = gdash_test.contains_text(s, gdash_app._index_empty_text(true), "shared with you", "a signed-in viewer with nothing is told nothing is shared")
+    s = gdash_test.ok(s, not contains(gdash_app._index_empty_text(true), "0"), "and is not told how many they cannot see")
+
     ' --- the poll that replaced the held stream (GDASH-11) ----------------
     '
     ' The baseline is embedded at render time, not learned on the first poll.
@@ -211,9 +242,6 @@ program main(args)
     s = gdash_test.contains_text(s, string(gdash_app.version_of(req_for("/d/open/version", no_cookies(), {}), "open").body), "\"v\":", "and the report names the dataset version")
     s = gdash_test.eq(s, status_of(gdash_app.version_of(req_for("/d/team/version", no_cookies(), {}), "team")), 404, "a dashboard an anonymous viewer may not open does not leak its version")
     s = gdash_test.eq(s, status_of(gdash_app.version_of(req_for("/d/team/version", session_cookie(bo_sid), {}), "team")), 403, "nor to a signed-in viewer outside its groups")
-    ' A NEW session: ada's first one was destroyed above, by the assertion
-    ' that disabling an account ends its session at once.
-    ada_again = gdash_session.create(store, "ada", epoch()).session.id
     s = gdash_test.eq(s, status_of(gdash_app.version_of(req_for("/d/team/version", session_cookie(ada_again), {}), "team")), 200, "and reports it to the group that may see it")
     s = gdash_test.eq(s, status_of(gdash_app.version_of(req_for("/d/x/version", no_cookies(), {}), "../../etc/users")), 400, "a version request naming a path is refused like any other")
 

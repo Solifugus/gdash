@@ -127,6 +127,16 @@ has "$page" "justify-content:space-between" "space maps to flex justification"
 has "$page" "flex:2 1 0" "a weighted child flexes"
 has "$page" "gap:16px;justify-content" "gap is applied to the layout, not just defined in the stylesheet"
 
+echo "--- the index lists only what the viewer may open ---"
+# The root page used to say "open /d/<dashboard>" without saying which, so a
+# viewer could reach nothing without being told a URL. A list of names is a
+# disclosure, though: `private` has no access clause, and an anonymous viewer
+# is refused it with 404 rather than 403 for exactly that reason (design §8).
+index="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/")"
+has "$index" 'href="/d/sales"' "the index links the dashboard that opted into open access"
+hasnt "$index" 'href="/d/private"' "and does not name one an anonymous viewer may not open"
+has "$index" '<ul class="gdash-index">' "the index renders as a list"
+
 echo "--- access fails closed (design §8) ---"
 # An anonymous viewer gets 404, not 403: on an intranet the existence of a
 # dashboard is itself information, and 403 would confirm it.

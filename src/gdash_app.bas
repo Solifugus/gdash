@@ -10,6 +10,7 @@ library gdash_app
     load gdash_record from "gdash_record.bas"
     load gdash_store from "gdash_store.bas"
     load gdash_render from "gdash_render.bas"
+    load gdash_format from "gdash_format.bas"
     load gdash_refresh from "gdash_refresh.bas"
     load gdash_sched from "gdash_sched.bas"
     load gdash_publish from "gdash_publish.bas"
@@ -469,16 +470,9 @@ library gdash_app
         return "<div class=" + chr(34) + cls + chr(34) + " style=" + chr(34) + style + chr(34) + ">" + join(out, "") + "</div>"
     end function
 
+    ' Shared with the CLI's `list`, so the two cannot drift (gdash_format.when).
     function _when(at)
-        if at = 0 then
-            return "never"
-        end if
-        on error goto next
-        t = from_epoch(at)
-        if error then
-            return string(at)
-        end if
-        return string(t)
+        return gdash_format.when(at)
     end function
 
     ' One line per dataset, not one line for the dashboard. With two datasets
@@ -610,6 +604,9 @@ library gdash_app
         s = s + ".gdash-value-number{font-size:28px;font-variant-numeric:tabular-nums}"
         s = s + ".gdash-error{color:#a00;border:1px solid #a00;border-radius:6px;padding:8px;font-size:13px}"
         s = s + ".gdash-empty{color:#666;font-style:italic;padding:8px}"
+        s = s + ".gdash-index{list-style:none;padding:0;max-width:480px}"
+        s = s + ".gdash-index li{padding:10px 12px;border:1px solid #ddd;border-radius:8px;margin-bottom:8px}"
+        s = s + ".gdash-index a{text-decoration:none;font-size:16px}"
         s = s + ".gdash-stale{color:#666;font-size:12px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:16px}"
         s = s + ".gdash-stale-bad{color:#a00}"
         s = s + ".gdash-login{display:flex;flex-direction:column;gap:12px;max-width:320px}"
@@ -1162,6 +1159,79 @@ library gdash_app
         p = paths_for(req)
         v = viewer_of(req, p)
         return _json({ authenticated: v.authed, user: v.name, groups: v.groups, admin: v.admin, csrf: gdash_session.csrf_for(secret_of(p), v.sid) })
+    end function
+
+    ' The dashboards THIS viewer may open, and nothing about any other.
+    '
+    ' gdash had no way to answer "what is here?" from a browser: the root page
+    ' said "open /d/<dashboard>" without saying which, so every viewer had to
+    ' be told a URL by somebody who already knew it.
+    '
+    ' THE WHOLE DIFFICULTY IS THAT A NAME IS INFORMATION. Design §8 has an
+    ' anonymous viewer refused a dashboard with 404 rather than 403 precisely
+    ' because "layoffs-q3 exists" is itself a disclosure. An index is a list of
+    ' names, so it must apply exactly the same predicate the page applies, and
+    ' a dashboard the viewer could not open must be absent -- not greyed out,
+    ' not counted, absent.
+    '
+    ' It therefore reuses `allowed` rather than re-deriving the rule. A second
+    ' implementation of an access decision is a second thing to keep right.
+    function _visible_dashboards(p, v)
+        out = []
+        names = gdash_refresh.dashboards(p)
+        i = 0
+        while i < count(names)
+            pub = gdash_paths.publication(p, names[i])
+            loaded = gdash_record.load_file(pub.record_file)
+            ' A record that does not load is not listed. The operator sees it
+            ' in `gdash list`; a viewer has nothing to do about it, and a
+            ' broken record is not a reason to disclose that it exists.
+            if loaded.ok then
+                if allowed(loaded.record, v, "view") then
+                    out = concat(out, [{ name: names[i], title: string(default(loaded.record["title"], names[i])) }])
+                end if
+            end if
+            i += 1
+        end while
+        return out
+    end function
+
+    ' Deliberately the same words whether there are no dashboards at all or
+    ' none this viewer may see. "3 dashboards exist, none for you" is exactly
+    ' the disclosure the index is careful not to make, and a count is the
+    ' easiest way to make it by accident.
+    function _index_empty_text(authed)
+        if authed then
+            return "No dashboards are shared with you."
+        end if
+        return "No dashboards are available. <a href=" + chr(34) + "/login" + chr(34) + ">Sign in</a> if you have an account."
+    end function
+
+    function index_page(req)
+        p = paths_for(req)
+        v = viewer_of(req, p)
+        visible = _visible_dashboards(p, v)
+        q = chr(34)
+        html = "<!doctype html><html><head><meta charset=" + q + "utf-8" + q + "><title>gdash</title><style>" + _style() + "</style></head><body>"
+        html = html + _who_bar(p, v)
+        html = html + "<h1>gdash</h1>"
+        if count(visible) = 0 then
+            ' Deliberately the same words whether there are no dashboards at
+            ' all or none this viewer may see. The alternative -- "3 dashboards
+            ' exist, none for you" -- discloses the thing the index is careful
+            ' not to.
+            html = html + "<p class=" + q + "gdash-empty" + q + ">" + _index_empty_text(v.authed) + "</p>"
+        else
+            html = html + "<ul class=" + q + "gdash-index" + q + ">"
+            i = 0
+            while i < count(visible) 
+                html = html + "<li><a href=" + q + "/d/" + gdash_render.html_escape(visible[i].name) + q + ">" + gdash_render.html_escape(visible[i].title) + "</a></li>"
+                i += 1
+            end while
+            html = html + "</ul>"
+        end if
+        html = html + "</body></html>"
+        return _html(html)
     end function
 
     ' The two global facts a viewer's page needs to know it has gone stale:

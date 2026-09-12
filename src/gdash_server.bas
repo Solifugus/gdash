@@ -24,8 +24,12 @@
 
 server gdash_web( port: 8780 )
 
+    ' The dashboards this viewer may open. It used to say "open
+    ' /d/<dashboard>" without saying which, so a viewer could reach nothing
+    ' without being told a URL by somebody who already knew it.
     get "/"( req )
-        return { body: "<!doctype html><meta charset=utf-8><title>gdash</title><p>gdash is running. Open /d/&lt;dashboard&gt;.", headers: { "content-type": "text/html; charset=utf-8" } }
+        load gdash_app from "gdash_app.bas"
+        return gdash_app.index_page(req)
     end get
 
     ' Sign in and out. The login form is a GET so it can be linked to; the

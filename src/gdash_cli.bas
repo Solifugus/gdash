@@ -40,6 +40,8 @@ program main(args)
     load gdash_auth from "gdash_auth.bas"
     load gdash_auth_ldap from "gdash_auth_ldap.bas"
     load gdash_source_odbc from "gdash_source_odbc.bas"
+    load gdash_sched from "gdash_sched.bas"
+    load gdash_format from "gdash_format.bas"
 
     p = gdash_paths.from_args(args)
 
@@ -106,6 +108,7 @@ program main(args)
         prof = profiles[pname]
         if is_unknown(prof) then
             print to error "no connection profile named '" + pname + "'"
+            print to error "profiles are defined in " + gdash_paths.connections_file(p)
             exit(1)
         end if
         kind = string(default(prof["kind"], ""))
@@ -349,6 +352,7 @@ program main(args)
         print to error "usage: gdash [--root <dir>] <command> [...]"
         print to error ""
         print to error "  dashboards"
+        print to error "    list                                  what dashboards exist, and how fresh"
         print to error "    validate  <dashboard>                 check a record without running it"
         print to error "    refresh   <dashboard> [dataset] [--draft]   pull data now"
         print to error "    schedule                              one refresh pass over every published dashboard"
@@ -392,13 +396,75 @@ program main(args)
         exit(0)
     end if
 
+    ' --- what is here ------------------------------------------------------
+    '
+    ' gdash had no way to answer "what dashboards do I have?". Every other verb
+    ' takes a name, the server's root page said "open /d/<dashboard>" without
+    ' saying which, and the only way to find out was to list a directory --
+    ' which means knowing where the state directory is, which is the thing the
+    ' resolver exists to stop people needing to know.
+    if verb = "list" then
+        names = gdash_refresh.dashboards(p)
+        if count(names) = 0 then
+            print("no dashboards in " + gdash_paths.dashboards_dir(p))
+            print("a dashboard is a directory there with a draft.json in it")
+            exit(0)
+        end if
+        k = 0
+        while k < count(names)
+            nm = names[k]
+            pub = gdash_paths.publication(p, nm)
+            state = "draft only"
+            if pub.published then
+                state = "published " + pub.snapshot
+            end if
+            loaded = gdash_record.load_file(pub.record_file)
+            if not loaded.ok then
+                ' A record that does not load is the most important thing on
+                ' this list, so it says so instead of being skipped.
+                print(nm + "  " + state + "  -- DOES NOT VALIDATE: " + join(loaded.errors, "; "))
+            else
+                dsn = keys(loaded.record["datasets"])
+                ' The OLDEST dataset, not the newest: a dashboard is only as
+                ' current as its stalest part, and a line reporting the
+                ' freshest would be reassuring and wrong. Compared as epochs
+                ' and formatted once at the end -- comparing the formatted
+                ' strings happens to work while the format is ISO and stops
+                ' working silently the day it is not.
+                oldest_at = 0
+                any_never = false
+                m = 0
+                while m < count(dsn)
+                    st = gdash_sched.read_state(gdash_paths.dataset_state(p, nm, pub.mode, dsn[m]))
+                    at = number(default(st.last_success, 0))
+                    if at = 0 then
+                        any_never = true
+                    else if oldest_at = 0 or at < oldest_at then
+                        oldest_at = at
+                    end if
+                    m += 1
+                end while
+                if count(dsn) = 0 then
+                    oldest = "no datasets"
+                else if any_never then
+                    oldest = "never refreshed"
+                else
+                    oldest = "data as of " + gdash_format.when(oldest_at)
+                end if
+                print(nm + "  " + state + "  " + string(count(dsn)) + " dataset(s), " + oldest)
+            end if
+            k += 1
+        end while
+        exit(0)
+    end if
+
     ' The verb is checked BEFORE the dashboard name is demanded. Every verb
     ' below takes a dashboard, so an unrecognised one used to be answered with
     ' "which dashboard?" -- which asks the reader for the wrong thing and does
     ' not mention that the word they typed is not a command.
     if not contains(["validate", "refresh", "publish", "rollback", "snapshots", "diff"], verb) then
         print to error "unknown command: " + verb
-        print to error "known commands: validate refresh schedule publish snapshots rollback diff user source auth"
+        print to error "known commands: list validate refresh schedule publish snapshots rollback diff user source auth"
         print to error "run gdash --help for what each one takes"
         exit(2)
     end if
@@ -561,7 +627,15 @@ program main(args)
             end if
             prof = profiles[ds["profile"]]
             if is_unknown(prof) then
+                ' NAME THE FILE. A record referring to a profile that is not
+                ' configured is the first wall a new operator hits, and the
+                ' message used to stop at "no profile named X" -- true, and no
+                ' help at all to somebody who does not yet know that profiles
+                ' live in a file, let alone which one.
                 print to error "no connection profile named '" + string(ds["profile"]) + "'"
+                print to error "  dataset '" + dn + "' of dashboard '" + name + "' asks for it"
+                print to error "  profiles are defined in " + gdash_paths.connections_file(p)
+                print to error "  `gdash source check` lists the ones that are"
                 exit(1)
             end if
             r = gdash_refresh.run(p, name, target.mode, rec, dn, prof, "manual")
@@ -582,7 +656,7 @@ program main(args)
     ' Naming the alternatives, because a bare refusal makes the reader go
     ' looking for a manual that does not exist yet.
     print to error "unknown command: " + verb
-    print to error "known commands: validate refresh schedule publish snapshots rollback diff user source auth"
+    print to error "known commands: list validate refresh schedule publish snapshots rollback diff user source auth"
     print to error "run gdash --help for what each one takes"
     exit(2)
 end program
