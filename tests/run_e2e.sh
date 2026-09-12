@@ -152,6 +152,29 @@ has "$page2" "var gdashV=\"$(vfield v <<<"$after")\"" "the page embeds the versi
 has "$page2" "location.pathname+'/version'" "and polls for changes to it"
 hasnt "$page2" "EventSource" "no page opens a stream any more -- that is the worker it used to hold"
 
+# --- and the page's own JavaScript, executed -----------------------------
+#
+# The shim is built by string concatenation in gBASIC and nothing ever ran the
+# result. That mattered less when it only enhanced a rendered page; it matters
+# now that it carries the refresh notification the server used to push.
+if command -v node >/dev/null 2>&1; then
+    printf '%s' "$page2" > "$SCRATCH/page.html"
+    python3 -c "
+import re,sys
+page=open(sys.argv[1]).read()
+m=re.findall(r'<script>(.*?)</script>', page, re.S)
+open(sys.argv[2],'w').write(m[-1] if m else '')
+" "$SCRATCH/page.html" "$SCRATCH/shim.js"
+    shimout="$(node tests/shim_check.js "$(vfield v <<<"$after")" "$(vfield pub <<<"$after")" < "$SCRATCH/shim.js" 2>&1)"
+    echo "$shimout"
+    pass=$((pass + $(grep -c '^  ok   ' <<<"$shimout")))
+    fail=$((fail + $(grep -c '^  FAIL ' <<<"$shimout")))
+else
+    # Named rather than silently skipped: a suite that quietly tests less on
+    # some machines is a suite that reports a number nobody can compare.
+    echo "  SKIP the shim is not executed here -- node is not installed" >&2
+fi
+
 # The route is gone, not merely unused: an endpoint whose only effect is to
 # pin a worker is one any viewer could still point at.
 code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/d/sales/events")"
@@ -458,13 +481,31 @@ echo "--- a guesser is slowed, a typist is not ---"
 jarT="$SCRATCH/throttle.txt"; rm -f "$jarT"
 formT="$(curl -s -c "$jarT" --max-time 10 "http://127.0.0.1:$PORT/login")"
 tokT="$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' <<<"$formT")"
-codes=""
-for i in 1 2 3 4 5; do
-    codes="$codes$(curl -s -o /dev/null -w '%{http_code}' -b "$jarT" -c "$jarT" --max-time 10 \
-        -X POST -d "csrf=$tokT&user=ada&pass=wrong-$i" "http://127.0.0.1:$PORT/login") "
+#
+# FOUR attempts, not five. The fifth was asserted as a second 429 and failed
+# perhaps one run in three on a loaded machine -- correctly: the wait after
+# the third failure is one second, and two curls plus a whoami round trip can
+# take longer than that, at which point the guesser has genuinely waited and
+# is genuinely entitled to another try. The schedule itself is pinned exactly
+# in test_throttle.bas against an injected clock, where it costs no wall time
+# and cannot race. What the end-to-end run is for is that the throttle is
+# WIRED IN -- that a 429 reaches the socket at all -- and four attempts show
+# that without asking the machine to be fast.
+attempt_login(){
+    curl -s -o /dev/null -w '%{http_code}' -b "$jarT" -c "$jarT" --max-time 10 \
+        -X POST -d "csrf=$tokT&user=ada&pass=wrong-$1" "http://127.0.0.1:$PORT/login"
     tokT="$(sed -n 's/.*"csrf":"\([^"]*\)".*/\1/p' <<<"$(curl -s -b "$jarT" --max-time 10 "http://127.0.0.1:$PORT/whoami")")"
-done
-ok "three failures are free, then the guesser waits" "$codes" "401 401 401 429 429 "
+}
+codes=""
+for i in 1 2 3 4; do codes="$codes$(attempt_login "$i") "; done
+ok "three failures are free, then the guesser waits" "$codes" "401 401 401 429 "
+
+# And the wait ENDS. A lockout that never lifts is a denial of service an
+# attacker can aim at someone else's account by failing on their behalf, so
+# the other half of the property matters as much as the first. Two seconds is
+# comfortably past the one second owed, and waiting longer is never wrong.
+sleep 2
+ok "and having waited, they are let through to fail again" "$(attempt_login 5)" "401"
 has "$(cat "$ROOT/log/audit.log")" '"event":"login.throttled"' "and the throttling is audited"
 
 # Per USERNAME, not per address: an intranet behind one NAT is one address, and
