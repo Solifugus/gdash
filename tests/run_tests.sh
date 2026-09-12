@@ -146,6 +146,19 @@ if [[ "${GDASH_SKIP_E2E:-0}" != "1" ]]; then
     fi
 fi
 
+# Draining. Operations §7 promises a restart finishes the requests it is
+# already serving; that was measured once by hand in GDASH-8 and then only
+# written down. Slow by construction -- it renders two ~4.5s pages so that
+# SIGTERM lands mid-flight -- so it skips with the rest of the port-using
+# suites.
+if [[ "${GDASH_SKIP_E2E:-0}" != "1" ]]; then
+    echo "--- drain ---"
+    ran=$((ran + 1))
+    if ! "$HERE/run_drain.sh"; then
+        failed=$((failed + 1))
+    fi
+fi
+
 # The races. Three pieces of gdash exist because two things can happen at
 # once; until GDASH-6 none of them had ever had two things happen at once.
 if [[ "${GDASH_SKIP_E2E:-0}" != "1" ]]; then

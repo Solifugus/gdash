@@ -30,8 +30,15 @@ Step 0 asked:
 ```
 
 `000` is curl's code for *no response at all*. The shipped default is one
-worker, so the shipped default serves **zero** concurrent viewers: open a
-dashboard and the same person in a second tab gets nothing.
+worker, so the shipped default served **zero** concurrent viewers: open a
+dashboard and the same person in a second tab got nothing.
+
+**Corrected at G11-13 — read that before quoting these numbers.** The
+measurement is real and the defect was real, but the cause is not the one
+stated here. `viewers = workers − 1` was a property of *gdash's handler*,
+which looped in `sleep(0.5)` and never returned. It was never a property of
+`stream`. A stream handler that returns parks the connection and frees its
+worker, and always could.
 
 **The lesson is not about SSE.** It is that "known ceiling, named escape
 hatch" reads like a decision and can hide an unasked question. The ceiling was
@@ -69,6 +76,11 @@ Two claims in one sentence, and only one of them is doing work:
 - **Incidental** — the carrier is SSE. Nothing depends on the connection
   staying open. The handler was *already polling the filesystem*; it was
   simply polling it in the wrong process.
+
+The conclusion held. One step of the reasoning did not: this section assumed
+that keeping the connection open necessarily kept the handler running. It does
+not, and the platform had never required it (G11-13). The right reason to move
+the poll into the browser turns out to be a different one, and it is stronger.
 
 Separating those two took longer than implementing the change. The earlier
 report called this a platform limitation and recommended waiting for a
@@ -202,6 +214,95 @@ It asserts three different kinds of thing, because any one alone would rot:
 
 Verified by mutation: holding the worker again produces exactly the original
 failure, `000` and a ten-second wait, in the suite written to catch it.
+
+---
+
+## G11-13 — the ask was answered by being refused, and the refusal was right
+
+`gdash11_platform_ask_stream.md` asked for "a stream handler that can wait
+without holding its worker". The answer (gbasic `3e69896`,
+`docs/gdash11_platform_answer_stream.md`) is that **the premise was wrong**: a
+stream handler never had to hold its worker. The connection outlives the
+handler, so a stream is kept alive by *parking* it and returning:
+
+```basic
+stream "/events"( req )
+    e = web.emit(req, web.sse_event("open"))
+    append(G.streams, req)
+    return 0
+end stream
+```
+
+gdash's handler looped in `sleep(0.5)` until the client went away. **That** is
+what held the worker. Confirmed here, at `e56daa0`, against gdash's own claim:
+
+```
+6 parked streams on ONE worker, and that worker still answers:
+  pong 6
+  pong 6
+  pong 6
+```
+
+So `concurrent viewers = workers − 1` was a property of the handler gdash
+wrote, not of `stream`, and this phase's headline number must not be carried
+forward as a fact about the platform. The shape has existed since PLAT-WEB-5
+and lived in a test fixture; `docs/reference.md` documented `emit` and `finish`
+and never said a stream handler must return. It says so now.
+
+**How the wrong conclusion survived being measured.** Six measurements, all
+correct, all confirming a law that was real — and every one of them held the
+handler shape fixed. The variable that mattered was never varied, because it
+was not visible as a variable: `while alive ... sleep(0.5)` was copied from the
+platform's own documented example and read as *what a stream is* rather than as
+*one way to write one*. Measuring harder would not have found this. The
+question that would have is "what else could this handler look like?" — and
+nothing in six runs of a script prompts anyone to ask it.
+
+### gdash stays on polling anyway, for a better reason than it had
+
+The original reason — that a stream pins a worker — is false. The real one is
+sharper, and I verified it here rather than taking it on report. **A parked
+stream belongs to the worker that accepted it.** `workers: N` is N processes
+with N separate lists, so a poke delivered by one request reaches only that
+worker's streams. At `workers: 4`, with 8 streams open:
+
+```
+poke 1: poked 3       one request lands in one worker
+poke 2: poked 2
+poke 3: poked 2
+poke 4: poked 2
+received: 7 of 8      after FOUR pokes, one viewer had still heard nothing
+```
+
+A refresh notice that reaches a third of viewers per write, and one of them
+never, is not a notice. Cross-worker reach **did not ship and is not planned**:
+a broadcast that must reach every viewer means `workers: 1`, and the reference
+now says so.
+
+gdash cannot take that trade. Operations §5 recommends four workers for an
+office and the systemd unit sets four, precisely so a burst of page loads
+queues instead of blocking. Capping the deployment at one worker to buy a
+faster refresh notice would trade the thing people wait on for the thing they
+do not.
+
+**So the decision stands and the reasoning is replaced.** Polling is correct
+for gdash because gdash must run more than one worker — not because a stream
+would pin one.
+
+### What did ship, and what it is worth to gdash
+
+`timer` (gbasic `e56daa0`) — `timer.every` / `timer.after` / `timer.cancel`
+delivered through `watch(timer.ticks)`, with ticks coalesced rather than caught
+up and a `skipped` count so a slow consumer can tell. That is the missing piece
+for anyone parking streams, and it closes the second half of the gap: nothing
+previously woke a parked stream on a clock.
+
+gdash uses no timer — its scheduler is a separate process under a systemd
+timer — so this changes nothing here today. One thing in the same commit does
+matter: **a program with a server and a live timer never exited on SIGTERM**,
+pre-existing and general (a watched `inbox.messages` did the same). gdash
+drains on SIGTERM and operations §7 makes a measured claim about it, so that
+claim was re-measured at `e56daa0` rather than assumed to survive.
 
 ---
 
