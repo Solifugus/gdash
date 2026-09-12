@@ -208,6 +208,16 @@ program main(args)
     bo_index = string(gdash_app.index_page(req_for("/", session_cookie(bo_sid), {})).body)
     s = gdash_test.ok(s, not contains(bo_index, "/d/team"), "signing in does not by itself reveal a group's dashboard")
 
+    ' A record that does not load is ABSENT, not named with an error beside
+    ' it. The operator sees it in `gdash list`; a viewer can do nothing about
+    ' it, and being unparseable is not a reason to disclose that it exists.
+    made = gdash_paths.ensure_dir(gdash_paths.dashboard_dir(p, "corrupt"))
+    broke {file} = gdash_paths.record_file(p, "corrupt")
+    write(broke, "{ not json")
+    broken_index = string(gdash_app.index_page(req_for("/", no_cookies(), {})).body)
+    s = gdash_test.ok(s, not contains(broken_index, "corrupt"), "a record that does not load is absent from the index, not named")
+    s = gdash_test.contains_text(s, broken_index, "/d/open", "and the dashboards beside it still list")
+
     boss_index = string(gdash_app.index_page(req_for("/", session_cookie(boss_sid), {})).body)
     s = gdash_test.contains_text(s, boss_index, "/d/locked", "an administrator sees the one nobody else may open")
 
