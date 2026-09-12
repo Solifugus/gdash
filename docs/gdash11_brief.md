@@ -103,8 +103,23 @@ Delivered. `docs/gdash11_findings.md` has the detail.
 - Operations §5 rewritten around what a request costs (28 ms poll, 57 ms
   page), measured rather than asserted.
 
-Suite: 29 suites, 911 in-process, 21 multi-worker, 11 ceiling, 9 concurrency,
-186 end-to-end (10 of them the shim, run under node) — green. Opt-in runners unchanged.
+Then, because the user is about to run gdash themselves for the first time,
+the first ten minutes were walked end to end — an empty directory, the sample
+record, a login, a server — which nothing in ten phases had ever done:
+
+- `gdash --help` answered "which dashboard?", and the usage it did print
+  omitted every command needed to create a login. Fixed.
+- Nothing could answer "what dashboards do I have?" — `gdash list` for the
+  operator, and an index page for the viewer that lists only what they may
+  open and stays silent about the rest.
+- **Publishing a dashboard emptied it**, silently, for every viewer. The
+  publish now says so and names the command that fills it; whether it should
+  carry the data across is left as a design question with three answers.
+- A README, with every command in it run before it was written.
+
+Suite: 29 suites, 923 in-process, 21 multi-worker, 11 ceiling, 9 concurrency,
+202 end-to-end (10 of them the shim, run under node) — green. Opt-in runners
+ODBC 12 and FHS 22 re-run and green; Postgres and LDAP untouched.
 
 ### Deliberately not built
 
@@ -116,3 +131,9 @@ TLS (still blocked on the platform).
 Design §5 names SSE as the carrier for global events. After this phase that
 sentence is wrong in its mechanism and right in its principle. The design
 document was not touched.
+
+Design §7 authorises publish to copy the record and is silent on the data,
+which is why a published dashboard is empty until something refreshes it
+(G11-11). The CLI now says what happens; what *should* happen is a ruling the
+design document does not yet make. Three defensible answers are written out in
+the findings.

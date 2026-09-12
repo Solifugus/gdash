@@ -1,8 +1,8 @@
 # GDASH-11 — Findings
 
 **Status:** complete. One open dashboard used to make gdash answer nothing
-else; it no longer does. Suite green at 29 suites, 911 in-process assertions,
-21 multi-worker, 11 ceiling, 9 concurrency, 186 end-to-end (10 of which
+else; it no longer does. Suite green at 29 suites, 923 in-process assertions,
+21 multi-worker, 11 ceiling, 9 concurrency, 202 end-to-end (10 of which
 execute the page's JavaScript under node).
 
 ---
@@ -205,6 +205,104 @@ failure, `000` and a ten-second wait, in the suite written to catch it.
 
 ---
 
+# The first ten minutes
+
+The ceiling was the phase. These came from walking the path a person actually
+takes with gdash for the first time — an empty directory, the sample record, a
+login, a server — because the user is about to do exactly that and nothing in
+ten phases had ever done it end to end.
+
+## G11-9 — `gdash --help` answered "which dashboard?"
+
+`--help` was not recognised, so it fell into the verb slot; the verb then
+demanded a dashboard name. The least useful answer available to somebody who
+had just asked for help.
+
+Worse, the usage printed for no arguments at all named five verbs of eight. The
+three missing were `user`, `source` and `auth` — which is to say **every
+command a new operator needs before anything else works**. The first thing a
+person must do was the one thing the help did not mention.
+
+An unknown word is now named as an unknown command rather than answered as a
+missing argument, and a real command missing its argument says which argument.
+
+## G11-10 — nothing could answer "what dashboards do I have?"
+
+Not from the CLI: every verb takes a name. Not from the browser: the root page
+said `open /d/<dashboard>` without saying which. The only way to find out was
+to list a directory — which means knowing where the state directory is, which
+is the thing the resolver exists to stop anyone needing to know.
+
+`gdash list` is the operator's answer. It reports the age of the **stalest**
+dataset, not the newest: a dashboard is only as current as its oldest part, and
+a line reporting the freshest would be reassuring and wrong. A record that does
+not validate is listed loudly rather than skipped, because for the operator it
+is the most important line on the page.
+
+The index page is the viewer's answer, and **the whole difficulty there is that
+a list of names is a disclosure.** Design §8 refuses an anonymous viewer with
+404 rather than 403 precisely because the existence of `layoffs-q3` is itself
+information; an index that named it would undo that in one line of HTML. So:
+
+- it reuses `allowed` rather than re-deriving the rule, because a second
+  implementation of an access decision is a second thing to keep right;
+- a record that does not load is **absent**, not named with an error beside it;
+- the empty text is identical whether nothing exists or nothing is shared,
+  because "3 dashboards exist, none for you" is exactly the disclosure being
+  avoided — and a count is the easiest way to make it by accident.
+
+Eleven assertions across four viewers. Verified by mutation three ways:
+dropping the access check fails five of them, adding a count fails another,
+and naming an unloadable record fails the last.
+
+## G11-11 — publishing a dashboard emptied it, silently
+
+The natural first-run sequence is validate → refresh → publish. It ended with
+every visual reading **"No data yet"** for every viewer, including the author.
+
+Draft and published data never share a directory (design §7, so that a draft
+edit cannot leak into production), and publish copies the record only. A
+newly-published dashboard has therefore genuinely never refreshed *in published
+mode*, and stays empty until something refreshes it.
+
+Ten phases of green suites never saw this because the only end-to-end
+dashboard that gets published has an `interval` policy, so a scheduler pass
+filled its published cache a moment later. A `manual` dataset — the default a
+person writing their first record will use — has nothing to fill it.
+
+**Whether publish should carry the draft's data across is deliberately not
+decided here.** §7 authorises copying the record and is silent on the data,
+and that silence is the maintainer's to break, not a CLI message's. Three
+readings are defensible:
+
+1. **Carry it.** What was validated at publish time is what should be
+   published; the separation exists to stop *later* draft edits leaking, and a
+   one-time copy at the moment of publish is not a later edit.
+2. **Refresh it.** Publish triggers a refresh of the published datasets, so
+   production data is always fetched for production.
+3. **Leave it.** Publishing a record and fetching data are different acts, and
+   an operator who wants both should say both.
+
+What the CLI does now is (3) **out loud**: the publish reports how many
+datasets are empty and names the one command that fills them, and says nothing
+once there is data. That is safe under all three readings and stops the state
+being a surprise either way.
+
+## G11-12 — a formatter that existed once and was needed twice
+
+`_when` — a stored epoch as something a person reads — was private to
+`gdash_app`. `gdash list` needed the same answer. Two renderings of "how old is
+this data" that could drift apart is precisely the kind of small inconsistency
+that makes a status line untrustworthy, so it moved to `gdash_format` and both
+callers now share it.
+
+Related, and caught while writing the listing: the first version compared
+dataset ages as **formatted strings**, which happens to work while the format
+is ISO and would stop working silently the day it is not. Epochs are compared;
+formatting happens once, at the end.
+
+---
+
 ## Deliberately not built
 
 - **A configurable poll interval.** One number in one place until there is a
@@ -225,3 +323,6 @@ failure, `000` and a ten-second wait, in the suite written to catch it.
   GDASH-11 deliberately did not wait for it, and should not have.
 - **The systemd units have still never been started**, only
   `systemd-analyze verify`'d (G8-7, still open).
+- **Should publish carry the draft's data across?** G11-11. The CLI now says
+  what happens; the design document does not yet say what should. Named as a
+  question with three defensible answers rather than settled in passing.
