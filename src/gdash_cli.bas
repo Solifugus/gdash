@@ -492,6 +492,41 @@ program main(args)
             exit(1)
         end if
         print("published " + name + " as " + r.snapshot)
+
+        ' PUBLISHED AND EMPTY IS A REAL STATE, AND IT USED TO BE A SILENT ONE.
+        '
+        ' Draft and published data never share a directory (design §7), so a
+        ' dashboard whose draft is full of data is, the moment it is published,
+        ' a dashboard with none -- every visual reads "No data yet" for every
+        ' viewer until something refreshes the published copy. The natural
+        ' first-run sequence is validate, refresh, publish, and it ends with a
+        ' broken-looking dashboard.
+        '
+        ' Whether publish should CARRY the draft's data across is a design
+        ' question and not the CLI's to answer: §7 authorises copying the
+        ' record and is silent on the data. What the CLI can do is stop the
+        ' state being a surprise, and name the one command that fixes it.
+        pubmode = gdash_paths.publication(p, name)
+        loaded_pub = gdash_record.load_file(pubmode.record_file)
+        if loaded_pub.ok then
+            dsn = keys(loaded_pub.record["datasets"])
+            empty = 0
+            m = 0
+            while m < count(dsn)
+                if not gdash_paths.path_exists(gdash_paths.dataset_db(p, name, "published", dsn[m])) then
+                    empty += 1
+                end if
+                m += 1
+            end while
+            if empty > 0 then
+                print("")
+                print("note: the published copy has no data yet (" + string(empty) + " of " + string(count(dsn)) + " dataset(s)).")
+                print("      published and draft data are kept apart, so publishing does not carry")
+                print("      the draft's data across. Viewers will see \"No data yet\" until this runs:")
+                print("")
+                print("        gdash refresh " + name)
+            end if
+        end if
         exit(0)
     end if
 

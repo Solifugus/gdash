@@ -127,6 +127,21 @@ has "$page" "justify-content:space-between" "space maps to flex justification"
 has "$page" "flex:2 1 0" "a weighted child flexes"
 has "$page" "gap:16px;justify-content" "gap is applied to the layout, not just defined in the stylesheet"
 
+echo "--- publishing into an empty cache says so ---"
+# Draft and published data never share a directory (design §7), so the moment
+# a dashboard is published its visuals read "No data yet" for every viewer
+# until the published copy is refreshed. The natural first-run sequence is
+# validate, refresh, publish -- and it used to end, silently, with a
+# dashboard that looked broken.
+pub_empty="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" publish private 2>&1)"
+has "$pub_empty" "published private as" "the publish itself succeeds"
+has "$pub_empty" "no data yet" "and says the published copy is empty"
+has "$pub_empty" "gdash refresh private" "naming the command that fills it"
+
+"$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh private >/dev/null 2>&1
+pub_full="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" publish private 2>&1)"
+hasnt "$pub_full" "no data yet" "and the note is gone once there is data"
+
 echo "--- the index lists only what the viewer may open ---"
 # The root page used to say "open /d/<dashboard>" without saying which, so a
 # viewer could reach nothing without being told a URL. A list of names is a
