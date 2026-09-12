@@ -68,6 +68,27 @@ has "$out" "validates" "validate reports ok"
 out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh sales 2>&1)"; ok "refresh exits 0" "$?" "0"
 has "$out" "version 1" "refresh bumps the version"
 
+echo "--- the CLI says what it can do ---"
+# Asked for help, gdash used to answer "which dashboard?" -- it treated
+# --help as a verb, then demanded an argument for it. And the usage it did
+# print named five verbs of eight, omitting every one a new operator needs in
+# order to give themselves a login. Both were in the way of the first ten
+# minutes somebody spends with gdash, which is the cheapest place to lose them.
+help_out="$("$GBASIC" src/gdash_cli.bas --help 2>&1)"
+has "$help_out" "user add" "help names the command that creates a login"
+has "$help_out" "source check" "and the one that tests a connection before 3am"
+has "$help_out" "auth   check" "and the one that tests the directory"
+has "$help_out" "rollback" "and the way back from a bad publish"
+hasnt "$help_out" "which dashboard" "asking for help is not answered with a question"
+
+unknown="$("$GBASIC" src/gdash_cli.bas frobnicate 2>&1)"
+has "$unknown" "unknown command: frobnicate" "an unknown command is named as one"
+has "$unknown" "known commands:" "and the alternatives are listed"
+hasnt "$unknown" "which dashboard" "not mistaken for a missing argument"
+
+noname="$("$GBASIC" src/gdash_cli.bas validate 2>&1)"
+has "$noname" "validate takes the name of one" "a real command missing its argument says which argument"
+
 echo "--- server ---"
 GDASH_ROOT="$ROOT" "$GBASIC" --line-buffered src/gdash_server.bas > "$SCRATCH/server.log" 2>&1 &
 SRV=$!

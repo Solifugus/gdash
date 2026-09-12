@@ -54,6 +54,13 @@ program main(args)
             i += 1
         else if a = "--root" then
             i += 2
+        else if a = "--help" or a = "-h" or a = "help" then
+            ' Not a verb. Without this, `--help` fell through to the verb slot
+            ' and gdash answered "which dashboard?", which is the least useful
+            ' thing it could have said to somebody who had just asked for help.
+            verb = ""
+            rest = []
+            i = count(args)
         else if verb = "" then
             verb = a
             i += 1
@@ -335,9 +342,36 @@ program main(args)
     end if
 
     if verb = "" then
-        print to error "usage: gdash --root <dir> validate|refresh <dashboard> [dataset]"
-        print to error "       gdash --root <dir> publish|rollback|snapshots|diff <dashboard> [...]"
-        print to error "       gdash --root <dir> schedule"
+        ' ALL of them, grouped by what somebody is trying to do. The old text
+        ' named five verbs of eight and left out every one a person needs to
+        ' give themselves a login -- so the first thing a new operator had to
+        ' do was the one thing the help did not mention.
+        print to error "usage: gdash [--root <dir>] <command> [...]"
+        print to error ""
+        print to error "  dashboards"
+        print to error "    validate  <dashboard>                 check a record without running it"
+        print to error "    refresh   <dashboard> [dataset] [--draft]   pull data now"
+        print to error "    schedule                              one refresh pass over every published dashboard"
+        print to error ""
+        print to error "  versions"
+        print to error "    publish   <dashboard>                 make the draft the version people see"
+        print to error "    snapshots <dashboard>                 list published versions"
+        print to error "    rollback  <dashboard> [snapshot]      go back to one"
+        print to error "    diff      <dashboard> [from] [to]     what changed between two"
+        print to error ""
+        print to error "  people"
+        print to error "    user list"
+        print to error "    user add    <name> [--admin] [--email E] [--groups a,b]"
+        print to error "    user passwd <name>                    password is read from stdin, never argv"
+        print to error "    user groups <name> a,b"
+        print to error "    user disable|enable|remove <name>"
+        print to error ""
+        print to error "  checking a configuration before it fails at 3am"
+        print to error "    source check [profile]                connect, and say what answered"
+        print to error "    auth   check [username]               the same for the directory"
+        print to error ""
+        print to error "  --root <dir> runs against a directory tree instead of the installed"
+        print to error "  FHS paths; it is how gdash is developed and tested."
         exit(2)
     end if
 
@@ -358,8 +392,20 @@ program main(args)
         exit(0)
     end if
 
+    ' The verb is checked BEFORE the dashboard name is demanded. Every verb
+    ' below takes a dashboard, so an unrecognised one used to be answered with
+    ' "which dashboard?" -- which asks the reader for the wrong thing and does
+    ' not mention that the word they typed is not a command.
+    if not contains(["validate", "refresh", "publish", "rollback", "snapshots", "diff"], verb) then
+        print to error "unknown command: " + verb
+        print to error "known commands: validate refresh schedule publish snapshots rollback diff user source auth"
+        print to error "run gdash --help for what each one takes"
+        exit(2)
+    end if
+
     if count(rest) < 1 then
-        print to error "which dashboard?"
+        print to error "which dashboard? -- " + verb + " takes the name of one"
+        print to error "run gdash --help for what each command takes"
         exit(2)
     end if
     name = rest[0]
@@ -533,6 +579,10 @@ program main(args)
         exit(0)
     end if
 
+    ' Naming the alternatives, because a bare refusal makes the reader go
+    ' looking for a manual that does not exist yet.
     print to error "unknown command: " + verb
+    print to error "known commands: validate refresh schedule publish snapshots rollback diff user source auth"
+    print to error "run gdash --help for what each one takes"
     exit(2)
 end program
