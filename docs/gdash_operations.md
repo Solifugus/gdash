@@ -84,32 +84,58 @@ gdash refresh <dashboard>          # or wait for the timer
 requires the dashboard, its published history and a working refresh to come
 back. `/var/cache/gdash` is not in the backup and does not need to be.
 
-## 5. Sizing, and the one hard limit
+## 5. Sizing
 
-**A dashboard open in a browser holds a worker for as long as it is open.**
+**An open dashboard no longer holds a worker.** It did until GDASH-11, and the
+consequence was severe enough to be worth stating plainly here rather than
+only in a findings file: the page held a server-sent-event stream open so that
+a refresh would reach it, a worker was occupied for as long as the tab was
+open, and so gdash served **one fewer viewer than it had workers** — at the
+default of one worker, none. Not slowly. Not intermittently. A second request
+was not answered at all until the first tab was closed.
 
-The page opens a server-sent-event stream so that a refresh or a publish
-reaches it, and that stream occupies one worker until the tab closes. Measured:
-with two workers and two dashboards open, an ordinary request is **not
-answered** — not delayed, not queued briefly, but unanswered until one of the
-streams ends.
+The browser now polls `/d/{name}/version` every five seconds instead, and a
+worker is busy only for the few milliseconds that takes.
 
-So:
+### What a request costs
+
+Measured on one worker, sequentially, against the reference dashboard:
+
+| request | cost |
+|---|---|
+| `GET /d/{name}/version` — the poll every open tab makes | 28 ms |
+| `GET /d/{name}` — a full page, every visual queried | 57 ms |
+| `GET /whoami` | 6 ms |
+
+So one worker is about 35 polls per second, and a viewer with a tab open makes
+0.2 of those. Twenty people leaving dashboards up is four polls a second —
+roughly a tenth of one worker — where before it was twenty-one workers and
+twenty-one processes.
+
+### Choosing a number
+
+Size for **requests in flight**, which is what workers were always for, rather
+than for tabs:
 
 ```
-workers  >  dashboards open at once  +  headroom for ordinary requests
+workers  ≈  peak simultaneous page loads, and rarely more than a handful
 ```
 
-A four-worker gdash serves three simultaneous viewers. An office of twenty
-people leaving dashboards up needs more than twenty workers, and each worker is
-a process. Set it in `/etc/gdash/environment`:
+Two or four is a reasonable starting point for an office; the default of one
+is enough to try it and enough for a handful of people. Raise it if page loads
+queue behind each other at a busy moment — a page render is the expensive
+request, at 57 ms, and it is the one people wait on.
 
 ```
-GDASH_WORKERS=24
+GDASH_WORKERS=4
 ```
 
-This is a real constraint, not a caveat. If dashboards intermittently fail to
-load and nothing appears in the log, this is why.
+The poll is deliberately not free: it costs 28 ms rather than `whoami`'s 6 ms
+because it loads and validates the dashboard record in order to make the same
+access decision the page makes. A version number leaking to someone who may
+not open the dashboard would say that it exists and that its data moved; that
+is worth 22 ms. If the poll ever becomes the busiest thing a deployment does,
+that is the place to look.
 
 ## 6. Configuration
 
@@ -144,8 +170,8 @@ systemctl restart gdash
 
 **A restart completes the requests it is serving.** Measured: SIGTERM one
 second into a four-second request returns the whole response, at one worker and
-at four. Open dashboards will reconnect their event streams; viewers see
-nothing.
+at four. An open dashboard is not connected to anything between polls, so the
+worst a viewer sees is one poll that does not answer, and the next one does.
 
 ## 8. What failure looks like
 
@@ -153,7 +179,7 @@ nothing.
 |---|---|---|
 | pages load, data never changes | the timer is not enabled | `systemctl list-timers gdash*` |
 | a dashboard shows "last refresh failed" | the source is unreachable or the query changed | `/var/log/gdash/audit.log` |
-| dashboards intermittently do not load | more open dashboards than workers | §5 |
+| page loads queue at a busy moment | fewer workers than simultaneous page loads | §5 |
 | sign-in says "try again in N seconds" | rate limiting after three failed attempts | expires after 15 quiet minutes |
 | sign-in says "unavailable" | the directory is down — **not** a wrong password | `audit.log`, `login.unavailable` |
 | a chart is blank with an error box | a `line` mark over a text x column | use `bar`, or return a number |

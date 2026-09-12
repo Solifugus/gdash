@@ -84,8 +84,9 @@ object, because `format: 1` published it as a string.
 - **`manual`** — refreshes only when a person asks: the CLI's `refresh` verb or
   the dashboard's refresh button.
 - **`on_open`** — opening the dashboard *requests* a refresh; the scheduler
-  performs it. The page does **not** wait: it renders the data it has, and the
-  open tabs are told over SSE when the new data lands. Twenty people opening one
+  performs it. The page does **not** wait: it renders the data it has, and each
+  open tab notices when the new data lands, on its next poll of the version
+  endpoint — within about five seconds. Twenty people opening one
   dashboard file one request between them, because a request already pending is
   not duplicated.
 - **`interval`** — refreshed every `every` seconds. A failed attempt counts as

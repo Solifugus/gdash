@@ -103,15 +103,36 @@ systemd unit (`CAP_NET_BIND_SERVICE`, `ProtectSystem=strict`,
 configuration surface over PLAT-WEB's shipped TLS, drain/`pool_reload`
 integration for seamless updates, worker-sizing documentation (the SSE
 worker-pinning ceiling stated plainly, per the PLAT-WEB doc's own
-instruction), backup/restore doc (one directory), admin CLI for
+instruction — the ceiling itself was removed in GDASH-11 and the sizing
+section rewritten around what a request actually costs), backup/restore doc
+(one directory), admin CLI for
 create/publish/rollback/user management as needed. This is the
 "stand it up in an afternoon" phase; its deliverable is partly documentation.
+
+## GDASH-11 — The worker a viewer holds
+
+**Inserted ahead of deployment**, because gdash as shipped served one fewer
+viewer than it had workers and the default worker count is one: opening a
+single dashboard made the server answer nothing else. The page held an SSE
+stream; a handler that never returns is a worker that never comes back. The
+browser now polls `/d/{name}/version` for the same two facts the stream
+carried — the dataset version and the publish pointer — read from the
+filesystem exactly as before, so design §5's shared-nothing principle is
+untouched and only the process doing the waiting changed.
+
+Delivered with a ceiling suite that runs at the DEFAULT worker count, and the
+first test anywhere that executes the page's own JavaScript.
+
+**Design §5's sentence names SSE as the carrier and is now wrong in its
+mechanism** — the correction belongs to the maintainer, not to a phase.
 
 ## Unscheduled, deliberately
 
 Pass-through queries; dataset sharing; OIDC/SAML; web designer GUI;
 additional source connectors (SQL Server is the likely first, given demand);
-event-driven streams (platform); exact decimal aggregation beyond minor
+a stream handler that can wait without holding its
+worker (platform — it would beat polling, and GDASH-11 deliberately did not
+wait for it); exact decimal aggregation beyond minor
 units; Windows. Each waits for a phase's findings or a real deployment to
 justify it — the plan's job is to name them so deferral stays a decision.
 

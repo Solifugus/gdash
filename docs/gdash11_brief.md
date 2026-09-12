@@ -82,3 +82,37 @@ Move the poll from the server to the browser.
 Design §5's sentence names SSE as the carrier. After this phase it is wrong in
 its mechanism and right in its principle. The correction is the maintainer's
 to make, not this phase's to make silently.
+
+---
+
+## DONE
+
+Delivered. `docs/gdash11_findings.md` has the detail.
+
+- `GET /d/{name}/version` returns the dataset version and the publish pointer,
+  behind the same access check as the page. The `stream` route and
+  `gdash_app.events` are gone.
+- The page polls it every five seconds, from a baseline embedded at render
+  time and passed through the script element as an escaped JSON literal.
+- `tests/run_ceiling.sh` — 11 assertions at the **default** worker count.
+  Verified by mutation: re-pinning the worker reproduces the original `000`.
+- `tests/shim_check.js` — 10 assertions, the first anywhere that runs the
+  page's own JavaScript.
+- `run_workers.sh` lost its retry loop; its two held streams are eight
+  concurrent pollers, and the "flake" it apologised for was the ceiling.
+- Operations §5 rewritten around what a request costs (28 ms poll, 57 ms
+  page), measured rather than asserted.
+
+Suite: 29 suites, 911 in-process, 21 multi-worker, 11 ceiling, 9 concurrency,
+186 end-to-end (10 of them the shim, run under node) — green. Opt-in runners unchanged.
+
+### Deliberately not built
+
+A configurable poll interval; a cache to make the poll cheaper than 28 ms;
+TLS (still blocked on the platform).
+
+### Owed to the maintainer
+
+Design §5 names SSE as the carrier for global events. After this phase that
+sentence is wrong in its mechanism and right in its principle. The design
+document was not touched.
