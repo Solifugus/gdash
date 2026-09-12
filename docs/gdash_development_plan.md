@@ -114,9 +114,10 @@ create/publish/rollback/user management as needed. This is the
 **Inserted ahead of deployment**, because gdash as shipped served one fewer
 viewer than it had workers and the default worker count is one: opening a
 single dashboard made the server answer nothing else. The page held an SSE
-stream; a handler that never returns is a worker that never comes back. The
-browser now polls `/d/{name}/version` for the same two facts the stream
-carried — the dataset version and the publish pointer — read from the
+stream whose handler looped in `sleep()` and never returned, and a handler
+that never returns is a worker that never comes back. (Not a property of
+`stream` — corrected in G11-13.) The browser now polls `/d/{name}/version`
+for the same two facts the stream carried — the dataset version and the publish pointer — read from the
 filesystem exactly as before, so design §5's shared-nothing principle is
 untouched and only the process doing the waiting changed.
 
@@ -130,9 +131,10 @@ mechanism** — the correction belongs to the maintainer, not to a phase.
 
 Pass-through queries; dataset sharing; OIDC/SAML; web designer GUI;
 additional source connectors (SQL Server is the likely first, given demand);
-a stream handler that can wait without holding its
-worker (platform — it would beat polling, and GDASH-11 deliberately did not
-wait for it); exact decimal aggregation beyond minor
+cross-worker reach for parked streams (platform —
+asked for, answered at gbasic `e56daa0`, and **not planned**: a broadcast to
+every viewer means `workers: 1`, which gdash cannot take, so polling is the
+permanent answer here rather than a stopgap); exact decimal aggregation beyond minor
 units; Windows. Each waits for a phase's findings or a real deployment to
 justify it — the plan's job is to name them so deferral stays a decision.
 

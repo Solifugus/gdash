@@ -14,10 +14,16 @@
 ' any worker can answer for them independently.
 '
 ' Design §5 names SSE as the carrier for those global events. It no longer is:
-' the browser polls /d/{name}/version instead, because a stream handler holds
-' its worker for as long as the tab is open (GDASH-11). The principle §5 is
+' the browser polls /d/{name}/version instead (GDASH-11). The principle §5 is
 ' actually protecting -- that the truth lives on disk and not in any worker's
 ' memory -- is unchanged, and the sentence is the maintainer's to correct.
+'
+' NOT because a stream would pin a worker. It would not: a stream handler that
+' RETURNS parks the connection and frees its worker, and gdash's mistake was a
+' handler that looped in sleep() instead (G11-13). The real reason is that a
+' parked stream belongs to the worker that accepted it, so a notification that
+' must reach every viewer would mean workers: 1 -- and workers are what stop a
+' burst of page loads queueing. Polling is correct at any worker count.
 '
 ' Every handler carries its own `load` lines: a module is visible only inside
 ' the block that loads it (finding F3).
@@ -89,13 +95,16 @@ server gdash_web( port: 8780 )
     end get
 
     ' Global events, as two numbers the page polls (GDASH-11). This replaced
-    ' an SSE stream: the stream's body did exactly this read in a loop, and a
-    ' handler that loops is a worker that never comes back. With the default
-    ' single worker, one open dashboard meant nothing else was served at all.
+    ' an SSE stream whose body did exactly this read in a loop -- and a handler
+    ' that loops is a worker that never comes back. With the default single
+    ' worker, one open dashboard meant nothing else was served at all.
     '
-    ' There is no `stream` route any more, deliberately. An endpoint whose
-    ' only effect is to pin a worker leaves the ceiling reachable on purpose
-    ' by anyone allowed to open the dashboard.
+    ' There is no `stream` route any more. Not because a stream must hold a
+    ' worker -- a handler that returns parks the connection and does not --
+    ' but because a parked stream is reachable only from the worker that
+    ' accepted it, so a refresh notice would reach a fraction of viewers per
+    ' write unless gdash ran a single worker (G11-13). Two numbers over an
+    ' ordinary request reach everyone, at every worker count.
     get "/d/{name}/version"( req )
         load gdash_app from "gdash_app.bas"
         return gdash_app.version_of(req, req.params.name)

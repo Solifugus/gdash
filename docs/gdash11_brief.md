@@ -22,6 +22,14 @@ Not "slower with more viewers" — *nothing is served at all*. At the default,
 opening one dashboard makes gdash unresponsive to everything, including to the
 same person in a second tab.
 
+**Corrected after the fact (G11-13):** that law is a property of *gdash's
+handler*, which looped in `sleep(0.5)` and never returned — not of `stream`.
+A stream handler that returns parks the connection and frees its worker, and
+always could. The defect and these numbers are real; the cause named below is
+not. gdash stays on polling for a different and better reason: a parked stream
+belongs to the worker that accepted it, so a broadcast reaching every viewer
+would mean `workers: 1`, and gdash must run more.
+
 This was recorded as G6-10 and G8-9 as a ceiling to be aware of. The
 measurement above is what it actually means for someone about to open two
 tabs, and that reading makes it the phase that comes before deployment rather
@@ -44,6 +52,9 @@ A platform capability that let a stream handler wait without holding its
 worker would be better than what this phase builds, and it is worth asking
 for. gdash must not wait for it.
 
+*(The ask was filed and answered: no such capability was needed, because the
+handler never had to wait. See G11-13.)*
+
 ## Scope
 
 Move the poll from the server to the browser.
@@ -56,7 +67,9 @@ Move the poll from the server to the browser.
    landing between render and first poll is still seen.
 3. The `stream` route and `gdash_app.events` go. Leaving an endpoint whose
    only effect is to pin a worker would leave the ceiling reachable on
-   purpose by any viewer allowed to see the dashboard.
+   purpose by any viewer allowed to see the dashboard. *(The route stays gone,
+   for the reason in G11-13 rather than this one: a parked stream reaches only
+   its own worker.)*
 
 ## Verification
 
@@ -125,6 +138,25 @@ ODBC 12 and FHS 22 re-run and green; Postgres and LDAP untouched.
 
 A configurable poll interval; a cache to make the poll cheaper than 28 ms;
 TLS (still blocked on the platform).
+
+### The platform ask, answered
+
+`gdash11_platform_ask_stream.md` asked for a stream handler that could wait
+without holding its worker. The answer (`gdash11_platform_answer_stream.md`,
+gbasic `3e69896`/`e56daa0`) is that **the premise was wrong** — a stream
+handler that returns parks the connection and frees its worker, and always
+could. gdash's handler looped in `sleep()`; that was the bug, and it was
+gdash's.
+
+Verified here rather than taken on report: six parked streams on one worker,
+which still answered. And the reason gdash stays on polling regardless — at
+`workers: 4` with eight streams open, one poke reached three of them, and
+after four pokes one viewer had still heard nothing. A parked stream belongs
+to the worker that accepted it; cross-worker reach did not ship and is not
+planned. Full account in G11-13.
+
+Every document that named the wrong cause has been corrected, including the
+GDASH-6 and GDASH-8 findings that first recorded the ceiling.
 
 ### Owed to the maintainer
 

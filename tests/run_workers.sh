@@ -185,12 +185,13 @@ ok "eight concurrent renders all succeed" "$(cat "$SCRATCH"/render*.code | tr -d
 # but a directory.
 #
 # This used to be two held SSE streams, and two was the most that could be
-# established reliably -- because a held stream OCCUPIES a worker, so the
-# third stream on a four-worker server was competing with the suite's own
-# requests. That was recorded as a flake and retried. It was not a flake: it
-# was the ceiling, showing through the test that was meant to measure past it
-# (GDASH-11). With the poll in the browser there is no ceiling to work around
-# and no retry loop to explain, so the count goes up rather than down.
+# established reliably -- because gdash's stream handler looped instead of
+# returning, so each stream occupied a worker and the third was competing with
+# the suite's own requests. That was recorded as a flake and retried. It was
+# not a flake: it was the ceiling, showing through the test that was meant to
+# measure past it (GDASH-11, cause corrected in G11-13). With the poll in the
+# browser there is no ceiling to work around and no retry loop to explain, so
+# the count goes up rather than down.
 before="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/sales/version")"
 python3 -c "
 import json,sys

@@ -221,8 +221,10 @@ else
     echo "  SKIP the shim is not executed here -- node is not installed" >&2
 fi
 
-# The route is gone, not merely unused: an endpoint whose only effect is to
-# pin a worker is one any viewer could still point at.
+# The route is gone, not merely unused. Not because a stream must pin a worker
+# -- a handler that returns parks the connection and does not (G11-13) -- but
+# because a parked stream is reachable only from the worker that accepted it,
+# so a notice would reach a fraction of viewers unless gdash ran one worker.
 code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/d/sales/events")"
 ok "the stream route is gone" "$code" "404"
 

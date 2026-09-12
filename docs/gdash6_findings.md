@@ -259,6 +259,11 @@ turned back on its author.
 
 ## G6-10 — concurrent SSE streams do not establish reliably, and the ceiling is unresolved
 
+**Superseded twice. Removed in GDASH-11; cause corrected in G11-13** — the
+ceiling was a property of gdash's own handler, which looped in `sleep()` and
+never returned, not of `stream` or of the worker pool. Everything below is the
+record of what was believed at the time and is left standing as that.
+
 **Closed in GDASH-8 (G8-9).** The ceiling is exactly the worker count: an open
 dashboard holds a worker for as long as it is open. The measurement below was
 the wrong one -- counting how many streams established confounded worker

@@ -88,14 +88,21 @@ back. `/var/cache/gdash` is not in the backup and does not need to be.
 
 **An open dashboard no longer holds a worker.** It did until GDASH-11, and the
 consequence was severe enough to be worth stating plainly here rather than
-only in a findings file: the page held a server-sent-event stream open so that
-a refresh would reach it, a worker was occupied for as long as the tab was
-open, and so gdash served **one fewer viewer than it had workers** — at the
-default of one worker, none. Not slowly. Not intermittently. A second request
-was not answered at all until the first tab was closed.
+only in a findings file: gdash served **one fewer viewer than it had workers**
+— at the default of one worker, none. Not slowly. Not intermittently. A second
+request was not answered at all until the first tab was closed.
+
+The cause was gdash's own stream handler, which looped in `sleep(0.5)` until
+the client went away; a handler that never returns is a worker that never
+comes back. (Not a property of server-sent events, which can be kept alive by
+a handler that returns — see `gdash11_findings.md` G11-13.)
 
 The browser now polls `/d/{name}/version` every five seconds instead, and a
-worker is busy only for the few milliseconds that takes.
+worker is busy only for the few milliseconds that takes. **That stays true at
+any worker count**, which is why gdash polls rather than pushing: a held
+connection belongs to the one worker that accepted it, so notifying every
+viewer would mean running a single worker, and workers are what keep a burst
+of page loads from queueing.
 
 ### What a request costs
 

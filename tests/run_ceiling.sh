@@ -16,6 +16,15 @@
 #
 # Not "slower". Nothing served at all, for as long as the tab stayed open.
 #
+# The CAUSE named in GDASH-11 was wrong and is corrected in G11-13: this is a
+# property of a handler that loops in sleep() and never returns, not of
+# `stream`. A stream handler that returns parks the connection and frees its
+# worker. gdash polls anyway, because a parked stream is reachable only from
+# the worker that accepted it and gdash must run more than one worker.
+#
+# The assertions below are unaffected -- they are about what the shipped page
+# does and whether viewers are served, not about why the old shape failed.
+#
 # Everything here runs at the DEFAULT worker count -- GDASH_WORKERS is unset
 # on purpose -- because the default is what someone gets when they run the
 # server to try it, and a fix that only holds at four workers is not a fix.

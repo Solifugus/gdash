@@ -1241,7 +1241,7 @@ library gdash_app
     '
     ' This is the whole of what the SSE stream used to carry, and the loop
     ' that read these two files now runs in the browser instead of in a
-    ' worker that never returns (GDASH-11). The rename-swap still guarantees
+    ' handler that never returned (GDASH-11). The rename-swap still guarantees
     ' that a reader who sees a new version sees complete data.
     '
     ' Access is checked exactly as the page checks it. A version number is

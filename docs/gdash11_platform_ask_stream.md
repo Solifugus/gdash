@@ -1,7 +1,26 @@
 # Platform ask — a stream handler that does not hold its worker
 
 **From:** gdash, GDASH-11
-**Status:** an ask, not a blocker. gdash shipped around it and should have.
+**Status: ANSWERED** — see `gdash11_platform_answer_stream.md` (gbasic
+`3e69896`, `e56daa0`) and `gdash11_findings.md` G11-13.
+
+**The premise below is wrong.** A stream handler never had to hold its worker:
+the connection outlives the handler, so a stream is kept alive by *parking* the
+request and returning. gdash's handler looped in `sleep(0.5)` and never
+returned, and that is what held the worker. The shape had existed since
+PLAT-WEB-5 and lived in a test fixture rather than the reference, which is now
+fixed.
+
+What shipped in response was `timer` — periodic work on the event loop, the
+genuinely missing piece. What did **not** ship, and is not planned, is
+cross-worker reach: a parked stream belongs to the worker that accepted it, so
+a broadcast to every viewer means `workers: 1`. gdash cannot take that, so it
+stays on polling — permanently, and for that reason rather than the one argued
+below.
+
+The document is left standing as the record of a wrong question asked well.
+
+---
 
 ## What gdash did, and why it stopped
 

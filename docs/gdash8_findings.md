@@ -180,6 +180,13 @@ opens an `EventSource`, so every browser tab with a dashboard on it occupies
 one worker, and a request arriving when all workers are held is not queued
 briefly — it is not answered until somebody closes a tab.
 
+> **Corrected in GDASH-11 (G11-13).** The measurement was right and the sizing
+> rule below was a reasonable reading of it, but the cause was gdash's own
+> handler looping in `sleep()` rather than returning — not `EventSource`, not
+> `stream`, and not the worker pool. An open dashboard holds nothing now. The
+> current sizing guidance is `docs/gdash_operations.md` §5; the rule stated
+> below is superseded and should not be followed.
+
 The sizing rule follows and is not a guess: **workers must exceed the number of
 dashboards open at once**, with headroom for ordinary requests on top. A
 four-worker gdash serves three simultaneous viewers.
