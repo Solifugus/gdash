@@ -150,9 +150,30 @@ One worker, sequential, reference dashboard:
 | `GET /d/{name}` (every visual queried) | 57 ms |
 | `GET /whoami` | 6 ms |
 
-A viewer with a tab open makes 0.2 requests a second. Twenty people leaving
-dashboards up is four polls a second — about a tenth of one worker, where
-before it was twenty-one workers and twenty-one processes.
+A viewer with a tab open makes 0.2 requests a second, where before that viewer
+occupied a whole process. Measured rather than extrapolated, at the **default
+single worker**, with viewers polling while somebody loads a page:
+
+| workers | viewers | polls | failed | worst page load |
+|---|---|---|---|---|
+| 1 | 10 | 30 | 0 | 87 ms |
+| 1 | 30 | 90 | 0 | 71 ms |
+| 4 | 30 | 90 | 0 | 71 ms |
+
+Thirty viewers cost one worker nothing measurable. The same configuration
+served zero before this phase.
+
+What workers are for turns out to be a burst of *page loads*:
+
+| workers | simultaneous page loads | failed | slowest |
+|---|---|---|---|
+| 1 | 10 | 0 | 482 ms |
+| 1 | 20 | 0 | 951 ms |
+| 4 | 10 | 0 | 195 ms |
+| 4 | 20 | 0 | 675 ms |
+
+Nothing fails at any of these. The queue is the whole effect, which is what a
+worker pool is supposed to do and what it never got to do before.
 
 The poll costs 28 ms rather than `whoami`'s 6 because it loads and validates
 the dashboard record to make the same access decision the page makes. That is

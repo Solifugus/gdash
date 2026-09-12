@@ -108,23 +108,49 @@ Measured on one worker, sequentially, against the reference dashboard:
 | `GET /whoami` | 6 ms |
 
 So one worker is about 35 polls per second, and a viewer with a tab open makes
-0.2 of those. Twenty people leaving dashboards up is four polls a second —
-roughly a tenth of one worker — where before it was twenty-one workers and
-twenty-one processes.
+0.2 of those — where before, that viewer occupied a whole process.
+
+### What it takes under load
+
+Measured, not extrapolated. Simulated viewers polling every five seconds the
+way the page does, while somebody loads a page:
+
+| workers | viewers | polls | failed | worst page load |
+|---|---|---|---|---|
+| 1 (default) | 10 | 30 | 0 | 87 ms |
+| 1 (default) | 30 | 90 | 0 | 71 ms |
+| 4 | 30 | 90 | 0 | 71 ms |
+
+Thirty people with dashboards open cost the default single worker nothing
+measurable. Before GDASH-11 that configuration served **nobody**.
+
+What workers are actually for is a **burst of page loads**, which is the
+expensive request:
+
+| workers | simultaneous page loads | failed | slowest |
+|---|---|---|---|
+| 1 | 4 | 0 | 181 ms |
+| 1 | 10 | 0 | 482 ms |
+| 1 | 20 | 0 | 951 ms |
+| 4 | 4 | 0 | 166 ms |
+| 4 | 10 | 0 | 195 ms |
+| 4 | 20 | 0 | 675 ms |
+
+Nothing fails at any of these; page loads queue, and the queue is the whole
+effect. One worker renders about twenty pages a second in series, so it takes
+a genuinely simultaneous crowd to be noticed.
 
 ### Choosing a number
 
-Size for **requests in flight**, which is what workers were always for, rather
-than for tabs:
+Size for **page loads arriving at once**, not for tabs left open:
 
 ```
-workers  ≈  peak simultaneous page loads, and rarely more than a handful
+workers  ≈  how many people plausibly open a dashboard in the same second
 ```
 
-Two or four is a reasonable starting point for an office; the default of one
-is enough to try it and enough for a handful of people. Raise it if page loads
-queue behind each other at a busy moment — a page render is the expensive
-request, at 57 ms, and it is the one people wait on.
+The default of one is enough to try gdash and enough for a handful of people.
+Four covers an office arriving at nine o'clock. Each worker is a process, so
+there is no reason to go far past that until a measurement says so.
 
 ```
 GDASH_WORKERS=4
