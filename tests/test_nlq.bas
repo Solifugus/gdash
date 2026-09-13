@@ -16,15 +16,15 @@ program main(args)
     ' person decide in one glance.
     n = gdash_nlq.unit_notes("select count(*) from orders.orders where amount > 1000", scaled)
     s = gdash_test.eq(s, count(n), 1, "a bare number compared to a money column is noticed")
-    s = gdash_test.eq(s, n[0].literal, "1000", "the literal is quoted back")
-    s = gdash_test.contains_text(s, n[0].means, "$10.00", "restated in the column's own units")
-    s = gdash_test.contains_text(s, n[0].column, "orders.amount", "naming the column it belongs to")
+    s = gdash_test.eq(s, note_at(n, 0).literal, "1000", "the literal is quoted back")
+    s = gdash_test.contains_text(s, note_at(n, 0).means, "$10.00", "restated in the column's own units")
+    s = gdash_test.contains_text(s, note_at(n, 0).column, "orders.amount", "naming the column it belongs to")
 
     ' And the query that is actually right raises the same note, because it is
     ' the same shape. Saying "$1,000.00" is how a reviewer confirms it.
     ok_n = gdash_nlq.unit_notes("select count(*) from orders.orders where amount > 100000", scaled)
     s = gdash_test.eq(s, count(ok_n), 1, "a correct query is restated too, not waved through")
-    s = gdash_test.contains_text(s, ok_n[0].means, "1,000.00", "and reads as the number the asker had in mind")
+    s = gdash_test.contains_text(s, note_at(ok_n, 0).means, "1,000.00", "and reads as the number the asker had in mind")
 
     ' --- the spellings a generated query actually uses ----------------------
     forms = ["select 1 from t where amount > 1000",
@@ -45,7 +45,7 @@ program main(args)
     ' `between` never reaches a comparison operator, so it needs its own arm.
     bt = gdash_nlq.unit_notes("select 1 from t where amount between 1000 and 2000", scaled)
     s = gdash_test.eq(s, count(bt), 2, "both ends of a between are restated")
-    s = gdash_test.contains_text(s, bt[1].means, "$20.00", "including the upper one")
+    s = gdash_test.contains_text(s, note_at(bt, 1).means, "$20.00", "including the upper one")
 
     ' --- and what it must NOT say ------------------------------------------
     '
@@ -78,13 +78,13 @@ program main(args)
     yen["t.t.total"] = { dataset: "t", column: "total", scale: 0, currency: "JPY" }
     y = gdash_nlq.unit_notes("select 1 from t where total > 1000", yen)
     s = gdash_test.eq(s, count(y), 1, "a zero-decimal currency is still checked")
-    s = gdash_test.contains_text(s, y[0].means, "1,000", "and 1000 minor units is 1000 of them")
+    s = gdash_test.contains_text(s, note_at(y, 0).means, "1,000", "and 1000 minor units is 1000 of them")
 
     rate = {}
     rate["fx.fx.px"] = { dataset: "fx", column: "px", scale: 4, currency: "" }
     r = gdash_nlq.unit_notes("select 1 from fx.fx where px > 1", rate)
     s = gdash_test.eq(s, count(r), 1, "a four-decimal column is checked")
-    s = gdash_test.contains_text(s, r[0].means, "0.0001", "where 1 is a ten-thousandth, not one")
+    s = gdash_test.contains_text(s, note_at(r, 0).means, "0.0001", "where 1 is a ten-thousandth, not one")
 
     ' --- the catalog -------------------------------------------------------
     desc = { ok: true, message: "", datasets: {} }
@@ -94,12 +94,12 @@ program main(args)
     cat = gdash_nlq.catalog(desc)
     s = gdash_test.eq(s, count(cat.tables), 2, "every refreshed dataset is a table")
     s = gdash_test.eq(s, count(cat.columns), 3, "and every column of each is offered")
-    s = gdash_test.eq(s, cat.tables[0].schema, "orders", "a dataset is its own schema")
-    s = gdash_test.eq(s, cat.tables[0].table, "orders", "and its own table")
+    s = gdash_test.eq(s, note_at(cat.tables, 0).schema, "orders", "a dataset is its own schema")
+    s = gdash_test.eq(s, note_at(cat.tables, 0).table, "orders", "and its own table")
     ' Sorted, so a catalog does not depend on the order keys happen to come
     ' back in -- a grounding that changes because a record was re-saved would
     ' be very hard to believe.
-    s = gdash_test.eq(s, cat.tables[1].schema, "regions", "and the order is stable")
+    s = gdash_test.eq(s, note_at(cat.tables, 1).schema, "regions", "and the order is stable")
 
     ' --- scaled_columns reads the record for currency ----------------------
     rec = { datasets: {} }
@@ -120,7 +120,19 @@ program main(args)
     s = gdash_test.eq(s, sc2["orders.orders.amount"].currency, "", "no declared currency is not an error")
     n2 = gdash_nlq.unit_notes("select 1 from t where amount > 1000", sc2)
     s = gdash_test.eq(s, count(n2), 1, "and the column is still guarded")
-    s = gdash_test.contains_text(s, n2[0].means, "10.00", "restated as a plain decimal")
+    s = gdash_test.contains_text(s, note_at(n2, 0).means, "10.00", "restated as a plain decimal")
 
     exit(gdash_test.report(s))
 end program
+
+' Indexing a list that came back shorter than expected RAISES, which kills the
+' run at the first surprise and hides every assertion after it. That is exactly
+' backwards: a mutation that empties the list should produce a page of failures
+' naming what stopped working, not one stack trace. So every indexed read goes
+' through here and a missing note fails its own assertion quietly.
+function note_at(list, i)
+    if i < count(list) then
+        return list[i]
+    end if
+    return { column: "(no note)", literal: "(no note)", means: "(no note)", scale: -1, why: "(no note)" }
+end function

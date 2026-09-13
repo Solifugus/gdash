@@ -18,7 +18,21 @@ still a draft, by somebody who can read SQL.
 Three verifications, run before any design. **Two failed**, and the second is
 the reason this brief stops here.
 
-### S0-1 — `nlq` is not installed; gdash cannot load it
+### S0-1 — `nlq` was not installed — **RESOLVED**
+
+The maintainer re-ran `make install` in the gbasic repo. Both libraries now
+load from a clean directory at the repo's own sizes (`nlq.bas` 63 755,
+`discovery.bas` 104 247), and gdash's full suite is green on the newly
+installed platform — 31 suites, checked because the platform moved, which is
+what the change detector is for.
+
+S0-3 was re-measured against the **installed** library, with no local copy in
+the directory. It stands unchanged: 6 returned, 2 correct.
+
+The original finding follows, since the install step is a real one and the
+next person to arrive at a fresh machine will meet it.
+
+### S0-1 (as found) — `nlq` is not installed; gdash cannot load it
 
 ```
 $ gbasic -e 'load nlq'
@@ -127,10 +141,34 @@ back before gdash builds on top of it.
 Neither is large. Both are upstream of design, which is why this brief stops
 rather than working around them.
 
-## What is not blocked, and will be built first
+## Built so far
 
-- The **catalog and sampler**: gdash producing `{tables, columns}` plus
-  vocabulary samples from a staged dataset. Pure gdash, no `nlq` call.
-- The **money annotation**, generated from `_gdash_meta` rather than typed, so
-  it is ready for whatever channel carries it.
+- `gdash_store.describe_datasets` / `sample_column` — a **cross-dataset read
+  that attaches every dataset under its own name**, so a catalog names tables
+  one way (`<dataset>.<dataset>`) rather than `main.<primary>` for one and its
+  own name for the rest. It closes **G2-3** by construction: each `_gdash_meta`
+  is reached through its own schema, so no dataset can be read at another's
+  scale.
+- `gdash_nlq.catalog` / `scaled_columns` / `attach_for` — gdash's own account
+  of its data. No `discovery.scan`: gdash wrote these tables and recorded every
+  kind and scale at materialization, which is better than a scan can recover.
+- `gdash_nlq.unit_notes` — **the unit guard**, the part only gdash can write.
+  39 assertions, five mutations, all caught.
+
+### A note on `discovery`
+
+gdash does not load it and will not, so it is not in the namespace audit. Worth
+recording that if it ever does, two names collide: `scan` (with `gdash_sql`)
+and `explain` (with `gdash_auth_ldap`). Harmless under the platform's
+own-library-first resolution since `d08409f`, but it would need accepting with
+a reason rather than discovering by surprise.
+
+## Still to build
+
+- The model wiring — `plan` → call → `interpret` → run → `settle` — behind a
+  seam, the way `gdash_auth_ldap` keeps `ldap` behind `wire`.
+- The draft visual: generated SQL, assumptions, `data as of`, unit notes,
+  rendered as a real chart and promotable into the dashboard.
 - The **shadowing refusal** from S0-2.
+- The recall and refusal-rate numbers `nlq_for_gdash.md` asks for, which need
+  all of the above.
