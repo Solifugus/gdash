@@ -380,6 +380,117 @@ library gdash_store
     ' `attach` maps a sibling dataset's name to its file. Unqualified table
     ' names resolve across attached schemas (finding G2-2), so a visual query
     ' joining two datasets reads exactly like one over a single dataset.
+    ' --- reading across every dataset at once (GDASH-12) ---------------------
+    '
+    ' A visual query opens ONE dataset and attaches the others, so its tables
+    ' are `main.<primary>` and `<other>.<other>` -- two naming rules for the
+    ' same kind of thing. That is fine for a human writing SQL against a
+    ' dataset they chose, and wrong for a catalog handed to something that did
+    ' not choose: the schema a table lives under would depend on which visual
+    ' asked.
+    '
+    ' So this path opens an empty database and attaches EVERY dataset under its
+    ' own name. Every table is then `<dataset>.<dataset>`, uniformly, and every
+    ' qualified name a generated query can write is one that resolves. It also
+    ' closes G2-3 by construction: each `_gdash_meta` is reached through its own
+    ' schema, so no dataset can be read at another's scale.
+    function _connect_across(attach)
+        db = sqlite.connect(":memory:")
+        if error then
+            return unknown
+        end if
+        names = keys(attach)
+        i = 0
+        while i < count(names)
+            joined = _attach_one(db, names[i], attach[names[i]])
+            i += 1
+        end while
+        return db
+    end function
+
+    ' Every column of every dataset, with the kind and scale it was
+    ' materialized at. This is gdash's own account of its data -- not a
+    ' discovery pass over it -- because gdash wrote these tables and recorded
+    ' what it wrote.
+    function describe_datasets(attach)
+        on error goto next
+        db = _connect_across(attach)
+        if is_unknown(db) then
+            return { ok: false, datasets: {}, message: "cannot open the staged data" }
+        end if
+        out = {}
+        names = keys(attach)
+        i = 0
+        while i < count(names)
+            ds = names[i]
+            scales = {}
+            kinds = {}
+            rows = sqlite.query(db, "select column_name, kind, scale from " + _quote_ident(ds) + "._gdash_meta")
+            if not error then
+                j = 0
+                while j < count(rows)
+                    kinds[string(rows[j].column_name)] = string(rows[j].kind)
+                    scales[string(rows[j].column_name)] = number(rows[j].scale)
+                    j += 1
+                end while
+            end if
+            cols = []
+            ' The meta table is the authority on kind and scale; the table
+            ' itself is the authority on which columns are there. A dataset
+            ' refreshed by an older build could have one without the other.
+            ' The table name binds as a parameter rather than being pasted in.
+            ' It is a validated dataset name either way, and a quoting helper
+            ' that exists only for this one call is a quoting helper somebody
+            ' later reaches for somewhere it does not fit.
+            crows = sqlite.query(db, "select name from " + _quote_ident(ds) + ".pragma_table_info(?)", [ds])
+            if error then
+                sqlite.close(db)
+                return { ok: false, datasets: {}, message: "cannot read the columns of dataset " + ds }
+            end if
+            j = 0
+            while j < count(crows)
+                cn = string(crows[j].name)
+                k = "text"
+                sc = 0
+                if not is_unknown(kinds[cn]) then
+                    k = kinds[cn]
+                    sc = scales[cn]
+                end if
+                cols = concat(cols, [{ name: cn, kind: k, scale: sc }])
+                j += 1
+            end while
+            out[ds] = { columns: cols }
+            i += 1
+        end while
+        sqlite.close(db)
+        return { ok: true, datasets: out, message: "" }
+    end function
+
+    ' A handful of values a column actually holds. gdash owns the rows, so
+    ' sampling costs one query and needs nobody's permission -- which is the
+    ' difference between telling a model a column is text and telling it the
+    ' text is spelled `north`.
+    function sample_column(attach, ds, column, limit)
+        on error goto next
+        db = _connect_across(attach)
+        if is_unknown(db) then
+            return []
+        end if
+        rows = sqlite.query(db, "select distinct " + _quote_ident(column) + " as v from " + _quote_ident(ds) + "." + _quote_ident(ds) + " where " + _quote_ident(column) + " is not null limit " + string(limit))
+        if error then
+            sqlite.close(db)
+            return []
+        end if
+        out = []
+        i = 0
+        while i < count(rows)
+            out = concat(out, [string(rows[i].v)])
+            i += 1
+        end while
+        sqlite.close(db)
+        return out
+    end function
+
     function select_rows(path, sql, values, exact, attach)
         scanned = gdash_sql.scan(sql)
         args = gdash_sql.args_for(scanned, values)

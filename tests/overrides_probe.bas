@@ -55,6 +55,8 @@ program main(args)
     load gdash_auth_ldap from "../src/gdash_auth_ldap.bas"
     load gdash_authcfg from "../src/gdash_authcfg.bas"
     load gdash_source_fixture from "../src/gdash_source_fixture.bas"
+    load gdash_nlq from "../src/gdash_nlq.bas"
+    load nlq
 
     ' Nothing yet. When a name lands here it needs a sentence saying why the
     ' collision is harmless -- which in practice means: no library involved
