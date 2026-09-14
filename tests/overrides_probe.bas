@@ -57,6 +57,7 @@ program main(args)
     load gdash_source_fixture from "../src/gdash_source_fixture.bas"
     load gdash_nlq from "../src/gdash_nlq.bas"
     load gdash_shadow from "../src/gdash_shadow.bas"
+    load gdash_ask from "../src/gdash_ask.bas"
     load nlq
 
     ' Nothing yet. When a name lands here it needs a sentence saying why the

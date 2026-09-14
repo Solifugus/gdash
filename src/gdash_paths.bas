@@ -251,6 +251,14 @@ library gdash_paths
         return _join(p.config_dir, "connections.json")
     end function
 
+    ' Model profiles: an endpoint and a key, server-level, never in a record.
+    ' Separate from connections.json rather than a section inside it, so that a
+    ' dataset naming a source that does not exist cannot find a model profile
+    ' by the same name and try to query it.
+    function models_file(p)
+        return _join(p.config_dir, "models.json")
+    end function
+
     function audit_log(p)
         return _join(p.log_dir, "audit.log")
     end function

@@ -341,9 +341,46 @@ library gdash_store
         return 10
     end function
 
+    ' EVERY ATTACH IN GDASH IS READ-ONLY, and nothing is lost by it: a dataset
+    ' file is written by `materialize` through its own direct connection, and
+    ' made visible by a single rename. No query gdash runs -- a visual query, a
+    ' describe, a sample, or SQL a model wrote -- has any business writing
+    ' through an attachment.
+    '
+    ' It matters most for the last of those. `nlq.check_sql` refuses anything
+    ' that is not read-only and is the gate that should stop a generated
+    ' `delete`; this is what makes a gap in that gate harmless rather than
+    ' destructive. Measured: with the SQL check bypassed, a generated
+    ' `delete from orders.orders` is refused by SQLite itself.
+    '
+    ' `mode=ro` travels in a URI, so the three characters SQLite reads
+    ' specially inside one are percent-encoded. A path is otherwise passed
+    ' through unchanged, and there is NO FALLBACK to a writable attach: a file
+    ' gdash cannot open read-only is a file gdash reports, not one it opens
+    ' another way.
+    function _ro_uri(file)
+        out = "file:"
+        i = 0
+        n = len(file)
+        while i < n
+            ch = mid(file, i, 1)
+            if ch = "%" then
+                out = out + "%25"
+            else if ch = "#" then
+                out = out + "%23"
+            else if ch = "?" then
+                out = out + "%3f"
+            else
+                out = out + ch
+            end if
+            i += 1
+        end while
+        return out + "?mode=ro"
+    end function
+
     function _attach_one(db, alias, file)
         on error goto next
-        sqlite.exec(db, "attach database ? as " + _quote_ident(alias), [file])
+        sqlite.exec(db, "attach database ? as " + _quote_ident(alias), [_ro_uri(file)])
         if error then
             return false
         end if
@@ -489,6 +526,32 @@ library gdash_store
         end while
         sqlite.close(db)
         return out
+    end function
+
+    ' A generated query, run across every attached dataset. Separate from
+    ' select_rows because it takes NO PARAMETERS: this is the NLQ path, where
+    ' the SQL arrived as text from a model and was checked by `nlq.check_sql`
+    ' for being read-only and for naming only grounded objects. Binding values
+    ' into it would mean gdash had a value to bind, and it does not -- the
+    ' model wrote the literals, and the unit guard is what reads them back.
+    '
+    ' A row cap is applied by the caller's SQL or not at all; what this does
+    ' enforce is that a failure is a VALUE. A generated query that does not
+    ' compile is an ordinary outcome of asking a question, not an error
+    ' condition, and it has to reach a person as text they can read.
+    function select_across(attach, sql)
+        on error goto next
+        db = _connect_across(attach)
+        if is_unknown(db) then
+            return { ok: false, rows: [], message: "cannot open the staged data" }
+        end if
+        rows = sqlite.query(db, sql)
+        if error then
+            sqlite.close(db)
+            return { ok: false, rows: [], message: "the generated query did not run" }
+        end if
+        sqlite.close(db)
+        return { ok: true, rows: rows, message: "" }
     end function
 
     function select_rows(path, sql, values, exact, attach)
