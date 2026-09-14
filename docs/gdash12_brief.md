@@ -252,11 +252,39 @@ a reason rather than discovering by surprise.
   operator can verify an install end to end with no key, no network and nothing
   spent. It is also what makes the end-to-end assertions hermetic.
 
+- **The browser panel.** `GET/POST /d/{name}/ask` and
+  `POST /d/{name}/ask/promote`, editors of the draft. The suggested visual is
+  RENDERED — ordinary query, ordinary attach set, ordinary renderer — so the
+  preview is not a mock of what promotion would produce, it is what promotion
+  would produce. Measured end to end: the chart's axis reads $1,000.00 to
+  $4,000.00 rather than 100000 to 400000. The draft rides the session between
+  asking and promoting, so no SQL comes back from the browser and no second
+  model call is spent.
+
+- **The corpus**, `tests/run_nlq_corpus.sh`, and the numbers it gives:
+
+      answerable questions grounded:  15/15
+      unanswerable questions refused:  5/5
+
+  Hermetic, and in the suite, because `nlq.plan` does no I/O: how often gdash's
+  own catalog settles a reasonable question is measurable with no model. The
+  answer tier — whole pipeline, real model — is gated on `GDASH_NLQ_TEST=1`
+  and will never be in the suite: it costs money, needs the network, and gives
+  a distribution rather than a pass.
+
+  **It found a real gap in the first run.** `nlq.plan` refuses on AMBIGUITY and
+  does not refuse a question the catalog has nothing to do with — it returns
+  `ok` with a prompt naming no tables. All five unanswerable questions planned
+  `ok`, and every one would have been sent to a model, paid for, and then
+  refused by `check_sql` for naming a table nobody offered.
+  `nlq.check_answerable` is the library's own rule for this and is now wired in
+  before the model call.
+
+  It also found a gap in itself: the first version called `nlq.plan` directly
+  and so scored 20/20 with gdash's own check mutated away. It now runs through
+  `gdash_ask.ask` with a model double, which is the thing that can regress.
+
 ## Still to build
 
-- The draft rendered **in the browser** as a real chart, for someone who is not
-  at a terminal. The promoted visual renders through the ordinary path already;
-  what is missing is the preview and the panel to ask from.
-- The recall and refusal-rate numbers `nlq_for_gdash.md` asks for. These need a
-  real model and a question corpus, and are the one thing here that cannot be
-  measured hermetically.
+- The recall numbers against a **real** model. The runner is there and gated;
+  what it needs is a key and somebody's decision to spend it.

@@ -99,6 +99,22 @@ program main(args)
     s = gdash_test.eq(s, string(right.answer.value), "2", "the correct query returns the true answer")
     s = gdash_test.contains_text(s, note_at(right.notes, 0).means, "1,000.00", "and is restated as well, not waved through")
 
+    ' --- a question this dashboard cannot answer at all ---------------------
+    '
+    ' `nlq.plan` refuses on AMBIGUITY and does NOT refuse a question the
+    ' catalog has nothing to do with: it returns `ok` with a prompt naming no
+    ' tables. Found by tests/nlq_corpus.bas -- five questions about data this
+    ' dashboard has never heard of all planned `ok`, and every one would have
+    ' been sent to a model, paid for, and then refused by check_sql for naming
+    ' a table nobody offered. The model double makes that visible here: if the
+    ' check were missing, this would reach the wire and come back as SQL.
+    unanswerable = gdash_ask.ask(p, "sales", "draft", rec, "what is the share price?",
+                            model_double.saying("select 1 as price"), {})
+    s = gdash_test.ok(s, not unanswerable.ok, "a question about data that is not here is refused")
+    s = gdash_test.eq(s, unanswerable.stage, "ground", "before a model is called at all")
+    s = gdash_test.contains_text(s, unanswerable.message, "share", "naming the words nothing here matches")
+    s = gdash_test.eq(s, unanswerable.sql, "", "and no query was produced")
+
     ' --- what the model can do wrong ---------------------------------------
     del = gdash_ask.ask(p, "sales", "draft", rec, "remove the west orders",
                         model_double.saying("delete from orders.orders where region = 'west'"), {})
@@ -107,10 +123,15 @@ program main(args)
     s = gdash_test.ok(s, count(del.problems) > 0, "with a problem to show")
     s = gdash_test.eq(s, del.sql, "delete from orders.orders where region = 'west'", "and the query it refused")
 
-    stranger = gdash_ask.ask(p, "sales", "draft", rec, "how many payroll runs?",
+    ' The question grounds -- it is about orders -- and the model answers about
+    ' something else entirely. That is the case check_sql exists for, and it is
+    ' reachable only from a question that DID ground: "how many payroll runs?"
+    ' now stops one step earlier, at the catalog, which is better and is a
+    ' different assertion.
+    stranger = gdash_ask.ask(p, "sales", "draft", rec, "how many orders are there?",
                              model_double.saying("select count(*) from payroll.payroll"), {})
     s = gdash_test.ok(s, not stranger.ok, "a query naming a table that is not there is refused")
-    s = gdash_test.eq(s, stranger.stage, "sql", "also by the SQL check")
+    s = gdash_test.eq(s, stranger.stage, "sql", "by the SQL check, since the question itself was answerable")
 
     prose = gdash_ask.ask(p, "sales", "draft", rec, "how many orders?",
                           model_double.saying("I am afraid I cannot help with that."), {})

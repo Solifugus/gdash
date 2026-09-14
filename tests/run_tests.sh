@@ -97,6 +97,18 @@ if ! "$HERE/run_shadow.sh"; then
     failed=$((failed + 1))
 fi
 
+# The corpus numbers. Hermetic: `nlq.plan` does no I/O, so how often gdash's
+# own catalog settles a reasonable question -- and refuses an unreasonable one
+# -- is measurable with no model at all. It is a floor rather than a target;
+# the refusal floor is the regression that actually happened, when five
+# questions about data this dashboard has never heard of all planned `ok` and
+# would have been sent to a model and paid for.
+echo "--- nlq corpus ---"
+ran=$((ran + 1))
+if ! "$HERE/run_nlq_corpus.sh"; then
+    failed=$((failed + 1))
+fi
+
 # An end-to-end assertion whose needle also appears in the stylesheet or the
 # shim passes with the feature removed (G6-6). Eight did.
 echo "--- assertion audit ---"

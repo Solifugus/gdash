@@ -320,6 +320,29 @@ library gdash_ask
             return _stop("ground", q, "that could mean more than one thing", { candidates: plan.refused_because, as_of: stamps })
         end if
 
+        ' AND A PLAN CAN BE `ok` WITH NOTHING TO ANSWER FROM. `nlq.plan`
+        ' refuses on AMBIGUITY; it does not refuse a question the catalog has
+        ' nothing to do with, and returns a prompt naming no tables at all.
+        ' Found by tests/nlq_corpus.bas: five questions about data this
+        ' dashboard has never heard of -- share price, support tickets, the
+        ' chief executive -- all planned `ok`. Every one would have been sent
+        ' to a model, paid for, and then refused by check_sql for naming a
+        ' table nobody offered.
+        '
+        ' `nlq.check_answerable` is the library's own rule for this and raises
+        ' rather than returning, so it is caught here and turned into the same
+        ' kind of value as every other stop. The words that matched nothing are
+        ' what a person needs, so they are what the message says.
+        on error goto next
+        answerable = nlq.check_answerable(plan.grounding)
+        if error then
+            words = ""
+            if has(plan.grounding, "unresolved") and count(plan.grounding.unresolved) > 0 then
+                words = ": nothing here matches " + join(plan.grounding.unresolved, ", ")
+            end if
+            return _stop("ground", q, "this dashboard has no data that could answer that" + words, { as_of: stamps })
+        end if
+
         got = wire.complete(wire.ctx, plan.system, plan.user)
         if not got.ok then
             return _stop("model", q, got.reason, { key: plan.key, as_of: stamps })
