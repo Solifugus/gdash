@@ -127,6 +127,33 @@ first test anywhere that executes the page's own JavaScript.
 **Design §5's sentence names SSE as the carrier and is now wrong in its
 mechanism** — the correction belongs to the maintainer, not to a phase.
 
+## GDASH-12 — Natural-language questions, over a dashboard's own data
+
+**gBASIC shipped `stdlib/nlq.bas`**, which performs no I/O: it grounds a
+question, builds a prompt, checks what comes back, and settles an answer
+against rows somebody else fetched. gdash is its first consumer, and everything
+the library leaves out — the catalog, the vocabulary, the model call, running
+the SQL, and knowing that an integer is cents — is gdash's.
+
+A question produces a **draft visual**, not an answer: the generated SQL, what
+its numbers mean in the columns' own units, the `data as of` it read, and a
+real render of what promotion would produce. A person promotes it, and it is
+then versioned, diffed and audited like every other visual. A wrong query is
+caught while it is still a draft, by somebody who can read SQL.
+
+Step 0 measured why the unit note is the whole point: *"how many orders were
+over 1000 dollars?"* against a column holding cents produced valid SQL, zero
+reported problems, and an answer wrong by a factor of a hundred. gdash does not
+refuse it — someone may genuinely mean ten dollars — it says what the number
+means.
+
+Delivered with the shadowing refusal (a stray `.bas` in gdash's module
+directory would otherwise replace `crypto`), every ATTACH made read-only, and a
+question corpus scoring 15/15 grounded and 5/5 refused with no model at all.
+
+**The design document says nothing about asking questions in English.** Three
+decisions in the DONE note are the maintainer's to confirm or overrule.
+
 ## Unscheduled, deliberately
 
 Pass-through queries; dataset sharing; OIDC/SAML; web designer GUI;

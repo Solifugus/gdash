@@ -182,6 +182,79 @@ leaving it guarding against nothing.
 
 ---
 
+## 3. `plan` returns `ok` for a question the catalog cannot answer at all
+
+Found by building the corpus you asked for, which is the best possible outcome
+for a corpus.
+
+`nlq.plan` refuses on **ambiguity** — `g.ambiguous` non-empty, R1/R6 — and does
+not refuse on **unanswerability**. A question with nothing to ground against
+returns `ok: true` with a prompt naming no tables:
+
+```
+question:  what is the share price?
+ground:    tables [] , ambiguous 0 , unresolved ["share","price"]
+plan.ok:   true
+```
+
+Against a dashboard of `orders` and `regions`, five such questions — share
+price, support tickets, profit margin, employee count, the chief executive —
+all planned `ok`. A consumer that trusts `plan.ok` sends every one of them to a
+model, pays for it, and gets back either a refusal or invented SQL, which
+`check_sql` then refuses for `ungrounded_table`. It fails safe. It fails
+**expensively**, and it reports a SQL problem for something that was never
+about SQL.
+
+`nlq.check_answerable(g)` is your own rule for exactly this and catches all
+five. So this is not a missing capability — it is a **default**, and a question
+about which of the two is the right one:
+
+- Reading `plan.ok` as "there is a prompt" is defensible and consistent: `plan`
+  builds a prompt, and a prompt over an empty grounding is still a prompt.
+- But `ok` on a plan that cannot be answered is the shape most likely to be
+  believed. A consumer writing `if plan.ok then call_the_model()` is writing
+  the obvious thing, and the obvious thing spends money on a question the
+  catalog already knows is hopeless.
+
+Two options, in the order I would pick them:
+
+1. **`plan` refuses when `g.tables` is empty**, the way it refuses on
+   ambiguity, with `refused_because` carrying `unresolved`. That makes
+   `plan.ok` mean "worth asking a model", which is what every consumer wants
+   to know at that call site, and it costs nothing at any other.
+2. **Leave it and say so loudly** in `nlq_for_gdash.md` — one line in the
+   four-step walkthrough saying `check_answerable` belongs between `plan` and
+   the model call. Cheaper, and it relies on the next consumer reading it.
+
+gdash now calls `check_answerable` between `plan` and the wire regardless, and
+`tests/run_nlq_corpus.sh` scores refusals so the gap cannot reopen quietly.
+
+---
+
+## The numbers you asked for (item 1), as far as they go
+
+Twenty questions against a dashboard of `orders(region, month, amount)` and
+`regions(region, label, manager)`, through gdash's whole grounding path with no
+model:
+
+```
+answerable questions grounded:  15/15
+unanswerable questions refused:  5/5
+vocabulary columns offered:      5
+exemplar columns offered:        5
+```
+
+That is the grounding tier, and it is hermetic precisely because `nlq` performs
+no I/O — which is worth saying back to you as a design result: the no-I/O rule
+is what lets a consumer put recall in its ordinary test suite rather than in a
+nightly job with a budget.
+
+The **answer** tier — whole pipeline, real model, recall against known results
+— is built and gated on `GDASH_NLQ_TEST=1`. It has not been run: it needs a key
+and a decision to spend it, and both are the maintainer's.
+
+---
+
 ## Not a finding, but worth having on the record
 
 Everything else in step 0 behaved as `nlq_for_gdash.md` says it does.
@@ -191,5 +264,5 @@ Everything else in step 0 behaved as `nlq_for_gdash.md` says it does.
 and every refusal arrived as a value that could be printed. The four-step split
 is comfortable to build against.
 
-The recall and refusal-rate numbers you asked for (item 1) need the integration
-built, which needs the install. They will follow.
+The recall and refusal-rate numbers you asked for (item 1) are above, for the
+grounding tier. The answer tier is built and waiting on a key.

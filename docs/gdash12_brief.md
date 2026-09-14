@@ -288,3 +288,79 @@ a reason rather than discovering by surprise.
 
 - The recall numbers against a **real** model. The runner is there and gated;
   what it needs is a key and somebody's decision to spend it.
+
+---
+
+## DONE
+
+Delivered. `docs/gdash12_findings.md` has the detail.
+
+- **`gdash_shadow`** — gdash refuses to start when a stray `.bas` in its own
+  module directory would replace a library it loads by name. All four entry
+  points; the guarded list is checked against the source, so a library added
+  without being guarded is a test failure rather than a silent hole.
+- **`gdash_nlq`** — the catalog, the scaled columns, and the **unit guard**:
+  the part only gdash can write, because only gdash knows the scale.
+- **`gdash_ask`** — the pipeline behind a seam, `gdash ask` and `--promote`,
+  the browser panel, requalification, and the currency format on a promoted
+  money channel.
+- **Every attach read-only**, which makes a gap in `check_sql` harmless rather
+  than destructive.
+- **`gdash_store.describe_datasets` / `sample_column` / `select_across`** — the
+  cross-dataset read, which closes **G2-3** by construction.
+- **The corpus**: 15/15 answerable grounded, 5/5 unanswerable refused,
+  hermetic, in the suite.
+
+Suite: 35 suites, 0 failed — 1 072 in-process, 244 end-to-end, 21 multi-worker,
+17 shadow, 11 ceiling, 10 drain, 9 concurrency. Opt-in ODBC 12 and FHS 22
+re-run green. Postgres and LDAP untouched. Nothing pushed.
+
+### Deliberately not built
+
+- **An answer cache.** `nlq` supplies `plan.key` for one. Promotion stores the
+  SQL, not the question, so a dashboard never re-asks; the only caller who
+  would benefit is a person re-asking the same words in the drafting UI.
+- **A chat history, or a follow-up question.** Each question is grounded on its
+  own. "And by month?" would need conversation state, which is a different
+  design and a different set of failures.
+- **Choosing between ambiguous candidates in the UI.** The refusal carries them
+  and both the CLI and the page print them; neither offers a click to pick one.
+- **A model-side retry.** If the model writes SQL that does not compile, the
+  draft says so and a person asks again. Retrying automatically would spend
+  money on a guess about why it failed.
+- **Recall against a real model.** The runner is built and gated on
+  `GDASH_NLQ_TEST=1`; it needs a key and a decision to spend it.
+
+### Owed to the maintainer
+
+Carried forward from earlier phases and still unmade, since a design ruling is
+not this phase's to make silently:
+
+- §5's SSE sentence is wrong in mechanism and right in principle (GDASH-11).
+- Whether publish should carry the draft's data across (G11-11).
+- §8's `memberOf` sentence, `password_hash` naming, local-provider-first.
+- §4 money headroom and the render path; §2 content-hash.
+
+New, and the largest of them: **the design document says nothing about asking
+questions in English.** This phase built it against `nlq_contribution.md` §6
+and the GDASH-12 brief, both of which are this session's arguments rather than
+the maintainer's rulings. Three things in particular are decisions rather than
+implementations, and each is defensible another way:
+
+1. **A question edits the draft, so the draft's edit groups govern it.** The
+   alternative is a separate permission — asking costs money, and "may edit
+   this dashboard" is not obviously the same right as "may spend tokens".
+2. **The draft rides the session between asking and promoting.** The
+   alternatives were accepting SQL back from the browser, or paying for a
+   second model call.
+3. **Promotion places the visual on the first tab.** A visual in `visuals` that
+   no tab names renders nowhere, so doing nothing would be a promotion that
+   appeared to work — but the first tab is a guess.
+
+### Cross-repo, open
+
+- `gdash8_platform_report_tls.md` — TLS pass-through is ignored by `serve`;
+  gdash refuses to start rather than serve cleartext.
+- `gdash12_platform_report_nlq.md` — three findings now: no channel for a
+  column's units (§1), the shadowing rule (§2, corrected), and `plan` returning
+  `ok` for an unanswerable question (§3). Plus the grounding-tier numbers.
