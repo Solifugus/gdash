@@ -218,11 +218,45 @@ and `explain` (with `gdash_auth_ldap`). Harmless under the platform's
 own-library-first resolution since `d08409f`, but it would need accepting with
 a reason rather than discovering by surprise.
 
+- **The model wiring**, behind a seam (`gdash_ask`):
+
+      wire = { ctx, complete: fn(ctx, system, user) -> { ok, text, reason } }
+
+  Live is one wrapper over stdlib `llm`; `tests/model_double.bas` is the other.
+  Every exit is a value with a `stage` — data, ground, model, sql, run,
+  answered — so a person is told where it stopped, and a test can assert where
+  rather than only that.
+
+- **Every attach in gdash is read-only** (`file:...?mode=ro`). Nothing is lost:
+  dataset files are written by `materialize` through their own connection and
+  made visible by a rename. It matters most for SQL a model wrote —
+  `nlq.check_sql` is the gate that stops a generated `delete`, and this is what
+  makes a gap in that gate harmless. Asserted by going around the check.
+
+- **`gdash ask`**, and `--promote`. A question prints the query, the unit
+  notes, the `data as of` and the rows; promotion writes it into the draft
+  record as a visual, on the first tab, validated before it is written.
+
+- **Requalification**, which is where the two tiers disagree: the NLQ catalog
+  names a table `orders.orders`, a visual query names it `orders`. A promoted
+  query is rewritten across that line.
+
+- **Money, one step later than step 0.** An aggregate of minor units is still
+  minor units, so a promoted `sum(amount) as total` would render 215100 for
+  $2,151.00 — the same failure, in the chart instead of the answer. Promotion
+  sets `format: "currency"` for an aggregate directly over a money column, and
+  for nothing else: `count(amount)` is not money, and only the aggregate's name
+  separates it from `sum(amount)`.
+
+- **`provider: "offline"`** — the platform's own fixture transport, so an
+  operator can verify an install end to end with no key, no network and nothing
+  spent. It is also what makes the end-to-end assertions hermetic.
+
 ## Still to build
 
-- The model wiring — `plan` → call → `interpret` → run → `settle` — behind a
-  seam, the way `gdash_auth_ldap` keeps `ldap` behind `wire`.
-- The draft visual: generated SQL, assumptions, `data as of`, unit notes,
-  rendered as a real chart and promotable into the dashboard.
-- The recall and refusal-rate numbers `nlq_for_gdash.md` asks for, which need
-  all of the above.
+- The draft rendered **in the browser** as a real chart, for someone who is not
+  at a terminal. The promoted visual renders through the ordinary path already;
+  what is missing is the preview and the panel to ask from.
+- The recall and refusal-rate numbers `nlq_for_gdash.md` asks for. These need a
+  real model and a question corpus, and are the one thing here that cannot be
+  measured hermetically.

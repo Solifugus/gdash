@@ -59,7 +59,9 @@ so — the pages will simply show old "data as of" timestamps.
 
 `/etc/gdash/users.json`, `/etc/gdash/auth.json` and `/etc/gdash/secret` are
 mode 0600 and contain password hashes, a directory service account and the CSRF
-secret. Everything else in `/etc/gdash` is ordinary configuration.
+secret. `/etc/gdash/connections.json` and `/etc/gdash/models.json` hold source
+and model credentials and should be treated the same way. Everything else in
+`/etc/gdash` is ordinary configuration.
 
 ## 4. Backup and restore
 
@@ -180,6 +182,70 @@ that is the place to look.
 | `GDASH_PORT` | 8780 | |
 | `GDASH_ADDRESS` | all interfaces | bind to one interface |
 | `GDASH_GBASIC` | `gbasic` on PATH | the interpreter |
+
+### Asking questions in English
+
+`gdash ask <dashboard> "<question>"` needs a model, configured in
+`/etc/gdash/models.json`. It is separate from `connections.json` rather than a
+section inside it, so a dataset naming a source that does not exist cannot find
+a model profile by the same name and try to query it.
+
+```json
+{ "default": "house",
+  "house": { "provider": "anthropic",
+             "model":    "claude-opus-4-1",
+             "key_env":  "GDASH_MODEL_KEY",
+             "max_tokens": 1024,
+             "timeout":  60 } }
+```
+
+| key | meaning |
+|---|---|
+| `provider` | `anthropic` (default), `openai`, `local`, or `offline` |
+| `model` | the model name, as the provider spells it |
+| `key` | the API key, in this 0600 file |
+| `key_env` | **or** the name of an environment variable holding it |
+| `base_url` | required for `local`; where the server is |
+| `offline_dir` | required for `offline`; see below |
+
+A key may be written in the file or named with `key_env`, which is what a
+systemd unit with an `EnvironmentFile` wants. **Neither ever reaches argv, a
+dashboard record, the audit log or a rendered page** — a key is read in one
+function and never returned.
+
+**`provider: "offline"` checks an install without a model.** It uses the
+platform's fixture transport: the reply is whatever
+`<offline_dir>/anthropic_response.json` contains, so the whole path — catalog,
+prompt, SQL check, unit notes, requalification, promotion — runs with no key,
+no network and nothing spent. It is what gdash's own suite uses.
+
+What comes back is a **draft**, not an answer:
+
+```
+$ gdash ask sales "how many orders were over 1000 dollars?"
+question: how many orders were over 1000 dollars?
+
+select count(*) as n from orders.orders where amount > 1000
+
+  orders: data as of 2026-09-14 09:12
+  regions: data as of 2026-09-14 09:12
+
+  check the numbers in that query:
+    orders.amount 1000 means $10.00
+
+  n: 6
+```
+
+That query is valid, every name in it is real, and the number is wrong by a
+factor of a hundred: gdash stages money as integer minor units, so the model
+compared cents to a number of dollars. **gdash does not refuse it** — someone
+may genuinely mean ten dollars — it says what the number means and leaves the
+judgement to a person. Read the note before you trust the figure.
+
+`--promote <name>` writes the query into the draft record as a visual, on the
+first tab. It edits the draft only; a published dashboard is unchanged until
+you `gdash publish`. `--model <profile>` picks a profile other than the
+default.
 
 ### TLS
 
