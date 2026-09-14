@@ -43,6 +43,7 @@ program main(args)
     load gdash_source_odbc from "gdash_source_odbc.bas"
     load gdash_sched from "gdash_sched.bas"
     load gdash_format from "gdash_format.bas"
+    load gdash_ask from "gdash_ask.bas"
 
     ' A bare-name `load` searches THIS directory, recursively, before the
     ' stdlib, so a stray crypto.bas here would be the password hasher. Loads
@@ -56,6 +57,8 @@ program main(args)
     verb = ""
     rest = []
     force_draft = false
+    promote_as = ""
+    model_named = ""
     i = 0
     while i < count(args)
         a = args[i]
@@ -63,6 +66,16 @@ program main(args)
             force_draft = true
             i += 1
         else if a = "--root" then
+            i += 2
+        else if a = "--promote" then
+            if i + 1 < count(args) then
+                promote_as = args[i + 1]
+            end if
+            i += 2
+        else if a = "--model" then
+            if i + 1 < count(args) then
+                model_named = args[i + 1]
+            end if
             i += 2
         else if a = "--help" or a = "-h" or a = "help" then
             ' Not a verb. Without this, `--help` fell through to the verb slot
@@ -364,6 +377,8 @@ program main(args)
         print to error "    validate  <dashboard>                 check a record without running it"
         print to error "    refresh   <dashboard> [dataset] [--draft]   pull data now"
         print to error "    schedule                              one refresh pass over every published dashboard"
+        print to error "    ask       <dashboard> \"<question>\"    ask the staged data a question in English"
+        print to error "                [--promote <visual>] [--model <profile>]"
         print to error ""
         print to error "  versions"
         print to error "    publish   <dashboard>                 make the draft the version people see"
@@ -470,9 +485,9 @@ program main(args)
     ' below takes a dashboard, so an unrecognised one used to be answered with
     ' "which dashboard?" -- which asks the reader for the wrong thing and does
     ' not mention that the word they typed is not a command.
-    if not contains(["validate", "refresh", "publish", "rollback", "snapshots", "diff"], verb) then
+    if not contains(["validate", "refresh", "ask", "publish", "rollback", "snapshots", "diff"], verb) then
         print to error "unknown command: " + verb
-        print to error "known commands: list validate refresh schedule publish snapshots rollback diff user source auth"
+        print to error "known commands: list validate refresh ask schedule publish snapshots rollback diff user source auth"
         print to error "run gdash --help for what each one takes"
         exit(2)
     end if
@@ -696,10 +711,146 @@ program main(args)
         exit(0)
     end if
 
+    ' --- asking the data a question ----------------------------------------
+    '
+    ' WHAT COMES BACK IS A DRAFT, NOT AN ANSWER. The generated SQL, what the
+    ' numbers in it mean in the columns\' own units, when the data was last
+    ' refreshed, and the rows -- for a person who can read SQL to look at
+    ' before any of it becomes a dashboard. `--promote` is the second step, and
+    ' it is deliberately a separate one.
+    '
+    ' It reads the DRAFT record, because promotion edits the draft record: a
+    ' published dashboard is unchanged until somebody publishes again.
+    if verb = "ask" then
+        if not loaded.ok then
+            j = 0
+            while j < count(loaded.errors)
+                print to error "error: " + loaded.errors[j]
+                j += 1
+            end while
+            exit(1)
+        end if
+        ' Everything after the dashboard name is the question, joined back
+        ' together -- a shell that split it on spaces has not changed what was
+        ' asked, and requiring quotes to be right is a bad first experience.
+        qwords = []
+        j = 1
+        while j < count(rest)
+            qwords = concat(qwords, [rest[j]])
+            j += 1
+        end while
+        question = join(qwords, " ")
+        if trim(question) = "" then
+            print to error "usage: gdash ask " + name + " \"<question>\" [--promote <visual>]"
+            exit(2)
+        end if
+
+        prof = gdash_ask.model_profile(p, model_named)
+        if not prof.ok then
+            print to error prof.message
+            exit(1)
+        end if
+
+        draft = gdash_ask.ask(p, name, "draft", loaded.record, question, gdash_ask.live_model(prof.profile), {})
+
+        if not draft.ok then
+            print to error "no answer: " + draft.message
+            if count(draft.candidates) > 0 then
+                print to error "  it could mean:"
+                j = 0
+                while j < count(draft.candidates)
+                    print to error "    " + string(draft.candidates[j])
+                    j += 1
+                end while
+            end if
+            if draft.sql != "" then
+                print to error "  the query it wrote:"
+                print to error "    " + draft.sql
+            end if
+            j = 0
+            while j < count(draft.problems)
+                print to error "    " + string(draft.problems[j])
+                j += 1
+            end while
+            exit(1)
+        end if
+
+        print("question: " + draft.question)
+        print("")
+        print(draft.sql)
+        print("")
+        j = 0
+        while j < count(draft.as_of)
+            print("  " + draft.as_of[j].dataset + ": data as of " + draft.as_of[j].text)
+            j += 1
+        end while
+        ' THE UNIT NOTES ARE THE POINT. A number in a money column is a number
+        ' of cents, and a question about dollars that produced a plausible
+        ' answer is the failure this whole feature was built around.
+        if count(draft.notes) > 0 then
+            print("")
+            print("  check the numbers in that query:")
+            j = 0
+            while j < count(draft.notes)
+                n = draft.notes[j]
+                print("    " + n.column + " " + n.literal + " means " + n.means)
+                j += 1
+            end while
+        end if
+        print("")
+        if count(draft.rows) = 0 then
+            print("  no rows")
+        else
+            ' `nlq.settle` gives THE answer -- the first column of the first
+            ' row -- which is the right shape for "how many" and the wrong one
+            ' for "by region". So a single-row single-column result prints as a
+            ' figure and everything else prints as rows: a person promoting
+            ' this to a chart needs to see the shape, not a corner of it.
+            cols = keys(draft.rows[0])
+            if count(draft.rows) = 1 and count(cols) = 1 then
+                print("  " + string(draft.answer.column) + ": " + string(draft.answer.value))
+            else
+                print("  " + join(cols, " | "))
+                j = 0
+                while j < count(draft.rows) and j < 20
+                    cells = []
+                    k = 0
+                    while k < count(cols)
+                        cells = concat(cells, [string(draft.rows[j][cols[k]])])
+                        k += 1
+                    end while
+                    print("  " + join(cells, " | "))
+                    j += 1
+                end while
+                if count(draft.rows) > 20 then
+                    print("  ... " + string(count(draft.rows) - 20) + " more row(s)")
+                end if
+            end if
+        end if
+
+        if trim(promote_as) = "" then
+            print("")
+            print("promote it with: gdash ask " + name + " \"" + draft.question + "\" --promote <visual-name>")
+            exit(0)
+        end if
+
+        vis = gdash_ask.draft_visual(draft, loaded.record, draft.scaled)
+        done = gdash_ask.promote(p, name, promote_as, vis)
+        if not done.ok then
+            print to error done.message
+            exit(1)
+        end if
+        print("")
+        print(done.message + " on dashboard " + name + ", as a " + string(vis.encoding["mark"]) + " over dataset " + vis.dataset)
+        print("  gdash validate " + name + "   to check it")
+        print("  gdash publish  " + name + "   when people should see it")
+        exit(0)
+    end if
+
     ' Naming the alternatives, because a bare refusal makes the reader go
     ' looking for a manual that does not exist yet.
     print to error "unknown command: " + verb
-    print to error "known commands: list validate refresh schedule publish snapshots rollback diff user source auth"
+    print to error "known commands: list validate refresh ask schedule publish snapshots rollback diff user source auth"
     print to error "run gdash --help for what each one takes"
     exit(2)
 end program

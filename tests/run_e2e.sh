@@ -68,6 +68,71 @@ has "$out" "validates" "validate reports ok"
 out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh sales 2>&1)"; ok "refresh exits 0" "$?" "0"
 has "$out" "version 1" "refresh bumps the version"
 
+echo "--- CLI: asking the data a question, and promoting the answer ---"
+#
+# The model is the seam, and here it is the PLATFORM'S OWN fixture transport:
+# `llm.offline` reads <dir>/<format>_response.json, so a profile with
+# provider "offline" exercises the entire path -- catalog, prompt, SQL check,
+# unit notes, requalification, promotion -- with no key, no network and no
+# token spent. It is the same thing an operator runs to check an install.
+mkdir -p "$SCRATCH/model" "$SCRATCH/model_money"
+cat > "$SCRATCH/model/anthropic_response.json" <<'JSON'
+{"id":"msg_fixture","type":"message","role":"assistant","model":"fixture",
+ "content":[{"type":"text","text":"select region, sum(amount) as total from orders.orders group by region"}],
+ "stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}
+JSON
+# The second fixture is THE FAILURE THIS PHASE EXISTS FOR, as a model would
+# actually produce it: the question is about dollars, the column holds cents,
+# the SQL is valid and every name is grounded, and the number is wrong by a
+# hundred. Nothing can refuse it -- someone may mean ten dollars -- so the
+# whole of the defence is that the draft says what 1000 means.
+cat > "$SCRATCH/model_money/anthropic_response.json" <<'JSON'
+{"id":"msg_fixture","type":"message","role":"assistant","model":"fixture",
+ "content":[{"type":"text","text":"select count(*) as n from orders.orders where amount > 1000"}],
+ "stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}
+JSON
+cat > "$ROOT/etc/models.json" <<JSON
+{ "default": "fixture",
+  "fixture": { "provider": "offline", "model": "fixture-model", "offline_dir": "$SCRATCH/model" },
+  "cents":   { "provider": "offline", "model": "fixture-model", "offline_dir": "$SCRATCH/model_money" } }
+JSON
+
+ask_out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" ask sales "total by region" 2>&1)"; ok "ask exits 0" "$?" "0"
+has "$ask_out" "select region, sum(amount) as total" "the draft shows the query that was generated"
+has "$ask_out" "data as of" "and when the data it read was refreshed"
+has "$ask_out" "--promote" "and how to promote it, since that is the next thing anyone wants"
+
+# Nothing is written until somebody promotes it.
+hasnt "$(cat "$ROOT/lib/dashboards/sales/draft.json")" "total_by_region" "asking writes nothing into the record"
+
+money_out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" --model cents ask sales "how many orders were over 1000 dollars?" 2>&1)"
+ok "the cents question exits 0, because the query is valid" "$?" "0"
+has "$money_out" "amount 1000 means" "the draft restates the literal in the column's own units"
+has "$money_out" "\$10.00" "which is ten dollars, not a thousand"
+
+promote_out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" ask sales "total by region" --promote total_by_region 2>&1)"; ok "promote exits 0" "$?" "0"
+rec_after="$(cat "$ROOT/lib/dashboards/sales/draft.json")"
+# REQUALIFIED: the NLQ catalog names the table orders.orders, a visual query
+# names it orders, and a promoted visual that kept the first spelling would not
+# resolve at all. The record is written by `encode`, which emits compact JSON.
+has "$rec_after" '"sql":"select region, sum(amount) as total from orders group by region"' "the promoted query is requalified for the visual tier"
+has "$rec_after" '"format":"currency"' "an aggregate over a money column is promoted as currency"
+has "$rec_after" '"visual":"total_by_region"' "and it is placed on a tab, where it will be seen"
+out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" validate sales 2>&1)"; ok "the record still validates" "$?" "0"
+
+again="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" ask sales "total by region" --promote total_by_region 2>&1)"; ok "promoting over an existing visual exits 1" "$?" "1"
+has "$again" "already has" "and says which name is taken"
+
+# The ordinary configuration state, which must read as configuration rather
+# than as a failure.
+mv "$ROOT/etc/models.json" "$SCRATCH/models.json.away"
+noask="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" ask sales "total by region" 2>&1)"; ok "no model configured exits 1" "$?" "1"
+has "$noask" "models.json" "and names the file to write"
+mv "$SCRATCH/models.json.away" "$ROOT/etc/models.json"
+
+noq="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" ask sales 2>&1)"; ok "ask with no question exits 2" "$?" "2"
+has "$noq" "usage" "with a usage line"
+
 echo "--- the CLI says what it can do ---"
 # Asked for help, gdash used to answer "which dashboard?" -- it treated
 # --help as a verb, then demanded an argument for it. And the usage it did

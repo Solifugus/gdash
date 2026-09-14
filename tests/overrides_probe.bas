@@ -58,6 +58,7 @@ program main(args)
     load gdash_nlq from "../src/gdash_nlq.bas"
     load gdash_shadow from "../src/gdash_shadow.bas"
     load gdash_ask from "../src/gdash_ask.bas"
+    load model_double from "model_double.bas"
     load nlq
 
     ' Nothing yet. When a name lands here it needs a sentence saying why the

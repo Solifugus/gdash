@@ -14,6 +14,7 @@ program main(args)
     load gdash_paths from "../src/gdash_paths.bas"
     load gdash_store from "../src/gdash_store.bas"
     load gdash_ask from "../src/gdash_ask.bas"
+    load gdash_record from "../src/gdash_record.bas"
 
     s = gdash_test.suite("ask")
     root = args[0]
@@ -168,8 +169,174 @@ program main(args)
     s = gdash_test.ok(s, not contains(string(good), "sk-fake-not-a-key"), "no key reaches the draft")
     s = gdash_test.ok(s, not contains(string(money.notes), "sk-fake-not-a-key"), "nor the unit notes")
 
+    ' --- requalifying, which is where the two tiers disagree ---------------
+    '
+    ' The NLQ catalog names a table `orders.orders`, because every dataset is
+    ' attached under its own name and that is what makes each `_gdash_meta`
+    ' readable at its own scale. A VISUAL query opens its dataset directly and
+    ' attaches only the siblings, so the same table is plain `orders` and
+    ' `orders.orders` does not resolve at all. A promoted query has to cross
+    ' that line.
+    ds = ["orders", "regions"]
+    s = gdash_test.eq(s, gdash_ask.requalify("select count(*) as n from orders.orders", ds),
+                      "select count(*) as n from orders", "the schema-qualified table becomes the table")
+    s = gdash_test.eq(s, gdash_ask.requalify("select 1 from orders.orders where orders.orders.amount > 1000", ds),
+                      "select 1 from orders where orders.amount > 1000", "and a three-part column becomes a two-part one")
+    s = gdash_test.eq(s, gdash_ask.requalify("select * from orders.orders o join regions.regions r on o.region = r.region", ds),
+                      "select * from orders o join regions r on o.region = r.region", "every dataset, not just the first")
+    s = gdash_test.eq(s, gdash_ask.requalify("select * from myorders.orders", ds),
+                      "select * from myorders.orders", "a name that merely ends in a dataset name is left alone")
+    s = gdash_test.eq(s, gdash_ask.requalify("select 1 where x = 'orders.orders'", ds),
+                      "select 1 where x = 'orders.orders'", "and one inside a string literal is not SQL")
+    s = gdash_test.eq(s, gdash_ask.requalify("select ORDERS.ORDERS.amount from ORDERS.ORDERS", ds),
+                      "select ORDERS.amount from ORDERS", "SQL identifiers are case-insensitive and models shout")
+    s = gdash_test.eq(s, gdash_ask.requalify("select orders.amount from orders", ds),
+                      "select orders.amount from orders", "an already-qualified column is untouched")
+
+    ' --- the encoding a draft suggests -------------------------------------
+    s = gdash_test.eq(s, gdash_ask.suggest_encoding([{ n: 3 }]).mark, "value", "one row one column is a figure")
+    s = gdash_test.eq(s, gdash_ask.suggest_encoding([{ region: "west", total: 3 }]).mark, "bar", "a label and a number is a bar")
+    s = gdash_test.eq(s, gdash_ask.suggest_encoding([{ region: "west", total: 3 }]).x, "region", "with the label on x")
+    s = gdash_test.eq(s, gdash_ask.suggest_encoding([{ a: 1, b: 2, c: 3 }]).mark, "table", "anything else is a table")
+    s = gdash_test.eq(s, gdash_ask.suggest_encoding([]).mark, "table", "and no rows is a table, not a crash")
+
+    ' --- the visual a draft would become -----------------------------------
+    grouped = gdash_ask.ask(p, "sales", "draft", rec, "total by region",
+                            model_double.saying("select region, sum(amount) as total from orders.orders group by region"), {})
+    s = gdash_test.ok(s, grouped.ok, "a grouped question answers")
+    vis = gdash_ask.draft_visual(grouped, rec, grouped.scaled)
+    s = gdash_test.eq(s, vis.dataset, "orders", "the visual opens the dataset the query names")
+    s = gdash_test.eq(s, vis.sql, "select region, sum(amount) as total from orders group by region", "with the query requalified")
+    s = gdash_test.eq(s, vis.encoding.mark, "bar", "and an encoding that suits the shape")
+
+    ' A query touching only the SECOND dataset must open the second. Without
+    ' this case, "always take the first dataset" passes every assertion above,
+    ' because `orders` happens to sort first -- which is exactly what the
+    ' mutation run found.
+    ' The question has to GROUND the second dataset, not merely be about it:
+    ' "who manages the west?" grounds `orders` alone, because `west` is one of
+    ' its own values, and check_sql then correctly refuses a query naming a
+    ' table nobody offered. `manager` is a column only regions has.
+    who = gdash_ask.ask(p, "sales", "draft", rec, "list every manager",
+                        model_double.saying("select manager from regions.regions where region = 'west'"), {})
+    s = gdash_test.ok(s, who.ok, "a question about the other dataset answers")
+    vis2 = gdash_ask.draft_visual(who, rec, who.scaled)
+    s = gdash_test.eq(s, vis2.dataset, "regions", "and its visual opens THAT dataset, not the first one")
+    s = gdash_test.eq(s, vis2.sql, "select manager from regions where region = 'west'", "requalified the same way")
+
+    ' --- money, one step later than step 0 ---------------------------------
+    '
+    ' A money column holds minor units, and an aggregate of minor units is
+    ' still minor units. A promoted `sum(amount) as total` renders 215100 where
+    ' a person expects $2,151.00 -- the same failure as step 0, arriving in the
+    ' chart instead of the answer. gdash can render it correctly, but only if
+    ' the encoding says the channel is currency.
+    sc = grouped.scaled
+    s = gdash_test.ok(s, gdash_ask.is_money_channel("select region, sum(amount) as total from orders group by region", sc, "total"), "an aggregate over a money column carries money")
+    s = gdash_test.ok(s, gdash_ask.is_money_channel("select region, avg(orders.amount) as total from orders", sc, "total"), "whatever the aggregate, and however the column is qualified")
+    s = gdash_test.ok(s, gdash_ask.is_money_channel("select amount from orders", sc, "amount"), "and so does the column itself, unaliased")
+
+    ' NOT marking is the safe direction, and these are the cases that must not
+    ' be marked. A count rendered as currency would show 3 as $0.03 -- a wrong
+    ' answer produced by the machinery meant to prevent wrong answers.
+    s = gdash_test.ok(s, not gdash_ask.is_money_channel("select region, count(*) as n from orders where amount > 100000 group by region", sc, "n"), "a count in a query full of money is not money")
+    s = gdash_test.ok(s, not gdash_ask.is_money_channel("select region, amount / 100 as dollars from orders", sc, "dollars"), "an expression that already converted is left alone")
+    s = gdash_test.ok(s, not gdash_ask.is_money_channel("select region, sum(amount) as total from orders", sc, "region"), "and a label channel is never money")
+    ' THE SHARP ONE: `count(amount)` counts rows, it does not add money. Only
+    ' the aggregate NAME separates it from `sum(amount)`, so without that check
+    ' a count of a money column renders as a currency and every other case here
+    ' still passes.
+    s = gdash_test.ok(s, not gdash_ask.is_money_channel("select region, count(amount) as n from orders group by region", sc, "n"), "counting a money column counts rows, not money")
+    s = gdash_test.ok(s, not gdash_ask.is_money_channel("select region, length(amount) as n from orders", sc, "n"), "and a function that is not an aggregate says nothing about units")
+
+    s = gdash_test.eq(s, string(vis.encoding["format"]), "currency", "so the promoted visual formats its money channel")
+    s = gdash_test.eq(s, string(vis.encoding["currency"]), "USD", "in the currency the record declares")
+
+    counted = gdash_ask.ask(p, "sales", "draft", rec, "how many orders per region?",
+                            model_double.saying("select region, count(*) as n from orders.orders group by region"), {})
+    cvis = gdash_ask.draft_visual(counted, rec, counted.scaled)
+    s = gdash_test.ok(s, is_unknown(cvis.encoding["format"]), "a count is promoted with no currency format at all")
+
+    ' --- promoting it into the record --------------------------------------
+    made = gdash_paths.ensure_dir(gdash_paths.dashboard_dir(p, "sales"))
+    rf {file} = gdash_paths.record_file(p, "sales")
+    write(rf, encode({ format: 1, name: "sales",
+                       datasets: { orders: { profile: "fake", sql: "select 1" },
+                                   regions: { profile: "fake", sql: "select 1" } },
+                       params: {}, visuals: {}, tabs: [{ name: "Sales", layout: { vert: [] } }] }))
+
+    done = gdash_ask.promote(p, "sales", "total_by_region", vis)
+    s = gdash_test.ok(s, done.ok, "the draft promotes: " + done.message)
+
+    back = gdash_record.load_file(gdash_paths.record_file(p, "sales"))
+    s = gdash_test.ok(s, back.ok, "and the record still validates: " + join(back.errors, "; "))
+    s = gdash_test.eq(s, visual_sql(back.record, "total_by_region"), vis.sql, "the visual is in the record")
+    ' A visual in `visuals` that no tab names renders nowhere, which would be a
+    ' promotion that appeared to work.
+    s = gdash_test.eq(s, first_leaf(back.record), "total_by_region", "and on the first tab, where it will be seen")
+
+    again = gdash_ask.promote(p, "sales", "total_by_region", vis)
+    s = gdash_test.ok(s, not again.ok, "promoting over an existing visual is refused")
+    s = gdash_test.contains_text(s, again.message, "already has", "by name")
+
+    unnamed = gdash_ask.promote(p, "sales", "   ", vis)
+    s = gdash_test.ok(s, not unnamed.ok, "a promoted visual needs a name")
+
+    ' A visual gdash would refuse to load must not reach the file: the record
+    ' that stops rendering is the whole dashboard, and the draft that caused it
+    ' would be gone by then.
+    bad = gdash_ask.promote(p, "sales", "broken", { dataset: "nosuch", sql: "select 1", encoding: { mark: "table" } })
+    s = gdash_test.ok(s, not bad.ok, "a visual that would not validate is refused")
+    s = gdash_test.contains_text(s, bad.message, "validate", "saying so")
+    after = gdash_record.load_file(gdash_paths.record_file(p, "sales"))
+    s = gdash_test.ok(s, after.ok, "and the record on disk is untouched")
+    s = gdash_test.ok(s, is_unknown(after.record["visuals"]["broken"]), "the refused visual was never written")
+
+    absent = gdash_ask.promote(p, "nosuchdashboard", "v", vis)
+    s = gdash_test.ok(s, not absent.ok, "promoting into a dashboard that is not there is refused")
+
     exit(gdash_test.report(s))
 end program
+
+' A promoted visual's SQL, or a legible absence. Indexing it inline RAISED
+' when a mutation stopped the write -- `visuals` is then an empty record, and
+' the second index lands on `unknown`.
+function visual_sql(record, id)
+    on error goto next
+    vis = record["visuals"]
+    if is_unknown(vis) or type(vis) != "record" then
+        return "(no visuals)"
+    end if
+    one = vis[id]
+    if is_unknown(one) or type(one) != "record" then
+        return "(not promoted)"
+    end if
+    got = string(one["sql"])
+    if error then
+        return "(no sql)"
+    end if
+    return got
+end function
+
+' The promoted visual's place on the first tab, or a legible absence. Reading
+' it inline RAISED when a mutation removed the placement, which killed the run
+' and hid every assertion after it -- the same failure the nlq suite had.
+function first_leaf(record)
+    on error goto next
+    tabs = record["tabs"]
+    if is_unknown(tabs) or type(tabs) != "array" or count(tabs) = 0 then
+        return "(no tabs)"
+    end if
+    kids = tabs[0]["layout"]["vert"]
+    if is_unknown(kids) or type(kids) != "array" or count(kids) = 0 then
+        return "(nothing on the first tab)"
+    end if
+    got = string(kids[0]["visual"])
+    if error then
+        return "(not a visual leaf)"
+    end if
+    return got
+end function
 
 ' Indexed reads go through this, so a failed count assertion does not then
 ' crash the run and hide every assertion after it.

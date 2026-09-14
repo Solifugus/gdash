@@ -38,6 +38,7 @@ library gdash_ask
     load gdash_store from "gdash_store.bas"
     load gdash_nlq from "gdash_nlq.bas"
     load gdash_sched from "gdash_sched.bas"
+    load gdash_record from "gdash_record.bas"
     load gdash_format from "gdash_format.bas"
     load nlq
 
@@ -156,7 +157,19 @@ library gdash_ask
             return unknown
         end if
         key = _model_key(profile)
-        if provider = "local" then
+        if provider = "offline" then
+            ' THE PLATFORM'S OWN FIXTURE TRANSPORT, not a test-only hook: an
+            ' operator installing gdash can verify the whole path -- profile,
+            ' catalog, prompt, SQL check, unit notes, promotion -- without a
+            ' key, a network, or a token spent. `llm.offline` reads
+            ' <dir>/<format>_response.json, so what it returns is whatever the
+            ' deployment put there.
+            dir = trim(string(default(profile["offline_dir"], "")))
+            if dir = "" then
+                return unknown
+            end if
+            m = llm.offline(llm.anthropic(model, ""), dir)
+        else if provider = "local" then
             base = trim(string(default(profile["base_url"], "")))
             if base = "" then
                 return unknown
@@ -264,7 +277,7 @@ library gdash_ask
     function _stop(stage, question, message, extra)
         base = { ok: false, stage: stage, question: question, message: message,
                  candidates: [], sql: "", problems: [], notes: [], rows: [],
-                 answer: unknown, tables: [], key: "", as_of: [] }
+                 answer: unknown, tables: [], key: "", as_of: [], scaled: {} }
         for each k in keys(extra)
             base[k] = extra[k]
         next
@@ -341,10 +354,388 @@ library gdash_ask
                            key: reading.key, as_of: stamps })
         end if
 
+        ' The scaled columns travel with the draft, because promotion needs
+        ' them and recomputing would mean opening the datasets a second time to
+        ' learn something this call already knows.
         return { ok: true, stage: "answered", question: q, message: "",
                  candidates: [], sql: reading.sql, problems: [], notes: notes,
                  rows: ran.rows, answer: settled, tables: reading.tables,
-                 key: reading.key, as_of: stamps }
+                 key: reading.key, as_of: stamps, scaled: scaled }
+    end function
+
+
+    ' --- promoting a draft into the dashboard ------------------------------
+    '
+    ' THE TWO TIERS NAME TABLES DIFFERENTLY, and this is where that has to be
+    ' reconciled. The NLQ catalog attaches every dataset under its own name, so
+    ' a table is `orders.orders` -- unambiguous, which is what lets each
+    ' dataset's `_gdash_meta` be read at its own scale (G2-3). A VISUAL query
+    ' opens its named dataset directly and attaches only the SIBLINGS, so the
+    ' same table is plain `orders` and `orders.orders` would not resolve at all.
+    '
+    ' So a promoted query is requalified: the sequence `D . D` becomes `D` for
+    ' every dataset name D. `orders.orders` becomes `orders`, and
+    ' `orders.orders.amount` becomes `orders.amount` -- which is correct in the
+    ' visual form, where `orders` is a table rather than a schema. A qualified
+    ' column like `orders.amount` is left exactly as it is.
+    '
+    ' Token-based, using the same tokenizer as the unit guard, so a dataset
+    ' name inside a string literal is not rewritten.
+
+    ' A character scan rather than a token rebuild: the tokenizer drops
+    ' whitespace, so reassembling from tokens would return SQL that is valid
+    ' and unreadable, and this text goes into a record a person maintains. So
+    ' the original is preserved everywhere except the spans that are replaced.
+    '
+    ' Quoted spans are skipped, so a dataset name inside a string literal is
+    ' left alone. Identifier boundaries are checked on both sides, so
+    ' `myorders.orders` is not rewritten. The comparison is case-insensitive
+    ' because SQL identifiers are, and a model will sometimes shout.
+    function requalify(sql, datasets)
+        out = ""
+        i = 0
+        n = len(sql)
+        while i < n
+            ch = mid(sql, i, 1)
+            if ch = "'" or ch = chr(34) then
+                j = i + 1
+                while j < n and mid(sql, j, 1) != ch
+                    j += 1
+                end while
+                if j < n then
+                    j += 1
+                end if
+                out = out + mid(sql, i, j - i)
+                i = j
+            else
+                hit = _dataset_prefix_at(sql, i, datasets)
+                if hit > 0 then
+                    out = out + mid(sql, i, hit)
+                    i += hit * 2 + 1
+                else
+                    out = out + ch
+                    i += 1
+                end if
+            end if
+        end while
+        return out
+    end function
+
+    ' The length of the dataset name if `sql` at `at` begins a `D.D` sequence
+    ' on identifier boundaries, and 0 otherwise. Returning the length rather
+    ' than the name keeps the caller a single scan.
+    ' Its own boundary predicate, deliberately NOT gdash_nlq._is_ident_char:
+    ' that one counts `.` as part of an identifier, so that `a.b.c` is one
+    ' token for the unit guard. Here the dot is the thing being matched, so
+    ' reusing it made `orders.orders.amount` invisible -- the trailing `.amount`
+    ' read as "still inside a name". Caught by probe before it reached a test.
+    function _is_name_char(ch)
+        return (ch >= "a" and ch <= "z") or (ch >= "A" and ch <= "Z") or (ch >= "0" and ch <= "9") or ch = "_"
+    end function
+
+    function _dataset_prefix_at(sql, at, datasets)
+        if at > 0 and _is_name_char(mid(sql, at - 1, 1)) then
+            return 0
+        end if
+        k = 0
+        while k < count(datasets)
+            d = datasets[k]
+            w = len(d)
+            span = w * 2 + 1
+            if at + span <= len(sql) then
+                if lower(mid(sql, at, w)) = lower(d) then
+                    if mid(sql, at + w, 1) = "." then
+                        if lower(mid(sql, at + w + 1, w)) = lower(d) then
+                            after = at + span
+                            if after >= len(sql) or not _is_name_char(mid(sql, after, 1)) then
+                                return w
+                            end if
+                        end if
+                    end if
+                end if
+            end if
+            k += 1
+        end while
+        return 0
+    end function
+
+    ' Which dataset a promoted visual should open directly. Any of them works
+    ' once the query is requalified -- every other one is attached -- so this
+    ' takes THE FIRST ONE THE QUERY NAMES.
+    '
+    ' Not the first one the GROUNDING names, which was the first attempt and
+    ' was wrong: "total by region" grounds both `orders` and `regions`, because
+    ' both have a region column, while the SQL the model wrote touches only
+    ' `orders`. A visual whose `dataset` is a table its query never mentions
+    ' loads and renders, so nothing would have caught it later.
+    '
+    ' A column that happens to be named like a dataset would mislead this. The
+    ' cost is a visual opening the wrong sibling, which still renders, and a
+    ' person editing one word.
+    function primary_of(draft, datasets)
+        sql = string(draft.sql)
+        i = 0
+        n = len(sql)
+        while i < n
+            ch = mid(sql, i, 1)
+            if ch = "'" or ch = chr(34) then
+                j = i + 1
+                while j < n and mid(sql, j, 1) != ch
+                    j += 1
+                end while
+                i = j + 1
+            else if _is_name_char(ch) and (i = 0 or not _is_name_char(mid(sql, i - 1, 1))) then
+                j = i
+                while j < n and _is_name_char(mid(sql, j, 1))
+                    j += 1
+                end while
+                word = lower(mid(sql, i, j - i))
+                k = 0
+                while k < count(datasets)
+                    if lower(datasets[k]) = word then
+                        return datasets[k]
+                    end if
+                    k += 1
+                end while
+                i = j
+            else
+                i += 1
+            end if
+        end while
+        if count(datasets) > 0 then
+            return datasets[0]
+        end if
+        return ""
+    end function
+
+    ' A mark that suits the shape that came back. THREE CASES AND A DEFAULT,
+    ' because a suggestion that is wrong is cheap here -- the draft is looked
+    ' at by a person before it is anything -- and a suggestion that is absent
+    ' means they start from nothing.
+    '
+    '   one row, one column          -> value
+    '   two columns, text then number -> bar
+    '   anything else                -> table
+    function suggest_encoding(rows)
+        if count(rows) = 0 then
+            return { mark: "table" }
+        end if
+        cols = keys(rows[0])
+        if count(cols) = 1 then
+            if count(rows) = 1 then
+                return { mark: "value", value: cols[0] }
+            end if
+            return { mark: "table" }
+        end if
+        if count(cols) = 2 then
+            if type(rows[0][cols[0]]) = "string" and type(rows[0][cols[1]]) = "number" then
+                return { mark: "bar", x: cols[0], y: cols[1] }
+            end if
+        end if
+        return { mark: "table" }
+    end function
+
+    ' --- money, one more time ----------------------------------------------
+    '
+    ' A money column holds INTEGER MINOR UNITS, and an aggregate of minor units
+    ' is still minor units. A promoted `sum(amount) as total` therefore renders
+    ' 215100 where a person expects $2,151.00 -- the same failure as step 0,
+    ' arriving one step later, in the chart instead of the answer.
+    '
+    ' gdash already knows how to render it: a visual whose encoding says
+    ' `format: "currency"` is scaled by the dataset\'s own money scale. So the
+    ' only question is whether this particular output column IS money, and that
+    ' is answered NARROWLY ON PURPOSE:
+    '
+    '   sum(amount) as total     -> money   (an aggregate over a money column)
+    '   amount as total          -> money   (the column itself)
+    '   count(*) as n            -> not     (even in a query full of money)
+    '   amount / 100 as dollars  -> not     (already converted; not our business)
+    '
+    ' Anything it cannot read this way is NOT marked, because marking a count
+    ' as currency would render 3 as $0.03 -- a wrong answer produced by the
+    ' machinery meant to prevent wrong answers. A miss costs one field a person
+    ' adds while reviewing the draft, which they are doing anyway.
+    function _aggregates()
+        return ["sum", "avg", "min", "max", "total"]
+    end function
+
+    ' Does `alias` name an output column that carries money?
+    function is_money_channel(sql, scaled, alias)
+        toks = gdash_nlq.tokens(sql)
+        i = 0
+        while i < count(toks)
+            if toks[i].kind = "word" and lower(toks[i].text) = "as" and i + 1 < count(toks) then
+                if lower(toks[i + 1].text) = lower(alias) then
+                    return _expr_is_money(toks, i - 1, scaled)
+                end if
+            end if
+            i += 1
+        end while
+        ' No alias: the column may be named directly in the select list.
+        return _names_money(alias, scaled)
+    end function
+
+    ' The expression ending at `at`, read backwards. Either a bare money column
+    ' or an aggregate wrapping exactly one.
+    function _expr_is_money(toks, at, scaled)
+        if at < 0 then
+            return false
+        end if
+        if toks[at].kind = "word" then
+            return _names_money(toks[at].text, scaled)
+        end if
+        if toks[at].kind = "punct" and toks[at].text = ")" then
+            depth = 0
+            j = at
+            while j >= 0
+                if toks[j].kind = "punct" and toks[j].text = ")" then
+                    depth += 1
+                end if
+                if toks[j].kind = "punct" and toks[j].text = "(" then
+                    depth -= 1
+                    if depth = 0 then
+                        ' The function name sits just before the open paren,
+                        ' and the single argument just after it.
+                        if j - 1 >= 0 and j + 1 < count(toks) then
+                            if toks[j - 1].kind = "word" and contains(_aggregates(), lower(toks[j - 1].text)) then
+                                if j + 2 = at then
+                                    return _names_money(toks[j + 1].text, scaled)
+                                end if
+                            end if
+                        end if
+                        return false
+                    end if
+                end if
+                j -= 1
+            end while
+        end if
+        return false
+    end function
+
+    ' `scaled` is keyed `<dataset>.<dataset>.<column>`, and a query may spell
+    ' the column any of the ways the unit guard already understands.
+    function _names_money(word, scaled)
+        w = lower(trim(string(word)))
+        if w = "" then
+            return false
+        end if
+        for each k in keys(scaled)
+            sc = scaled[k]
+            bare = lower(sc.column)
+            qual = lower(sc.dataset + "." + sc.column)
+            full = lower(sc.dataset + "." + sc.dataset + "." + sc.column)
+            if w = bare or w = qual or w = full then
+                return true
+            end if
+        next
+        return false
+    end function
+
+    ' The visual a draft would become. Returned rather than written, because
+    ' the whole shape of this feature is that a person looks at it first.
+    function draft_visual(draft, rec, scaled)
+        datasets = sort(keys(rec["datasets"]))
+        rewritten = requalify(draft.sql, datasets)
+        enc = suggest_encoding(draft.rows)
+
+        ' The channel that carries a quantity, if this mark has one.
+        channel = ""
+        if enc["mark"] = "value" then
+            channel = string(enc["value"])
+        else if enc["mark"] = "bar" then
+            channel = string(enc["y"])
+        end if
+        if channel != "" then
+            if is_money_channel(rewritten, scaled, channel) then
+                enc["format"] = "currency"
+                cur = _currency_of(scaled)
+                if cur != "" then
+                    enc["currency"] = cur
+                end if
+            end if
+        end if
+
+        ' The REQUALIFIED query is what primary_of reads, because that is the
+        ' text the visual will run.
+        return { dataset: primary_of({ sql: rewritten }, datasets),
+                 sql: rewritten,
+                 encoding: enc }
+    end function
+
+    ' The currency to render in. gdash requires a dataset's money columns to
+    ' agree on a scale for a formatted channel (gdash_render.money_scale), so
+    ' one code for the visual is the same assumption stated once more; an
+    ' encoding that names none renders as USD, which would be wrong in silence.
+    function _currency_of(scaled)
+        for each k in keys(scaled)
+            if scaled[k].currency != "" then
+                return scaled[k].currency
+            end if
+        next
+        return ""
+    end function
+
+    ' Writing it into the record. The record file is the authoring surface
+    ' (design §10), so this edits that file and nothing else -- it does not
+    ' publish, and a published dashboard is unaffected until somebody does.
+    '
+    ' VALIDATED BEFORE IT IS WRITTEN, not after. A record gdash would refuse to
+    ' load is a dashboard that stops rendering for everyone, and the draft that
+    ' caused it would be gone by then.
+    function promote(p, name, id, visual)
+        vid = trim(string(id))
+        if vid = "" then
+            return { ok: false, message: "a promoted visual needs a name" }
+        end if
+        path = gdash_paths.record_file(p, name)
+        got = gdash_record.load_file(path)
+        if not got.ok then
+            return { ok: false, message: "the record cannot be read: " + join(got.errors, "; ") }
+        end if
+        rec = got.record
+        if not is_unknown(rec["visuals"][vid]) then
+            return { ok: false, message: "this dashboard already has a visual named '" + vid + "'" }
+        end if
+        rec["visuals"][vid] = visual
+        rec["tabs"] = _place(rec["tabs"], vid)
+
+        errs = gdash_record.validate(rec)
+        if count(errs) > 0 then
+            return { ok: false, message: "the promoted visual would not validate: " + join(errs, "; ") }
+        end if
+
+        on error goto next
+        tmp = path + ".tmp"
+        f {file} = tmp
+        write(f, encode(rec))
+        if error then
+            return { ok: false, message: "cannot write " + tmp }
+        end if
+        atomic_replace(tmp, path)
+        if error then
+            return { ok: false, message: "cannot replace " + path }
+        end if
+        return { ok: true, message: "promoted as '" + vid + "'" }
+    end function
+
+    ' Into the first tab, so it is actually on the page. A visual in `visuals`
+    ' that no tab names renders nowhere, which would be a promotion that
+    ' appeared to work.
+    function _place(tabs, vid)
+        if is_unknown(tabs) or type(tabs) != "array" or count(tabs) = 0 then
+            return [{ name: "Drafts", layout: { vert: [{ visual: vid }] } }]
+        end if
+        first = tabs[0]
+        lay = first["layout"]
+        if type(lay) = "record" and type(lay["vert"]) = "array" then
+            lay["vert"] = concat(lay["vert"], [{ visual: vid }])
+        else
+            lay = { vert: [lay, { visual: vid }] }
+        end if
+        first["layout"] = lay
+        tabs[0] = first
+        return tabs
     end function
 
 end library
