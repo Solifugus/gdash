@@ -9,8 +9,14 @@
 ' never appear in argv, where any user on the box could read them from ps.
 
 program main(args)
+    load gdash_shadow from "gdash_shadow.bas"
     load gdash_store from "gdash_store.bas"
     load gdash_source_fixture from "gdash_source_fixture.bas"
+
+    ' The child is a separate process started later, so it checks for itself:
+    ' a shadow that appeared after the server started would otherwise reach the
+    ' process that holds the source credentials.
+    shadows = gdash_shadow.enforce()
 
     if count(args) < 1 then
         print to error "usage: gdash_refresh_child <job-file>"

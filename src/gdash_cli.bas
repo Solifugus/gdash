@@ -30,6 +30,7 @@
 ' dashboard; gdash_scheduler.bas is that pass on a period.
 
 program main(args)
+    load gdash_shadow from "gdash_shadow.bas"
     load gdash_paths from "gdash_paths.bas"
     load gdash_record from "gdash_record.bas"
     load gdash_refresh from "gdash_refresh.bas"
@@ -42,6 +43,13 @@ program main(args)
     load gdash_source_odbc from "gdash_source_odbc.bas"
     load gdash_sched from "gdash_sched.bas"
     load gdash_format from "gdash_format.bas"
+
+    ' A bare-name `load` searches THIS directory, recursively, before the
+    ' stdlib, so a stray crypto.bas here would be the password hasher. Loads
+    ' resolve before the body runs, so this cannot prevent the load -- but a
+    ' gBASIC library body defines functions rather than running them, so a
+    ' shadow is inert until something calls it, and gdash refuses first.
+    shadows = gdash_shadow.enforce()
 
     p = gdash_paths.from_args(args)
 

@@ -102,22 +102,39 @@ the whole of the immediate need.
 
 ---
 
-## 2. A file in the working directory silently replaces a stdlib library
+## 2. A stray `.bas` beside the LOADING FILE silently replaces a stdlib library
 
 Found while establishing that `nlq` was not installed, and it is the more
 general finding.
 
+**Corrected since first sending, and the correction matters both ways.** This
+section originally said *"a file in the working directory"*. That is wrong. The
+directory that wins is the one holding **the source file that issues the
+`load`** — `dirname(current_import_path)`, falling back to the root program —
+and it is searched **recursively**. Measured at `159bc30`:
+
+| where the stray `chart.bas` is | result |
+| --- | --- |
+| the process's working directory | stdlib wins — no effect |
+| beside the *program* that loads the library that loads `chart` | stdlib wins |
+| beside the *library* issuing `load chart` | **stray wins** |
+| three directories *below* that library | **stray wins** |
+
+So the exposure is narrower than reported (not any directory a caller happens
+to be in) and wider (any depth beneath the loading file, not just next to it).
+The second half is the one that makes a directory listing an inadequate review.
+
 ```
-$ cat chart.bas
+$ cat lib/deep/deeper/chart.bas
 library chart
-    function bogus()
-        return "I am not the real chart library"
+    function who_am_i()
+        return "FAKE three directories down"
     end function
 end library
 
-$ gbasic t.bas
+$ gbasic prog.bas
 warning: additional library 'chart' match ignored: /usr/local/share/gbasic/stdlib/chart.bas
-I am not the real chart library
+FAKE three directories down
 ```
 
 The local file **wins**; the real library is the one reported as "ignored".
@@ -125,25 +142,43 @@ The local file **wins**; the real library is the one reported as "ignored".
 The warning is correct and it is on stderr, which is where a service's output
 goes to be unread. For gdash the exposed names are `chart`, `crypto`, `ldap`,
 `odbc`, `pg`, `sqlite`, `web` — `crypto` hashes every password and mints every
-session secret, and `web` is the server. Nothing collides today; the working
-directory is inherited from whoever started the process.
+session secret, and `web` is the server. Every one of gdash's bare loads lives
+in a module under `src/`, installed to the libdir, so for gdash it is one
+directory tree rather than an inherited working directory.
 
-Two observations rather than a demand, since the precedence may well be
+Two observations rather than a demand, since the precedence is plainly
 deliberate for development:
 
 - **The asymmetry is the surprising part.** A library defining a name another
   library already defines is refused at parse time (`f21486e`), and a function
   shadowing a built-in gets a note. A *whole stdlib library* being replaced by
-  a file that happens to be in the current directory is the quietest of the
-  three, and the highest-consequence.
+  a file several directories below the one that asked for it is the quietest of
+  the three, and the highest-consequence.
 - **If precedence stays, the notice may not want to be a warning** — at least
   for the security-carrying modules. A flag to refuse (`--no-local-libraries`,
-  or refusing when the program is not itself in that directory) would let a
-  daemon opt into the strict reading.
+  or refusing a match found below the loading file rather than beside it) would
+  let a daemon opt into the strict reading.
 
-gdash will refuse to start if one of its seven names is shadowed, regardless of
-what the platform decides. That is cheap and fails closed, and it is the
-application's own business either way.
+Two things measured while building the guard, offered because they bear on any
+ruling and are cheaper to read than to rediscover:
+
+- **A symlink loop under the search root does not hang it.** `lib/loop -> lib`
+  terminated promptly rather than recursing forever — presumably on path
+  length. Fine as it stands; worth a deliberate cap if the search ever changes.
+- **Loads resolve before the program body runs.** A `print` on the line above a
+  `load` does not reach stdout when the load fails, so no program can inspect
+  its own module directory *before* a shadow is loaded. What saves it is that a
+  gBASIC library body **defines** rather than **runs**: a top-level `print`
+  inside `library evil ... end library` produced nothing at load. So a shadow
+  is inert until called, and an application guard placed first in `main` is
+  sufficient. Both confirmed by probe, not by reading source.
+
+gdash refuses to start if one of its seven names is shadowed, regardless of
+what the platform decides — `src/gdash_shadow.bas`, enforced by all four entry
+points, 34 in-process assertions and 17 across processes. `tests/run_shadow.sh`
+asserts the **premise** as well as the guard, so if the platform ever changes
+this rule gdash's suite reports that the guard is now unnecessary rather than
+leaving it guarding against nothing.
 
 ---
 

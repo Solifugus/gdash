@@ -56,21 +56,39 @@ and it is why the suite carries a platform-change detector.
 
 Everything measured below was therefore run against a **copy** of
 `stdlib/nlq.bas` from the gbasic working tree at `159bc30`, placed in the
-probe's working directory. Which works, for the reason in S0-2.
+probe's own directory, which is where its `load nlq` resolves from --
+for the reason in S0-2.
 
-### S0-2 — a stray `.bas` in the working directory silently replaces a stdlib library
+### S0-2 — a stray `.bas` beside the loading file replaces a stdlib library — **GUARDED**
 
 Found while establishing S0-1, and worth more attention than the thing that
-found it. A file named `chart.bas` in the current directory:
+found it.
+
+**The first statement of this finding was wrong and has been corrected.** It
+said *"a file in the current working directory"*. The directory that actually
+wins is the one holding **the source file that issues the `load`**, searched
+**recursively**. Measured at `159bc30`, four placements of the same
+`chart.bas`:
+
+| where the stray file is | result |
+| --- | --- |
+| the process's working directory | stdlib wins |
+| beside the program | stdlib wins |
+| beside the library issuing `load chart` | **stray wins** |
+| three directories below it | **stray wins** |
+
+Narrower than reported in one direction, wider in the other — and the wider
+half is the one that matters, because a directory listing of `src/` does not
+show it.
 
 ```
 warning: additional library 'chart' match ignored: /usr/local/share/gbasic/stdlib/chart.bas
-I am not the real chart library
+FAKE three directories down
 ```
 
 The local file **wins**. The real library is the one "ignored", and the notice
-is a warning on stderr — which a service's stderr goes to a log nobody reads at
-the moment it matters.
+is a warning on stderr — which for a service goes to a log nobody reads at the
+moment it matters.
 
 gdash loads seven libraries by bare name:
 
@@ -79,13 +97,44 @@ chart   crypto   ldap   odbc   pg   sqlite   web
 ```
 
 `crypto` hashes every password and mints every session secret. `web` is the
-server. Neither the repository root nor an installed `@LIBDIR@` holds a
-colliding file today, and `scripts/gdash-server.in` inherits whatever working
-directory the caller had — so the exposure is real, currently unrealised, and
-invisible if it ever is realised.
+server. Every one of those loads lives in a module under `src/` — the install
+libdir, once installed — so the whole exposure is one directory tree, and it is
+a tree gdash can look at before doing anything else.
 
-Reported in `gdash12_platform_report_nlq.md`. gdash should also refuse to start
-when one of its seven names is shadowed, which is cheap and fails closed.
+**Built.** `src/gdash_shadow.bas`, called first by all four entry points: the
+CLI, the server, the scheduler, and the refresh child. The child checks for
+itself because it is a later process holding the source credentials.
+
+- The guarded list is hardcoded and then **checked against the source**:
+  `tests/test_shadow.bas` reads every module under `src/`, collects every
+  `load <name>` with no `from`, and fails if the list and the source disagree
+  in either direction. A library added to gdash without being added to the
+  guard is a test failure rather than a silent hole.
+- `tests/run_shadow.sh` pins the **premise** before the guard — it plants a
+  `chart.bas` in a copy of `src/` and demonstrates that it beats the stdlib,
+  beside the modules and three directories down. If the platform ever changes
+  the rule, the suite reports that the guard is now unnecessary rather than
+  leaving it guarding against nothing.
+- 34 in-process assertions, 17 across processes. Eight mutations, all caught
+  legibly: dropping a name, removing the recursion, matching folders, matching
+  substrings, dropping the path from the message, and unwiring each entry
+  point. The server mutation is why every invocation in that runner has a
+  `timeout` — a guard that reports without exiting leaves the server serving,
+  and the suite hung on exactly that.
+
+**What the guard cannot do, stated.** Loads resolve before the program body
+runs, so no gBASIC program can inspect its module directory before a shadow is
+loaded. What makes the guard sufficient anyway is that a library body
+**defines** rather than **runs** — a top-level `print` inside a library
+produced nothing at load — so a shadow is inert until something calls it, and
+gdash refuses before calling anything. Both measured, not assumed.
+
+**Scope, stated.** Only an exact `<name>.bas` is checked, because only an exact
+filename can win: the platform's fallback scan of arbitrary `.bas` files for a
+matching `library` block runs **only** when nothing matched by name anywhere,
+and the stdlib always matches by name for a gdash that can run at all.
+
+Reported upstream in `gdash12_platform_report_nlq.md` §2, with the correction.
 
 ### S0-3 — the money hazard is real, unaddressed, and silent
 
@@ -154,6 +203,12 @@ rather than working around them.
   kind and scale at materialization, which is better than a scan can recover.
 - `gdash_nlq.unit_notes` — **the unit guard**, the part only gdash can write.
   39 assertions, five mutations, all caught.
+- `gdash_shadow` — the shadowing refusal (S0-2), enforced by all four entry
+  points, with the platform premise pinned alongside the guard.
+- `gdash_paths.module_dir` — where gdash's own modules live, which is also the
+  directory every bare-name `load` resolves against. It shares the `GDASH_SRC`
+  override with the refresh child (G8-2) rather than deciding the same thing
+  twice.
 
 ### A note on `discovery`
 
@@ -169,6 +224,5 @@ a reason rather than discovering by surprise.
   seam, the way `gdash_auth_ldap` keeps `ldap` behind `wire`.
 - The draft visual: generated SQL, assumptions, `data as of`, unit notes,
   rendered as a real chart and promotable into the dashboard.
-- The **shadowing refusal** from S0-2.
 - The recall and refusal-rate numbers `nlq_for_gdash.md` asks for, which need
   all of the above.

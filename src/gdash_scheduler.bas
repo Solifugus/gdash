@@ -15,8 +15,16 @@
 ' usage: gdash_scheduler.bas --root <dir> [--every <seconds>] [--once]
 
 program main(args)
+    load gdash_shadow from "gdash_shadow.bas"
     load gdash_paths from "gdash_paths.bas"
     load gdash_refresh from "gdash_refresh.bas"
+
+    ' A bare-name `load` searches THIS directory, recursively, before the
+    ' stdlib, so a stray crypto.bas here would be the password hasher. Loads
+    ' resolve before the body runs, so this cannot prevent the load -- but a
+    ' gBASIC library body defines functions rather than running them, so a
+    ' shadow is inert until something calls it, and gdash refuses first.
+    shadows = gdash_shadow.enforce()
 
     p = gdash_paths.from_args(args)
 

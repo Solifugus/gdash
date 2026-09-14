@@ -50,6 +50,20 @@ library gdash_paths
         return mid(path, 0, cut)
     end function
 
+    ' The directory gdash's own modules live in: src/ in the tree, the install
+    ' libdir once installed. It is also the directory EVERY BARE-NAME `load`
+    ' resolves against, recursively, before the stdlib -- which is why
+    ' gdash_shadow needs it and why it is a path question rather than an app
+    ' one. GDASH_SRC overrides, the same override the refresh child uses, so a
+    ' test program running out of tests/ can still name src/.
+    function module_dir()
+        got = env("GDASH_SRC")
+        if not is_unknown(got) and string(got) != "" then
+            return string(got)
+        end if
+        return dir_of(process.self().script)
+    end function
+
     function path_exists(path)
         on error goto next
         f {file} = path

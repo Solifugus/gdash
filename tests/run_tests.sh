@@ -86,6 +86,17 @@ else
     failed=$((failed + 1))
 fi
 
+# The shadowing refusal, in its own processes. Hermetic -- no port, no network
+# -- so it runs with the in-process suites rather than behind GDASH_SKIP_E2E.
+# It pins the PREMISE first: a stray .bas in gdash's module directory beats the
+# installed stdlib. If the platform ever changes that rule, this says the guard
+# is now unnecessary rather than leaving it guarding against nothing.
+echo "--- shadowing refusal ---"
+ran=$((ran + 1))
+if ! "$HERE/run_shadow.sh"; then
+    failed=$((failed + 1))
+fi
+
 # An end-to-end assertion whose needle also appears in the stylesheet or the
 # shim passes with the feature removed (G6-6). Eight did.
 echo "--- assertion audit ---"
