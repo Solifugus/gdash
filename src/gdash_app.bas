@@ -23,6 +23,8 @@ library gdash_app
     load gdash_theme from "gdash_theme.bas"
     load gdash_throttle from "gdash_throttle.bas"
     load gdash_audit from "gdash_audit.bas"
+    load gdash_ask from "gdash_ask.bas"
+    load gdash_nlq from "gdash_nlq.bas"
 
     function _root_of(req)
         return default(env("GDASH_ROOT"), "")
@@ -628,6 +630,15 @@ library gdash_app
         s = s + ".gdash-table th{text-align:left;border-bottom:1px solid #ccc;padding:6px 10px;color:#555;font-weight:600}"
         s = s + ".gdash-table td{border-bottom:1px solid #eee;padding:6px 10px;font-variant-numeric:tabular-nums}"
         s = s + ".gdash-table-title{font-size:12px;color:#666;margin-bottom:6px}"
+        s = s + ".gdash-ask{margin:12px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap}"
+        s = s + ".gdash-ask input{padding:6px;font-size:14px}"
+        s = s + ".gdash-ask button{padding:6px 12px;font-size:14px;cursor:pointer}"
+        s = s + ".gdash-sql{background:#f6f6f6;border:1px solid #ddd;border-radius:6px;padding:10px;font-size:13px;overflow-x:auto;white-space:pre-wrap}"
+        ' The unit notes are the reason this page exists, so they are not
+        ' styled like the other grey furniture around them.
+        s = s + ".gdash-notes{border:1px solid #c90;background:#fffbe6;border-radius:6px;padding:8px 12px;margin:12px 0;font-size:13px}"
+        s = s + ".gdash-notes ul{margin:6px 0 0 0;padding-left:20px}"
+        s = s + ".gdash-preview-visual{border:1px dashed #999;border-radius:8px;padding:12px;margin:12px 0}"
         return s
     end function
 
@@ -787,6 +798,264 @@ library gdash_app
         return h
     end function
 
+    ' --- asking the data a question, in a browser --------------------------
+    '
+    ' The CLI does this too, and the two share everything below `gdash_ask`.
+    ' What the browser adds is the part that matters most for reviewing a
+    ' draft: the suggested visual is RENDERED, by the ordinary render path,
+    ' running the ordinary visual query against the ordinary staged data. So
+    ' the preview is not a mock of what promotion would produce -- it IS what
+    ' promotion would produce, drawn before anyone commits to it.
+    '
+    ' ALWAYS THE DRAFT RECORD, and authorized against the DRAFT'S own edit
+    ' groups. Promotion edits the draft, so the draft is what decides who may;
+    ' using the served record would ask a published dashboard'"'"'s groups about an
+    ' operation that does not touch it.
+    function _load_draft_for_edit(req, name)
+        p = paths_for(req)
+        if contains(name, "/") then
+            return { ok: false, rec: {}, p: p, viewer: anonymous(), response: _refuse(400, "bad dashboard name") }
+        end if
+        v = viewer_of(req, p)
+        loaded = gdash_record.load_file(gdash_paths.record_file(p, name))
+        if not loaded.ok then
+            if contains(join(loaded.errors, "|"), "not found") then
+                return { ok: false, rec: {}, p: p, viewer: v, response: _refuse(404, "no such dashboard: " + name) }
+            end if
+            return { ok: false, rec: {}, p: p, viewer: v, response: _refuse(500, "dashboard is invalid: " + join(loaded.errors, "; ")) }
+        end if
+        if not allowed(loaded.record, v, "edit") then
+            logged = gdash_audit.event(p, "access.denied", { dashboard: name, user: v.name, need: "edit" })
+            if not v.authed then
+                return { ok: false, rec: {}, p: p, viewer: v, response: _refuse(404, "no such dashboard: " + name) }
+            end if
+            return { ok: false, rec: {}, p: p, viewer: v, response: _refuse(403, "asking a question edits the draft, and you are not an editor of it") }
+        end if
+        return { ok: true, rec: loaded.record, p: p, viewer: v, response: {} }
+    end function
+
+    function ask_page(req, name)
+        got = _load_draft_for_edit(req, name)
+        if not got.ok then
+            return got.response
+        end if
+        return _html(_ask_html(got, name, unknown, "", ""))
+    end function
+
+    function ask_run(req, name)
+        got = _load_draft_for_edit(req, name)
+        if not got.ok then
+            return got.response
+        end if
+        p = got.p
+        v = got.viewer
+        if not csrf_present(req, p, v) then
+            return _refuse(400, "that form expired")
+        end if
+        f = req["form"]
+        if is_unknown(f) then
+            f = {}
+        end if
+        question = trim(string(default(f["question"], "")))
+        if question = "" then
+            return _html(_ask_html(got, name, unknown, "", "ask a question"))
+        end if
+
+        prof = gdash_ask.model_profile(p, "")
+        if not prof.ok then
+            return _html(_ask_html(got, name, unknown, question, prof.message))
+        end if
+
+        ' A model call is slow -- seconds, not milliseconds -- and it holds
+        ' this worker for the whole of it. That is the same cost as a slow
+        ' visual query and is bounded by the profile'"'"'s own timeout; what makes
+        ' it acceptable is that only editors can reach it.
+        draft = gdash_ask.ask(p, name, "draft", got.rec, question, gdash_ask.live_model(prof.profile), {})
+        logged = gdash_audit.event(p, "ask", { dashboard: name, user: v.name, stage: draft.stage, question: question })
+
+        if draft.ok then
+            stored = _remember_draft(p, v, name, gdash_ask.draft_visual(draft, got.rec, draft.scaled), question)
+        end if
+        return _html(_ask_html(got, name, draft, question, ""))
+    end function
+
+    ' The draft rides the SESSION, not the form. A promote that carried the
+    ' SQL back from the browser would accept SQL from the browser; a promote
+    ' that carried only the question would spend another model call to
+    ' rediscover what this one already knows. The session is a file, which is
+    ' how every other piece of per-viewer state travels (design §5).
+    function _remember_draft(p, v, name, vis, question)
+        if v.sid = "" then
+            return false
+        end if
+        st = _store(p)
+        rec = st.get(st.ctx, v.sid)
+        if is_unknown(rec) then
+            return false
+        end if
+        data = gdash_session.data_of(rec)
+        data["ask_draft"] = { dashboard: name, question: question, dataset: vis.dataset, sql: vis.sql, encoding: vis.encoding }
+        stored = gdash_session.assign(st, v.sid, string(rec["user"]), data, epoch())
+        return true
+    end function
+
+    function _remembered_draft(p, v, name)
+        if v.sid = "" then
+            return unknown
+        end if
+        st = _store(p)
+        rec = st.get(st.ctx, v.sid)
+        if is_unknown(rec) then
+            return unknown
+        end if
+        d = gdash_session.data_of(rec)["ask_draft"]
+        if is_unknown(d) or type(d) != "record" then
+            return unknown
+        end if
+        if string(default(d["dashboard"], "")) != name then
+            ' A draft belongs to the dashboard it was asked of. Promoting it
+            ' into another one would put a query about one dataset into a
+            ' record with different datasets entirely.
+            return unknown
+        end if
+        return d
+    end function
+
+    function ask_promote(req, name)
+        got = _load_draft_for_edit(req, name)
+        if not got.ok then
+            return got.response
+        end if
+        p = got.p
+        v = got.viewer
+        if not csrf_present(req, p, v) then
+            return _refuse(400, "that form expired")
+        end if
+        f = req["form"]
+        if is_unknown(f) then
+            f = {}
+        end if
+        vid = trim(string(default(f["visual"], "")))
+        held = _remembered_draft(p, v, name)
+        if is_unknown(held) then
+            return _html(_ask_html(got, name, unknown, "", "that draft is no longer in this session; ask again"))
+        end if
+        vis = { dataset: held["dataset"], sql: held["sql"], encoding: held["encoding"] }
+        done = gdash_ask.promote(p, name, vid, vis)
+        logged = gdash_audit.event(p, "ask.promote", { dashboard: name, user: v.name, visual: vid, ok: string(done.ok) })
+        if not done.ok then
+            return _html(_ask_html(got, name, unknown, string(held["question"]), done.message))
+        end if
+        return { status: 303, headers: { "location": "/d/" + name }, body: "" }
+    end function
+
+    ' The page. One form to ask, and -- once there is a draft -- the query,
+    ' what its numbers mean, when the data was read, the rows, a real render,
+    ' and one form to promote.
+    function _ask_html(got, name, draft, question, problem)
+        q = chr(34)
+        p = got.p
+        rec = got.rec
+        tok = gdash_session.csrf_for(secret_of(p), got.viewer.sid)
+        h = "<!doctype html><html><head><meta charset=" + q + "utf-8" + q + "><title>Ask " + gdash_render.html_escape(name) + "</title><style>" + _style() + "</style></head><body>"
+        h = h + _who_bar(p, got.viewer)
+        h = h + "<h1>Ask " + gdash_render.html_escape(string(default(rec["title"], name))) + "</h1>"
+        h = h + "<p class=" + q + "gdash-stale" + q + ">A question here produces a <strong>draft</strong>: the query it generated, what its numbers mean, and what it draws. Nothing changes the dashboard until you promote it. <a href=" + q + "/d/" + gdash_render.html_escape(name) + q + ">Back to the dashboard</a></p>"
+
+        h = h + "<form class=" + q + "gdash-ask" + q + " method=" + q + "post" + q + " action=" + q + "/d/" + name + "/ask" + q + ">"
+        h = h + "<input type=" + q + "hidden" + q + " name=" + q + "csrf" + q + " value=" + q + tok + q + ">"
+        h = h + "<input name=" + q + "question" + q + " size=" + q + "60" + q + " placeholder=" + q + "how many orders were over 1000 dollars?" + q + " value=" + q + gdash_render.html_escape(question) + q + ">"
+        h = h + "<button type=" + q + "submit" + q + ">Ask</button>"
+        h = h + "</form>"
+
+        if problem != "" then
+            h = h + "<div class=" + q + "gdash-error" + q + ">" + gdash_render.html_escape(problem) + "</div>"
+        end if
+
+        if is_unknown(draft) then
+            return h + "</body></html>"
+        end if
+
+        if not draft.ok then
+            h = h + "<div class=" + q + "gdash-error" + q + ">" + gdash_render.html_escape(draft.message) + "</div>"
+            i = 0
+            while i < count(draft.candidates)
+                h = h + "<div class=" + q + "gdash-stale" + q + ">it could mean: " + gdash_render.html_escape(string(draft.candidates[i])) + "</div>"
+                i += 1
+            end while
+            if draft.sql != "" then
+                h = h + "<pre class=" + q + "gdash-sql" + q + ">" + gdash_render.html_escape(draft.sql) + "</pre>"
+            end if
+            i = 0
+            while i < count(draft.problems)
+                h = h + "<div class=" + q + "gdash-stale" + q + ">" + gdash_render.html_escape(string(draft.problems[i])) + "</div>"
+                i += 1
+            end while
+            return h + "</body></html>"
+        end if
+
+        h = h + "<pre class=" + q + "gdash-sql" + q + ">" + gdash_render.html_escape(draft.sql) + "</pre>"
+
+        ' THE UNIT NOTES COME BEFORE THE ANSWER, deliberately. A number read
+        ' first is a number believed first.
+        if count(draft.notes) > 0 then
+            h = h + "<div class=" + q + "gdash-notes" + q + "><strong>Check the numbers in that query:</strong><ul>"
+            i = 0
+            while i < count(draft.notes)
+                n = draft.notes[i]
+                h = h + "<li>" + gdash_render.html_escape(n.column + " " + n.literal) + " means <strong>" + gdash_render.html_escape(n.means) + "</strong></li>"
+                i += 1
+            end while
+            h = h + "</ul></div>"
+        end if
+
+        lines = []
+        i = 0
+        while i < count(draft.as_of)
+            lines = concat(lines, [gdash_render.html_escape(draft.as_of[i].dataset + ": data as of " + draft.as_of[i].text)])
+            i += 1
+        end while
+        h = h + "<div class=" + q + "gdash-stale" + q + ">" + join(lines, " &middot; ") + "</div>"
+
+        vis = gdash_ask.draft_visual(draft, rec, draft.scaled)
+        themed = gdash_theme.load_theme(p)
+        h = h + "<div class=" + q + "gdash-preview-visual" + q + ">" + _draft_fragment(p, name, "draft", rec, vis, themed.theme) + "</div>"
+
+        h = h + "<form class=" + q + "gdash-ask" + q + " method=" + q + "post" + q + " action=" + q + "/d/" + name + "/ask/promote" + q + ">"
+        h = h + "<input type=" + q + "hidden" + q + " name=" + q + "csrf" + q + " value=" + q + tok + q + ">"
+        h = h + "<span>Promote this as</span> "
+        h = h + "<input name=" + q + "visual" + q + " placeholder=" + q + "a name for the visual" + q + ">"
+        h = h + "<button type=" + q + "submit" + q + ">Add it to the dashboard</button>"
+        h = h + "</form>"
+        return h + "</body></html>"
+    end function
+
+    ' The suggested visual, drawn the way a promoted one is drawn. Same query
+    ' path, same attach set, same renderer -- so a preview that draws is a
+    ' promise that the promoted visual draws.
+    function _draft_fragment(p, name, mode, rec, vis, theme)
+        db = gdash_paths.dataset_db(p, name, mode, vis.dataset)
+        if not gdash_paths.path_exists(db) then
+            return "<div class=" + chr(34) + "gdash-empty" + chr(34) + ">No data yet -- this dataset has never refreshed.</div>"
+        end if
+        attach = _attach_for(p, name, mode, rec, vis.dataset)
+        res = gdash_store.select_rows(db, vis.sql, {}, gdash_render.exact_columns(vis), attach)
+        if not res.ok then
+            return "<div class=" + chr(34) + "gdash-error" + chr(34) + ">the promoted query would fail: " + gdash_render.html_escape(res.message) + "</div>"
+        end if
+        return gdash_render.render_visual("draft", vis, res.rows, db, attach, theme)
+    end function
+
+    ' Editors get a way in. A feature nobody can find is a feature nobody has,
+    ' and the CLI is not where a dashboard'"'"'s editors necessarily live.
+    function _ask_link(got, name)
+        if not allowed(got.rec, got.viewer, "edit") then
+            return ""
+        end if
+        q = chr(34)
+        return "<p class=" + q + "gdash-stale" + q + "><a href=" + q + "/d/" + gdash_render.html_escape(name) + "/ask" + q + ">Ask this data a question</a></p>"
+    end function
+
     function dashboard_page(req, name)
         got = _load_dashboard(req, name, "view")
         if not got.ok then
@@ -836,6 +1105,7 @@ library gdash_app
         html = "<!doctype html><html><head><meta charset=" + q + "utf-8" + q + "><title>" + string(default(rec["title"], name)) + "</title><style>" + _style() + "</style></head><body>"
         html = html + _who_bar(p, got.viewer)
         html = html + _preview_bar(got, name)
+        html = html + _ask_link(got, name)
         html = html + "<h1>" + string(default(rec["title"], name)) + "</h1>"
         html = html + "<div class=" + q + "gdash-stale" + q + ">" + _status_block(p, name, mode, rec) + "</div>"
         ' Hidden until a publish is observed. The viewer decides when to move.

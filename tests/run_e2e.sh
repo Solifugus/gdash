@@ -595,30 +595,33 @@ jarT="$SCRATCH/throttle.txt"; rm -f "$jarT"
 formT="$(curl -s -c "$jarT" --max-time 10 "http://127.0.0.1:$PORT/login")"
 tokT="$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' <<<"$formT")"
 #
-# FOUR attempts, not five. The fifth was asserted as a second 429 and failed
-# perhaps one run in three on a loaded machine -- correctly: the wait after
-# the third failure is one second, and two curls plus a whoami round trip can
-# take longer than that, at which point the guesser has genuinely waited and
-# is genuinely entitled to another try. The schedule itself is pinned exactly
-# in test_throttle.bas against an injected clock, where it costs no wall time
-# and cannot race. What the end-to-end run is for is that the throttle is
-# WIRED IN -- that a 429 reaches the socket at all -- and four attempts show
-# that without asking the machine to be fast.
-attempt_login(){
-    curl -s -o /dev/null -w '%{http_code}' -b "$jarT" -c "$jarT" --max-time 10 \
-        -X POST -d "csrf=$tokT&user=ada&pass=wrong-$1" "http://127.0.0.1:$PORT/login"
-    tokT="$(sed -n 's/.*"csrf":"\([^"]*\)".*/\1/p' <<<"$(curl -s -b "$jarT" --max-time 10 "http://127.0.0.1:$PORT/whoami")")"
-}
-codes=""
-for i in 1 2 3 4; do codes="$codes$(attempt_login "$i") "; done
-ok "three failures are free, then the guesser waits" "$codes" "401 401 401 429 "
+# FOUR attempts, not five, AND ALL FOUR IN ONE CURL. The fifth was asserted as
+# a second 429 and failed perhaps one run in three; four attempts then failed
+# the OTHER way on a loaded machine, with the fourth coming back 401. Both have
+# the same cause and it is not a defect: the wait after the third failure is
+# ONE SECOND, so an attempt that arrives more than a second later has genuinely
+# waited and is genuinely entitled to try. Two curl processes and a /whoami
+# round trip per attempt can spend that second on their own.
+#
+# So: one curl process, one connection, four POSTs, no round trip between them.
+# A failed login does not regenerate the session, so the same CSRF token is
+# good for all four -- which is what makes dropping the /whoami legitimate
+# rather than merely convenient.
+#
+# The schedule itself is pinned exactly in test_throttle.bas against an
+# injected clock, where it costs no wall time and cannot race. What the
+# end-to-end run is for is that the throttle is WIRED IN -- that a 429 reaches
+# the socket at all.
+attempt(){ printf -- '-s -o /dev/null -w %%{http_code}_ -b %s -X POST -d csrf=%s&user=ada&pass=wrong-%s http://127.0.0.1:%s/login\n' "$jarT" "$tokT" "$1" "$PORT"; }
+codes="$(curl $(attempt 1) --next $(attempt 2) --next $(attempt 3) --next $(attempt 4))"
+ok "three failures are free, then the guesser waits" "$codes" "401_401_401_429_"
 
 # And the wait ENDS. A lockout that never lifts is a denial of service an
 # attacker can aim at someone else's account by failing on their behalf, so
 # the other half of the property matters as much as the first. Two seconds is
 # comfortably past the one second owed, and waiting longer is never wrong.
 sleep 2
-ok "and having waited, they are let through to fail again" "$(attempt_login 5)" "401"
+ok "and having waited, they are let through to fail again" "$(curl $(attempt 5))" "401_"
 has "$(cat "$ROOT/log/audit.log")" '"event":"login.throttled"' "and the throttling is audited"
 
 # Per USERNAME, not per address: an intranet behind one NAT is one address, and
@@ -858,6 +861,82 @@ ok "previewing stops" "$code" "303"
 back="$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/d/team")"
 has "$back" "Only for ada" "and the real identity comes back"
 hasnt "$back" "Previewing as" "with the banner gone"
+
+echo "--- asking in a browser, and promoting what it draws ---"
+#
+# The CLI path is asserted earlier. What this adds is the half only a browser
+# has: the suggested visual is RENDERED -- ordinary query, ordinary attach set,
+# ordinary renderer -- so a preview that draws is a promise that the promoted
+# visual draws. And it is fail-closed: promotion edits the draft record, so the
+# draft's own edit groups decide, and bo is not in them.
+tokA4="$(sed -n 's/.*"csrf":"\([^"]*\)".*/\1/p' <<<"$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/whoami")")"
+
+teampage="$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/d/team")"
+has "$teampage" 'href="/d/team/ask"' "an editor is offered a way in from the dashboard"
+
+askform="$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/d/team/ask")"
+has "$askform" 'action="/d/team/ask"' "the ask page offers a form"
+has "$askform" 'name="csrf"' "carrying a CSRF token, because asking spends money"
+
+# A stranger to this dashboard gets nothing, and gets it exactly the way
+# /d/team already answers: 404 for an anonymous request, because the existence
+# of the dashboard is itself the secret; 403 for bo, who is authenticated and
+# for whom the secret is his access rather than its existence. Asserted here
+# rather than assumed, because a new route is a new place to leak.
+code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarB" --max-time 10 "http://127.0.0.1:$PORT/d/team/ask")"
+ok "a non-member cannot reach the ask page" "$code" "403"
+code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarB" --max-time 10 -X POST -d "csrf=$tokA4&question=anything" "http://127.0.0.1:$PORT/d/team/ask")"
+ok "nor post to it" "$code" "403"
+code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/d/team/ask")"
+ok "and an anonymous request is not even told the dashboard is there" "$code" "404"
+
+# VIEWING IS NOT EDITING. `sales` is access: open, so bo may read it; asking a
+# question edits the draft, and he may not do that. This is the case the
+# dashboard's own access check cannot make, because it passes.
+code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarB" --max-time 10 "http://127.0.0.1:$PORT/d/sales")"
+ok "bo may view an open dashboard" "$code" "200"
+code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarB" --max-time 10 "http://127.0.0.1:$PORT/d/sales/ask")"
+ok "and may not ask it anything, because asking edits the draft" "$code" "403"
+openpage="$(curl -s -b "$jarB" --max-time 10 "http://127.0.0.1:$PORT/d/sales")"
+hasnt "$openpage" 'href="/d/sales/ask"' "and is not offered a link to somewhere he cannot go"
+
+# Asking without a token is refused before a single token is spent.
+code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarA" --max-time 10 -X POST -d "question=total by region" "http://127.0.0.1:$PORT/d/team/ask")"
+ok "asking without a CSRF token is refused" "$code" "400"
+
+asked="$(curl -s -b "$jarA" --max-time 10 -X POST -d "csrf=$tokA4" --data-urlencode "question=total by region" "http://127.0.0.1:$PORT/d/team/ask")"
+has "$asked" "select region, sum(amount) as total from orders.orders group by region" "the draft shows the query the model wrote"
+has "$asked" "data as of" "and when the data it read was refreshed"
+# THE RENDER IS THE POINT of doing this in a browser rather than a terminal.
+has "$asked" "<svg" "and draws the visual it would promote"
+# In dollars. An aggregate of minor units is still minor units, and a chart
+# whose axis reads 325100 for \$3,251.00 is the step-0 failure in a picture.
+has "$asked" "\$3,000.00" "with a money axis in dollars, not in cents"
+has "$asked" 'action="/d/team/ask/promote"' "and offers to promote it"
+
+# Nothing is written by asking.
+hasnt "$(cat "$ROOT/lib/dashboards/team/draft.json")" "by_question" "asking writes nothing into the record"
+
+code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarA" --max-time 10 -X POST -d "csrf=$tokA4&visual=by_question" "http://127.0.0.1:$PORT/d/team/ask/promote")"
+ok "promoting redirects to the dashboard" "$code" "303"
+teamrec="$(cat "$ROOT/lib/dashboards/team/draft.json")"
+has "$teamrec" '"sql":"select region, sum(amount) as total from orders group by region"' "the promoted query is requalified for the visual tier"
+has "$teamrec" '"format":"currency"' "and promoted as currency, because it aggregates a money column"
+has "$teamrec" '"visual":"by_question"' "and placed on a tab, where it will be seen"
+
+after="$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/d/team")"
+has "$after" "by_question" "the dashboard now renders it"
+
+# The draft rides the session, so a promote with nothing held says so rather
+# than spending another model call or accepting SQL from the browser.
+jarD="$SCRATCH/ada2.txt"; rm -f "$jarD"
+formD="$(curl -s -c "$jarD" --max-time 10 "http://127.0.0.1:$PORT/login")"
+tokD="$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' <<<"$formD")"
+curl -s -o /dev/null -b "$jarD" -c "$jarD" --max-time 10 -X POST -d "csrf=$tokD&user=ada&pass=fake-analyst-pw" "http://127.0.0.1:$PORT/login"
+tokD2="$(sed -n 's/.*"csrf":"\([^"]*\)".*/\1/p' <<<"$(curl -s -b "$jarD" --max-time 10 "http://127.0.0.1:$PORT/whoami")")"
+nodraft="$(curl -s -b "$jarD" --max-time 10 -X POST -d "csrf=$tokD2&visual=whatever" "http://127.0.0.1:$PORT/d/team/ask/promote")"
+has "$nodraft" "no longer in this session" "a promote with no draft held says so"
+hasnt "$(cat "$ROOT/lib/dashboards/team/draft.json")" "whatever" "and writes nothing"
 
 echo "--- logout ---"
 code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarA" -H "x-gdash-csrf: $tokA2" -c "$jarA" --max-time 10 -X POST "http://127.0.0.1:$PORT/logout")"

@@ -88,6 +88,25 @@ server gdash_web( port: 8780 )
         return gdash_app.refresh(req, req.params.name)
     end post
 
+    ' Asking the data a question, and promoting the answer. Editors of the
+    ' DRAFT only -- promotion edits the draft record -- and the model call
+    ' holds this worker for as long as the model takes, which is why it is not
+    ' reachable by a viewer.
+    get "/d/{name}/ask"( req )
+        load gdash_app from "gdash_app.bas"
+        return gdash_app.ask_page(req, req.params.name)
+    end get
+
+    post "/d/{name}/ask"( req )
+        load gdash_app from "gdash_app.bas"
+        return gdash_app.ask_run(req, req.params.name)
+    end post
+
+    post "/d/{name}/ask/promote"( req )
+        load gdash_app from "gdash_app.bas"
+        return gdash_app.ask_promote(req, req.params.name)
+    end post
+
     ' The version history, as text and as a diff (design §7).
     get "/d/{name}/diff"( req )
         load gdash_app from "gdash_app.bas"
