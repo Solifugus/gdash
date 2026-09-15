@@ -996,6 +996,10 @@ library gdash_app
 
         h = h + "<pre class=" + q + "gdash-sql" + q + ">" + gdash_render.html_escape(draft.sql) + "</pre>"
 
+        if not draft.units_told then
+            h = h + "<div class=" + q + "gdash-error" + q + ">The installed nlq library is too old to be told what the money columns mean, so the model wrote this query without knowing the integers are minor units. Check the numbers with care.</div>"
+        end if
+
         ' THE UNIT NOTES COME BEFORE THE ANSWER, deliberately. A number read
         ' first is a number believed first.
         if count(draft.notes) > 0 then

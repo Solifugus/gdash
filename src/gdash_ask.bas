@@ -277,11 +277,36 @@ library gdash_ask
     function _stop(stage, question, message, extra)
         base = { ok: false, stage: stage, question: question, message: message,
                  candidates: [], sql: "", problems: [], notes: [], rows: [],
-                 answer: unknown, tables: [], key: "", as_of: [], scaled: {} }
+                 answer: unknown, tables: [], key: "", as_of: [], scaled: {},
+                 units_told: false }
         for each k in keys(extra)
             base[k] = extra[k]
         next
         return base
+    end function
+
+    ' Which refusal this is, in words a person can act on. `nothing_grounded`
+    ' carries the words that reached nothing, which is the useful half.
+    function _refusal_words(plan)
+        ' `nothing` is a gBASIC keyword (SQL NULL maps to it), so this is
+        ' `unmatched`. The parse error named the line, which is the good kind.
+        unmatched = false
+        words = []
+        for each r in plan.refused_because
+            if type(r) = "record" and string(default(r["kind"], "")) = "nothing_grounded" then
+                unmatched = true
+                if type(r["candidates"]) = "array" then
+                    words = r["candidates"]
+                end if
+            end if
+        next
+        if not unmatched then
+            return "that could mean more than one thing"
+        end if
+        if count(words) > 0 then
+            return "this dashboard has no data that could answer that: nothing here matches " + join(words, ", ")
+        end if
+        return "this dashboard has no data that could answer that"
     end function
 
     function ask(p, name, mode, rec, question, wire, options)
@@ -308,16 +333,45 @@ library gdash_ask
         vocab = nlq.vocabulary(rows, { max_values: 25 })
         ex = nlq.exemplars(rows, { min_distinct: 2 })
 
+        ' THE UNIT NOTES GO TO THE MODEL, not only to the reviewer. Until
+        ' 2026-09-14 there was no channel for them and the whole defence was
+        ' the note beside the draft; `nlq.plan` now takes `notes`, so the
+        ' model is told before it writes rather than the reader afterwards.
+        '
+        ' AN OLDER `nlq` RAISES on an unknown option, and gdash must still run
+        ' against one -- the stdlib is installed separately from the
+        ' interpreter, and the two move apart routinely (S0-1 was exactly
+        ' that). So this tries with the notes and falls back without them,
+        ' ONCE, and records which happened. A silent fallback would hide the
+        ' very hazard the notes exist to close, so `units_told` travels with
+        ' the draft and the UI says so.
+        ' Named `told` rather than `notes`: the draft already has a `notes`,
+        ' and these two are opposites -- one goes to the model before it
+        ' writes, the other to a person after it has.
+        told = gdash_nlq.prompt_notes(scaled)
+        units_told = true
         on error goto next
-        plan = nlq.plan(cat, vocab, q, { dialect: "SQLite", exemplars: ex })
+        plan = nlq.plan(cat, vocab, q, { dialect: "SQLite", exemplars: ex, notes: told })
         if error then
-            return _stop("ground", q, "the question could not be planned against this data", { as_of: stamps })
+            units_told = false
+            plan = nlq.plan(cat, vocab, q, { dialect: "SQLite", exemplars: ex })
+            if error then
+                return _stop("ground", q, "the question could not be planned against this data", { as_of: stamps })
+            end if
         end if
         if not plan.ok then
-            ' R1/R6: a grounding the catalog could not settle is a refusal, and
-            ' it travels as a value carrying the candidates -- so the UI asks
-            ' the person which one they meant instead of guessing.
-            return _stop("ground", q, "that could mean more than one thing", { candidates: plan.refused_because, as_of: stamps })
+            ' TWO REFUSALS, AND THEY NEED DIFFERENT WORDS. `plan` refuses on
+            ' AMBIGUITY (R1/R6 -- more than one object could answer) and, since
+            ' 2026-09-14, on NOTHING GROUNDED, which gdash asked for. Both
+            ' arrive as `ok: false` with `refused_because`, so the kind has to
+            ' be read.
+            '
+            ' Telling someone "that could mean more than one thing" when the
+            ' dashboard has no such data at all sends them looking for a
+            ' disambiguation that does not exist. gdash reported this shape to
+            ' the platform and then made exactly that mistake against the fixed
+            ' library the first time it ran.
+            return _stop("ground", q, _refusal_words(plan), { candidates: plan.refused_because, as_of: stamps, units_told: units_told })
         end if
 
         ' AND A PLAN CAN BE `ok` WITH NOTHING TO ANSWER FROM. `nlq.plan`
@@ -345,7 +399,7 @@ library gdash_ask
 
         got = wire.complete(wire.ctx, plan.system, plan.user)
         if not got.ok then
-            return _stop("model", q, got.reason, { key: plan.key, as_of: stamps })
+            return _stop("model", q, got.reason, { key: plan.key, as_of: stamps, units_told: units_told })
         end if
 
         reading = nlq.interpret(plan, got.text, {})
@@ -360,14 +414,15 @@ library gdash_ask
             ' the data was wrong.
             return _stop("sql", q, "the generated query was refused",
                          { sql: reading.sql, problems: reading.problems, notes: notes,
-                           tables: reading.tables, key: reading.key, as_of: stamps })
+                           tables: reading.tables, key: reading.key, as_of: stamps,
+                           units_told: units_told })
         end if
 
         ran = gdash_store.select_across(attach, reading.sql)
         if not ran.ok then
             return _stop("run", q, ran.message,
                          { sql: reading.sql, notes: notes, tables: reading.tables,
-                           key: reading.key, as_of: stamps })
+                           key: reading.key, as_of: stamps, units_told: units_told })
         end if
 
         settled = nlq.settle(reading, ran.rows)
@@ -383,7 +438,8 @@ library gdash_ask
         return { ok: true, stage: "answered", question: q, message: "",
                  candidates: [], sql: reading.sql, problems: [], notes: notes,
                  rows: ran.rows, answer: settled, tables: reading.tables,
-                 key: reading.key, as_of: stamps, scaled: scaled }
+                 key: reading.key, as_of: stamps, scaled: scaled,
+                 units_told: units_told }
     end function
 
 

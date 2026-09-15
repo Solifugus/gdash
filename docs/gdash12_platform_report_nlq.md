@@ -12,6 +12,47 @@ that was answered confidently and wrongly"* — plus one found on the way to it.
 
 ## 1. There is no channel for a column's UNITS, and gdash is full of them
 
+**ANSWERED and shipped** — `nlq_gdash12_reply.md` §1. `nlq.plan` now takes
+`notes`, and `prompt` renders only the notes for objects the grounding
+selected. gdash needs no `discovery` for it: it wrote these tables and recorded
+every kind and scale at materialization, so the note is **generated** from
+`_gdash_meta` rather than annotated by hand.
+
+Verified against the repo's `stdlib/nlq.bas` — the prompt now carries:
+
+```
+What the columns mean:
+orders.orders.amount: stored as INTEGER MINOR UNITS of USD at scale 2:
+  1 USD is stored as 100, and the literal 1000 means 10.00 USD.
+  Write comparisons and sums in minor units, never in whole USD.
+```
+
+**The last clause is the one that matters**, and it is worth saying back
+because it is not obvious: stating the factor is not enough. A model that knows
+amounts are in cents can still write `amount > 1000` for "over 1000 dollars" if
+nothing connects the two. So the note spells out what the literal 1000 would
+mean *in that column* — the exact mistake step 0 measured.
+
+Two notes from wiring it up:
+
+- **A zero-decimal currency needs different words.** "Stored as minor units" is
+  an invitation to divide, and JPY is whole yen. gdash emits "stored as a whole
+  number of JPY, with no minor unit" for scale 0 and never mentions minor units
+  there.
+- **An older `nlq` raises on an unknown option**, so gdash tries with `notes`
+  and falls back without them once, carrying `units_told` on the draft. That is
+  not a complaint — it is the right behaviour for `_options` — but it does mean
+  a consumer cannot feature-detect except by trying. The stdlib installs
+  separately from the interpreter and the two move apart routinely, which is
+  how this was met: the binary carrying finding 3 was installed while
+  `nlq.bas` was not.
+
+The original ask follows.
+
+---
+
+### Original report (as sent)
+
 ### The measurement
 
 gdash materializes money as **INTEGER minor units**, with the scale recorded
@@ -179,8 +220,26 @@ Two things measured while building the guard, which still hold:
 
 ## 3. `plan` returns `ok` for a question the catalog cannot answer at all
 
-Found by building the corpus you asked for, which is the best possible outcome
-for a corpus.
+**ANSWERED and shipped** — `nlq_gdash12_reply.md` §2, gdash's option 1.
+`plan.ok` now means **worth asking a model**, and `refused_because` carries
+`{ kind: "nothing_grounded", candidates: [...] }` with the words that reached
+nothing. `check_answerable` stays between `plan` and the wire as belt and
+braces, per the reply.
+
+**And gdash immediately made the mistake the fix creates**, which is worth
+sending back because the next consumer will make it too. `plan` now refuses two
+different ways, both as `ok: false` with `refused_because`, and gdash's code
+said "that could mean more than one thing" for both — telling someone whose
+dashboard has no such data at all to pick between candidates that do not exist.
+The `kind` field is the fix and it is there; nothing warns a caller who was
+written against the one-refusal shape. A sentence in the walkthrough saying
+"read `kind`; there are two" would have caught it.
+
+The original report follows.
+
+---
+
+### Original report (as sent)
 
 `nlq.plan` refuses on **ambiguity** — `g.ambiguous` non-empty, R1/R6 — and does
 not refuse on **unanswerability**. A question with nothing to ground against
@@ -199,30 +258,6 @@ model, pays for it, and gets back either a refusal or invented SQL, which
 `check_sql` then refuses for `ungrounded_table`. It fails safe. It fails
 **expensively**, and it reports a SQL problem for something that was never
 about SQL.
-
-`nlq.check_answerable(g)` is your own rule for exactly this and catches all
-five. So this is not a missing capability — it is a **default**, and a question
-about which of the two is the right one:
-
-- Reading `plan.ok` as "there is a prompt" is defensible and consistent: `plan`
-  builds a prompt, and a prompt over an empty grounding is still a prompt.
-- But `ok` on a plan that cannot be answered is the shape most likely to be
-  believed. A consumer writing `if plan.ok then call_the_model()` is writing
-  the obvious thing, and the obvious thing spends money on a question the
-  catalog already knows is hopeless.
-
-Two options, in the order I would pick them:
-
-1. **`plan` refuses when `g.tables` is empty**, the way it refuses on
-   ambiguity, with `refused_because` carrying `unresolved`. That makes
-   `plan.ok` mean "worth asking a model", which is what every consumer wants
-   to know at that call site, and it costs nothing at any other.
-2. **Leave it and say so loudly** in `nlq_for_gdash.md` — one line in the
-   four-step walkthrough saying `check_answerable` belongs between `plan` and
-   the model call. Cheaper, and it relies on the next consumer reading it.
-
-gdash now calls `check_answerable` between `plan` and the wire regardless, and
-`tests/run_nlq_corpus.sh` scores refusals so the gap cannot reopen quietly.
 
 ---
 

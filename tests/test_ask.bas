@@ -85,6 +85,17 @@ program main(args)
                            model_double.saying("```sql" + chr(10) + "select count(*) as n from orders.orders" + chr(10) + "```"), {})
     s = gdash_test.ok(s, fenced.ok, "a fenced reply is still a query")
 
+    ' --- was the model told what the integers mean? -------------------------
+    '
+    ' `units_told` is false when the installed `nlq` is too old to accept
+    ' `notes`, which is a real state: the stdlib installs separately from the
+    ' interpreter and the two move apart routinely. It must NOT be silent --
+    ' the whole hazard is a confident wrong number, and "the model was not told
+    ' the units" is exactly the context a reviewer needs.
+    s = gdash_test.ok(s, good.units_told or not good.units_told, "a draft carries whether the model was told the units")
+    s = gdash_test.ok(s, not is_unknown(good.units_told), "and it is always present, never unknown")
+    s = gdash_test.ok(s, not is_unknown(cold.units_told), "including on a draft that stopped before planning")
+
     ' --- THE FAILURE THAT STARTED THIS PHASE -------------------------------
     '
     ' Step 0 measured this against the shipped library: the question is about
@@ -105,6 +116,31 @@ program main(args)
                           model_double.saying("select count(*) as n from orders.orders where amount > 100000"), {})
     s = gdash_test.eq(s, string(right.answer.value), "2", "the correct query returns the true answer")
     s = gdash_test.contains_text(s, note_at(right.notes, 0).means, "1,000.00", "and is restated as well, not waved through")
+
+    ' --- two refusals, two different things to say -------------------------
+    '
+    ' `nlq.plan` refuses on AMBIGUITY and -- since 2026-09-14, at gdash's own
+    ' request -- on NOTHING GROUNDED. Both arrive as `ok: false` with
+    ' `refused_because`, so the KIND has to be read. Telling someone "that
+    ' could mean more than one thing" when the dashboard has no such data at
+    ' all sends them looking for a disambiguation that does not exist.
+    '
+    ' gdash reported this shape to the platform and then made exactly that
+    ' mistake against the fixed library the first time it ran. Tested here on
+    ' synthetic plan values rather than through the library, so the assertion
+    ' holds whichever version is installed.
+    amb = { ok: false, refused_because: [{ kind: "ambiguous_object", candidates: ["a.b", "c.d"], why: "two tables" }] }
+    s = gdash_test.contains_text(s, gdash_ask._refusal_words(amb), "more than one thing", "an ambiguity reads as an ambiguity")
+
+    none_g = { ok: false, refused_because: [{ kind: "nothing_grounded", candidates: ["share", "price"], why: "matched nothing" }] }
+    words = gdash_ask._refusal_words(none_g)
+    s = gdash_test.contains_text(s, words, "no data that could answer", "a question that grounds nothing reads as that instead")
+    s = gdash_test.contains_text(s, words, "share, price", "and names the words that reached nothing")
+    s = gdash_test.ok(s, not contains(words, "more than one thing"), "and does not offer a choice that does not exist")
+
+    ' A refusal carrying no candidates must still say the right kind of thing.
+    bare_g = { ok: false, refused_because: [{ kind: "nothing_grounded", candidates: [], why: "" }] }
+    s = gdash_test.contains_text(s, gdash_ask._refusal_words(bare_g), "no data that could answer", "with or without the words")
 
     ' --- a question this dashboard cannot answer at all ---------------------
     '

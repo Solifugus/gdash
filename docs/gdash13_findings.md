@@ -181,3 +181,62 @@ mutation fails two assertions.
 
 `test_shadow.bas` did catch it, which is the only reason it was noticed — two
 suites over one behaviour, disagreeing, is worth more than either alone.
+
+## G13-9 — the units channel, and the clause that actually closes the failure
+
+`nlq.plan` now takes `notes` (`nlq_gdash12_reply.md` §1). gdash needs no
+`discovery` for it: it wrote these tables and recorded every kind and scale at
+materialization, so `gdash_nlq.prompt_notes` generates the note from
+`_gdash_meta` and the record's declared currency.
+
+**Stating the factor is not enough.** A model told "amounts are in cents" can
+still write `amount > 1000` for "over 1000 dollars", because nothing connects
+the two statements. The note therefore spells out the literal:
+
+```
+orders.orders.amount: stored as INTEGER MINOR UNITS of USD at scale 2:
+  1 USD is stored as 100, and the literal 1000 means 10.00 USD.
+  Write comparisons and sums in minor units, never in whole USD.
+```
+
+Verified reaching the prompt against the repo's `stdlib/nlq.bas`.
+
+A zero-decimal currency gets different words on purpose: "stored as minor
+units" is an invitation to divide, and JPY is whole yen. Scale 0 says "stored as
+a whole number of JPY, with no minor unit" and never mentions minor units.
+
+## G13-10 — gdash made the exact mistake the fix it asked for creates
+
+`plan` now refuses two different ways — ambiguity, and nothing grounded — both
+as `ok: false` with `refused_because`. gdash's code, written when there was one
+refusal, said **"that could mean more than one thing"** for both.
+
+So the first run against the fixed library told someone whose dashboard has no
+such data at all to choose between candidates that do not exist. Worse than the
+bug that was fixed, in the sense that the old failure was expensive and this one
+is misleading.
+
+`kind` is the discriminator and it was there; nothing warned a caller written
+against the one-refusal shape. `_refusal_words` now reads it, and is tested on
+synthetic plan values rather than through the library so the assertion holds
+whichever version is installed. Sent back as a suggested line in the
+walkthrough.
+
+## G13-11 — a consumer cannot feature-detect a library option except by trying
+
+An older `nlq` raises on an unknown option — correctly; that is what `_options`
+is for. But the stdlib installs separately from the interpreter and the two move
+apart routinely: the binary carrying the shadowing change was installed while
+`nlq.bas` was four days behind, which is how this was met.
+
+So gdash tries `plan` with `notes` and falls back without them **once**, and the
+draft carries `units_told`. The fallback is not silent: the CLI and the ask page
+both say the model was not told what the money columns mean, because a silent
+fallback would hide exactly the hazard the notes exist to close.
+
+## G13-12 — `nothing` is a keyword
+
+`nothing = false` is a parse error; SQL NULL maps to `nothing` in gBASIC. The
+error named the line, which is the good kind of failure. Recorded because the
+variable name is the obvious one to reach for and the word does not appear in
+gdash's own vocabulary anywhere else.

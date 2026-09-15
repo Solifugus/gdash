@@ -171,6 +171,19 @@ it no longer does (`nlq_gdash12_reply.md` §3). The premise assertion in
 premise is for. G13-8 has the account, including why leaving the wider guard in
 place would have been a defect rather than a leftover.
 
+### Also delivered after the platform answered
+
+- **The units channel** (`nlq_gdash12_reply.md` §1). `gdash_nlq.prompt_notes`
+  generates a per-column note from `_gdash_meta` and the record's currency, and
+  `gdash_ask` passes it to `nlq.plan`. The model is now told what the integers
+  mean **before** it writes, rather than the reader being told afterwards.
+  G13-9 has the note text and why its last clause is the load-bearing one.
+- **Two refusals, two messages** (§2). `plan` now refuses both for ambiguity
+  and for nothing-grounded, and gdash said the ambiguity words for both on its
+  first run — G13-10.
+- **A fallback for an older `nlq`**, with `units_told` on the draft so it is
+  never silent — G13-11.
+
 ### Owed to the maintainer
 
 Design §4 says money materializes as minor units with a per-column scale. It

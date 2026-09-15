@@ -787,6 +787,12 @@ program main(args)
         ' THE UNIT NOTES ARE THE POINT. A number in a money column is a number
         ' of cents, and a question about dollars that produced a plausible
         ' answer is the failure this whole feature was built around.
+        if not draft.units_told then
+            print("")
+            print("  NOTE: the installed nlq library is too old to be told what the money")
+            print("        columns mean, so the model wrote this query without knowing the")
+            print("        integers are minor units. Check the numbers below with care.")
+        end if
         if count(draft.notes) > 0 then
             print("")
             print("  check the numbers in that query:")

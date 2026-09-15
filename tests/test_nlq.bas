@@ -122,6 +122,44 @@ program main(args)
     s = gdash_test.eq(s, count(n2), 1, "and the column is still guarded")
     s = gdash_test.contains_text(s, note_at(n2, 0).means, "10.00", "restated as a plain decimal")
 
+    ' --- the note that reaches the model -----------------------------------
+    '
+    ' Step 0's failure was that NOTHING in the prompt said the integers were
+    ' cents. `nlq.plan` now takes `notes`; this is what gdash puts in them,
+    ' generated from `_gdash_meta` rather than annotated by hand.
+    usd = {}
+    usd["orders.orders.amount"] = { dataset: "orders", column: "amount", scale: 2, currency: "USD" }
+    pn = gdash_nlq.prompt_notes(usd)
+    s = gdash_test.eq(s, count(keys(pn)), 1, "a note per scaled column")
+    s = gdash_test.contains_text(s, string(pn["orders.orders.amount"]), "MINOR UNITS", "the note says how it is stored")
+    s = gdash_test.contains_text(s, string(pn["orders.orders.amount"]), "1 USD is stored as 100", "and states the factor")
+    ' THE CLAUSE THAT CLOSES THE MEASURED FAILURE. Knowing amounts are cents
+    ' is not enough on its own: the model still has to connect "1000 dollars"
+    ' to the literal it writes.
+    s = gdash_test.contains_text(s, string(pn["orders.orders.amount"]), "the literal 1000 means 10.00 USD", "and what the literal from step 0 would have meant")
+
+    ' A zero-decimal currency must NOT invite a division.
+    yen2 = {}
+    yen2["t.t.total"] = { dataset: "t", column: "total", scale: 0, currency: "JPY" }
+    yn = gdash_nlq.prompt_notes(yen2)
+    s = gdash_test.contains_text(s, string(yn["t.t.total"]), "whole number", "a zero-decimal currency is whole units")
+    s = gdash_test.contains_text(s, string(yn["t.t.total"]), "the literal 1000 means 1000 JPY", "where 1000 means 1000")
+    s = gdash_test.ok(s, not contains(string(yn["t.t.total"]), "MINOR UNITS"), "and is not described as minor units")
+
+    ' A scaled column with no declared currency still gets a note: the scale
+    ' is the part that makes a literal wrong.
+    fx2 = {}
+    fx2["fx.fx.px"] = { dataset: "fx", column: "px", scale: 4, currency: "" }
+    fn = gdash_nlq.prompt_notes(fx2)
+    s = gdash_test.contains_text(s, string(fn["fx.fx.px"]), "scale 4", "an un-currencied scale is still stated")
+    s = gdash_test.contains_text(s, string(fn["fx.fx.px"]), "the literal 1000 means 0.1000", "with the literal restated at that scale")
+    ' "1 units is stored as 10000" is what the obvious phrasing gave here. A
+    ' note written to stop a model misreading a number must not read badly.
+    s = gdash_test.contains_text(s, string(fn["fx.fx.px"]), "a value of 1 is stored as 10000", "and reads as English without a currency to name")
+    s = gdash_test.ok(s, not contains(string(fn["fx.fx.px"]), "1 units is"), "not as \"1 units is\"")
+
+    s = gdash_test.eq(s, count(keys(gdash_nlq.prompt_notes({}))), 0, "a dashboard with no money columns needs no notes")
+
     exit(gdash_test.report(s))
 end program
 

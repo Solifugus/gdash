@@ -97,6 +97,66 @@ library gdash_nlq
         return out
     end function
 
+    ' --- telling the model what the integers mean --------------------------
+    '
+    ' THE CHANNEL GDASH ASKED FOR, AND GOT. Step 0 measured the failure this
+    ' closes: "how many orders were over 1000 dollars?" against a column
+    ' holding cents produced valid SQL, zero reported problems, and an answer
+    ' wrong by a factor of a hundred. Nothing in the prompt said the integers
+    ' were minor units -- `vocabulary` shows values and `exemplars` show
+    ' formats, and neither can say SCALE.
+    '
+    ' `nlq.plan` now takes `notes`, a map from object id to a sentence, and
+    ' renders only the notes for objects the grounding actually selected (the
+    ' budget is what that protects). gdash needs no `discovery` for this: it
+    ' wrote these tables and recorded every kind and scale at materialization,
+    ' so the note is generated rather than annotated by hand.
+    '
+    ' THE LAST CLAUSE IS THE ONE THAT MATTERS. Stating the factor is not
+    ' enough -- a model that knows amounts are in cents can still write
+    ' `amount > 1000` for "over 1000 dollars" if nothing connects the two. So
+    ' the note spells out what the literal 1000 would mean in that column,
+    ' which is the exact mistake that was measured.
+    function prompt_notes(scaled)
+        out = {}
+        for each key in keys(scaled)
+            sc = scaled[key]
+            out[key] = _note_text(sc)
+        next
+        return out
+    end function
+
+    function _note_text(sc)
+        unit = "whole units"
+        named = ""
+        if sc.currency != "" then
+            unit = sc.currency
+            named = " of " + sc.currency
+        end if
+        if sc.scale = 0 then
+            ' No minor unit at all. Saying "stored as minor units" here would
+            ' invite a division that must not happen -- JPY is whole yen.
+            return "stored as a whole number" + named + ", with no minor unit: the literal 1000 means 1000 " + unit + "."
+        end if
+        one = "1"
+        i = 0
+        while i < sc.scale
+            one = one + "0"
+            i += 1
+        end while
+        ' "1 units is stored as 10000" is what the obvious phrasing produced for
+        ' a column with no declared currency. A note meant to stop a model
+        ' misreading a number should not itself read badly.
+        whole = "a value of 1"
+        if sc.currency != "" then
+            whole = "1 " + sc.currency
+        end if
+        return ("stored as INTEGER MINOR UNITS" + named + " at scale " + string(sc.scale) +
+                ": " + whole + " is stored as " + one +
+                ", and the literal 1000 means " + gdash_format.minor_to_decimal("1000", sc.scale) + " " + unit +
+                ". Write comparisons and sums in minor units, never in whole " + unit + ".")
+    end function
+
     ' --- the unit guard ------------------------------------------------------
     '
     ' THE FAILURE THIS EXISTS FOR, measured at GDASH-12 step 0 against real
