@@ -240,3 +240,31 @@ fallback would hide exactly the hazard the notes exist to close.
 error named the line, which is the good kind of failure. Recorded because the
 variable name is the obvious one to reach for and the word does not appear in
 gdash's own vocabulary anywhere else.
+
+## G13-13 — the shadow guard refused this phase's own test fixture, correctly
+
+`run_old_nlq.sh` exists because the older-`nlq` fallback became unreachable the
+moment the platform shipped `notes`, and an untested fallback is worse than
+none: it is the path that runs on the day somebody's stdlib and interpreter have
+drifted apart, which gdash lived through for a day.
+
+The first version built the older library by writing it into a scratch copy of
+`src/`. gdash refused to start:
+
+```
+gdash: refusing to start -- a file in gdash's own module directory shadows a
+library gdash loads by name.
+  .../src/nlq.bas would be loaded as 'nlq' instead of the installed library.
+```
+
+Which is exactly right, and it did not care that the file was ours. **A library
+file beside the modules is a substitution; an older library on `GBASIC_PATH` is
+a deployment state.** The runner now uses the second, which is both what a real
+divergent install looks like and outside the guard's remit — and it asserts that
+the guard stays quiet for it, so the distinction is pinned rather than assumed.
+
+Measured while fixing it: `GBASIC_PATH` takes precedence over the installed
+stdlib, which is what makes the fixture possible at all.
+
+The fallback is verified by mutation: removing it fails six of the eight
+assertions, and gdash stops answering questions entirely on an older library.

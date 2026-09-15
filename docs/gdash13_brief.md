@@ -144,8 +144,9 @@ Delivered. `docs/gdash13_findings.md` has the detail.
   scale 0 in one dataset, rates at scale 4, a negative balance, ¥12, and
   $88,000,000.00.
 
-Suite: 35 suites, 0 failed — e2e 253, render 45, ask 104, store 55, format 58.
-ODBC 12 and FHS 22 re-run green.
+Suite: 36 suites, 0 failed — e2e 253, ask 112, render 45, store 55, format 58,
+nlq 51, shadow 22, old-nlq 8. ODBC 12 and FHS 22 re-run green, on the platform
+as installed after `make install` (interpreter and stdlib now agree).
 
 ### Deliberately not built
 
@@ -182,7 +183,11 @@ place would have been a defect rather than a leftover.
   and for nothing-grounded, and gdash said the ambiguity words for both on its
   first run — G13-10.
 - **A fallback for an older `nlq`**, with `units_told` on the draft so it is
-  never silent — G13-11.
+  never silent — G13-11 — and `tests/run_old_nlq.sh`, which builds a genuinely
+  older library (the installed one with a single line reverted, on
+  `GBASIC_PATH`) so that the fallback is exercised rather than merely present.
+  The first attempt at that fixture was refused by gdash's own shadow guard,
+  correctly — G13-13.
 
 ### Owed to the maintainer
 

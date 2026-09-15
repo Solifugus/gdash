@@ -109,6 +109,17 @@ if ! "$HERE/run_nlq_corpus.sh"; then
     failed=$((failed + 1))
 fi
 
+# gdash against an OLDER nlq than the one installed. The fallback that lets it
+# run there is otherwise unreachable now that the platform has the `notes`
+# option, and an untested fallback is worse than none -- it is the path that
+# runs on the day somebody's stdlib and interpreter have drifted apart, which
+# gdash has already lived through once.
+echo "--- older nlq ---"
+ran=$((ran + 1))
+if ! "$HERE/run_old_nlq.sh"; then
+    failed=$((failed + 1))
+fi
+
 # An end-to-end assertion whose needle also appears in the stylesheet or the
 # shim passes with the feature removed (G6-6). Eight did.
 echo "--- assertion audit ---"
