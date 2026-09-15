@@ -65,21 +65,30 @@ Found while establishing S0-1, and worth more attention than the thing that
 found it.
 
 **The first statement of this finding was wrong and has been corrected.** It
-said *"a file in the current working directory"*. The directory that actually
-wins is the one holding **the source file that issues the `load`**, searched
-**recursively**. Measured at `159bc30`, four placements of the same
-`chart.bas`:
+said *"a file in the current working directory"*. The directory that wins is the
+one holding **the source file that issues the `load`**.
 
-| where the stray file is | result |
-| --- | --- |
-| the process's working directory | stdlib wins |
-| beside the program | stdlib wins |
-| beside the library issuing `load chart` | **stray wins** |
-| three directories below it | **stray wins** |
+**And the rule then narrowed under us, which is the good kind of narrowing.**
+Measured at `159bc30`, a file at any depth below the loading file also won. That
+was reported; Matthew ruled on it; and as of the 2026-09-14 binary a library
+below the loading file is **not used, and named in a warning**:
 
-Narrower than reported in one direction, wider in the other — and the wider
-half is the one that matters, because a directory listing of `src/` does not
-show it.
+| where the stray file is | at 159bc30 | now |
+| --- | --- | --- |
+| the process's working directory | stdlib wins | unchanged |
+| beside the program | stdlib wins | unchanged |
+| beside the file issuing `load chart` | **stray wins** | **stray wins** |
+| any depth below it | **stray wins** | **not used, and named** |
+
+So the exposure is one directory, not a tree. The guard narrowed with it —
+`gdash_shadow` reads one directory and no longer walks — because refusing to
+start over a file the platform will never load is a denial of service on a
+harmless file.
+
+The beside case is unchanged and is the realistic one for gdash: every bare-name
+load lives in a module under `src/`, including the ones in the entry *programs*,
+which sit in that same directory. Measured: a stray beside a program that does
+its own bare load wins too, whatever the working directory is.
 
 ```
 warning: additional library 'chart' match ignored: /usr/local/share/gbasic/stdlib/chart.bas
@@ -111,10 +120,11 @@ itself because it is a later process holding the source credentials.
   in either direction. A library added to gdash without being added to the
   guard is a test failure rather than a silent hole.
 - `tests/run_shadow.sh` pins the **premise** before the guard — it plants a
-  `chart.bas` in a copy of `src/` and demonstrates that it beats the stdlib,
-  beside the modules and three directories down. If the platform ever changes
-  the rule, the suite reports that the guard is now unnecessary rather than
-  leaving it guarding against nothing.
+  `chart.bas` in a copy of `src/` and demonstrates what the platform does with
+  it. **This paid for itself within a day:** when the rule narrowed, the deep
+  case went red and named itself, rather than leaving the guard quietly
+  defending against nothing. It now pins the new rule in both directions —
+  beside wins, below does not, and gdash keeps running over a file below.
 - 34 in-process assertions, 17 across processes. Eight mutations, all caught
   legibly: dropping a name, removing the recursion, matching folders, matching
   substrings, dropping the path from the message, and unwiring each entry
@@ -134,7 +144,8 @@ filename can win: the platform's fallback scan of arbitrary `.bas` files for a
 matching `library` block runs **only** when nothing matched by name anywhere,
 and the stdlib always matches by name for a gdash that can run at all.
 
-Reported upstream in `gdash12_platform_report_nlq.md` §2, with the correction.
+Reported upstream in `gdash12_platform_report_nlq.md` §2, **answered and
+shipped** — see `nlq_gdash12_reply.md` §3.
 
 ### S0-3 — the money hazard is real, unaddressed, and silent
 

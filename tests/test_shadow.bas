@@ -79,18 +79,26 @@ program main(args)
     s = gdash_test.eq(s, at(hit, 0).name, "crypto", "named as the library it would replace")
     s = gdash_test.eq(s, at(hit, 0).path, flat + "/crypto.bas", "and the file that would do it")
 
-    ' Three directories down, which is the shape actually measured.
+    ' BELOW IS NOT BESIDE. gdash first measured that a chart.bas three
+    ' directories down also won, and guarded against it. The platform narrowed
+    ' the rule on 2026-09-14 -- a library below the loading file is not used,
+    ' and says so -- so this must NOT be reported any more. A refusal to start
+    ' over a file the platform will never load is a denial of service on a
+    ' harmless file, which is worse than no guard at all.
     deep = root + "/deep"
     made = gdash_paths.ensure_dir(deep + "/a/b/c")
     made = write_lib(deep + "/a/b/c/chart.bas", "chart")
+    made = write_lib(deep + "/vendor_one_level.bas", "notalibrary")
+    made = gdash_paths.ensure_dir(deep + "/vendor")
+    made = write_lib(deep + "/vendor/crypto.bas", "crypto")
     d = gdash_shadow.shadows_in(deep)
-    s = gdash_test.eq(s, count(d), 1, "a chart.bas three directories down is caught")
-    s = gdash_test.eq(s, at(d, 0).name, "chart", "named from the nested path")
+    s = gdash_test.eq(s, count(d), 0, "a file BELOW the directory is not a shadow, at one level or three")
 
-    ' Two of them: the second is not less urgent than the first.
+    ' Two of them, both beside: the second is not less urgent than the first.
+    made = write_lib(deep + "/chart.bas", "chart")
     made = write_lib(deep + "/web.bas", "web")
     d2 = gdash_shadow.shadows_in(deep)
-    s = gdash_test.eq(s, count(d2), 2, "both shadows are reported, not just the first")
+    s = gdash_test.eq(s, count(d2), 2, "both shadows beside the modules are reported, not just the first")
 
     ' A DIRECTORY named crypto.bas cannot be loaded as a library -- the
     ' platform matches regular files only -- so reporting it would be a false

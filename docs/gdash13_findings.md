@@ -133,3 +133,51 @@ An assertion that holds only because of where it sits in a file is an assertion
 whose meaning can change without anyone editing it. The first now uses a
 dashboard name nothing else touches; the second uses a root it owns. The file
 is now idempotent: three runs into the same directory, 104 assertions, green.
+
+## G13-8 — a guard that outlived its premise is not harmless
+
+`gdash_shadow` walked the module directory recursively, because at gbasic
+`159bc30` a `chart.bas` three directories below the loading file beat the
+stdlib. That was reported; Matthew ruled on it; and as of the 2026-09-14 binary
+a library below the loading file is **not used**, and is named in a warning
+rather than dropped in silence.
+
+For a few hours after that, gdash's guard was still refusing to start over files
+the platform would never have loaded. That is not a harmless leftover:
+
+- **It is a denial of service on a harmless file.** `src/vendor/web.bas` is a
+  directory layout somebody actually has. gdash would have refused to start,
+  citing a security risk that no longer existed.
+- **A guard that fires where nothing is wrong is how a guard gets switched
+  off.** The next person to meet a false refusal reaches for the flag that
+  disables it, and then the real case is unguarded too.
+
+So the narrowing was the work, not an optimisation. `shadows_in` reads one
+directory.
+
+The beside case is unchanged and is the one that matters for gdash: every
+bare-name load lives in a module under `src/` — including the ones in
+`gdash_server.bas` and the other entry **programs**, which sit in that same
+directory. Measured on the new binary: a stray beside a program that does its
+own bare load still wins, whatever the working directory is.
+
+### The premise assertion paid for itself in a day
+
+`tests/run_shadow.sh` asserted the platform's behaviour as well as gdash's,
+which was written down at the time as "if the platform ever changes this rule,
+gdash's suite reports that the guard is now unnecessary rather than leaving it
+guarding against nothing".
+
+It did exactly that: one red assertion, naming the deep case, on the first run
+after the rebuild. A suite that only tested gdash would have stayed green while
+the guard quietly became wrong.
+
+### And the runner did not catch the mutation that reintroduced it
+
+Reverting `shadows_in` to walk **one level** left `run_shadow.sh` green at
+20/20, because its nested fixture sat **two** levels down. One level is both the
+boundary and the realistic layout. It now plants at both depths, and the same
+mutation fails two assertions.
+
+`test_shadow.bas` did catch it, which is the only reason it was noticed — two
+suites over one behaviour, disagreeing, is worth more than either alone.

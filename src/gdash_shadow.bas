@@ -1,24 +1,38 @@
 ' gdash — the shadowing refusal.
 '
-' gdash loads seven libraries by bare name, and a bare name does not resolve
-' to the installed stdlib first. The platform searches the directory of the
-' SOURCE FILE ISSUING THE LOAD -- recursively, subdirectories included --
-' before it looks at GBASIC_PATH or the install tree. The first match wins and
-' the real library is the one reported "ignored", on stderr, as a warning:
+' gdash loads nine libraries by bare name, and a bare name does not resolve to
+' the installed stdlib first. The platform searches the directory of the SOURCE
+' FILE ISSUING THE LOAD before it looks at GBASIC_PATH or the install tree, and
+' a file sitting there WINS:
 '
-'   warning: additional library 'chart' match ignored:
-'            /usr/local/share/gbasic/stdlib/chart.bas
+'   warning: library 'crypto' resolved to src/crypto.bas;
+'            ALSO FOUND and not used: /usr/local/share/gbasic/stdlib/crypto.bas
 '
 ' A service's stderr goes to a log nobody is reading at the moment it matters,
-' so that notice is not a control. Measured at gbasic 159bc30: a chart.bas
-' three directories below the loading file won over the stdlib, with that one
-' line of warning and no other sign.
+' so that notice is not a control. `crypto` hashes every password and mints
+' every session secret; `web` is the server itself. A replacement for either is
+' not a bug to be found later.
 '
-' Every bare-name load in gdash lives in a module under src/ -- installed, the
-' libdir -- so one directory tree is the whole exposure, and it is a tree
-' gdash can look at before it does anything else. `crypto` hashes every
-' password and mints every session secret; `web` is the server itself. A
-' replacement for either is not a bug to be found later.
+' BESIDE, NOT BELOW -- and this narrowed under us, which is the good kind of
+' narrowing. gdash first measured (gbasic 159bc30) that a `chart.bas` THREE
+' DIRECTORIES BELOW the loading file also won, silently. That was reported;
+' Matthew ruled on it; and as of the rebuild on 2026-09-14 a library below the
+' loading file is not used and says so:
+'
+'   warning: library 'crypto' at src/vendor/deep/crypto.bas was NOT used: it is
+'            below the file that loaded it, not beside it.
+'
+' So this guard reads ONE DIRECTORY and no longer walks. It kept walking for a
+' few hours after the platform stopped needing it to, which was not harmless:
+' refusing to start over a file the platform will never load is a denial of
+' service on a harmless file, and a guard that fires where nothing is wrong is
+' how a guard gets switched off.
+'
+' Every bare-name load in gdash lives in a module under src/ -- the libdir once
+' installed -- including the ones in `gdash_server.bas` and the other entry
+' PROGRAMS, which sit in that same directory. Measured: a stray beside a
+' program that does its own bare load wins too, whatever the working directory
+' is. One directory is the whole exposure.
 '
 ' SCOPE, STATED. Only an exact `<name>.bas` is checked, because only an exact
 ' filename can win: the platform falls back to scanning arbitrary .bas files
@@ -40,48 +54,32 @@ library gdash_shadow
         return ["chart", "crypto", "ldap", "llm", "nlq", "odbc", "pg", "sqlite", "web"]
     end function
 
-    ' A depth cap, because this runs before gdash does anything and must not
-    ' be the thing that hangs. The platform's own search has no cap; it does
-    ' not need one for the reason this walk does not either -- a symlink loop
-    ' runs out of path length -- but a startup guard should not depend on that.
-    function _max_depth()
-        return 12
-    end function
-
-    ' Every `<name>.bas` under `dir`, at any depth, for the names gdash loads
-    ' bare. Returns `{ name, path }` records, deepest-first order unspecified:
-    ' the caller reports all of them, since a second one is not less urgent
-    ' than the first.
+    ' Every `<name>.bas` sitting IN `dir` -- not below it -- for the names
+    ' gdash loads bare. Returns `{ name, path }` records; the caller reports
+    ' all of them, since a second one is not less urgent than the first.
+    '
+    ' A subdirectory is not descended into, because the platform will not load
+    ' from one. See the header: this walked, then stopped needing to.
     function shadows_in(dir)
         found = []
         if not gdash_paths.path_exists(dir) then
             return found
         end if
         wanted = guarded_names()
-        pending = [{ path: dir, depth: 0 }]
-        at = 0
-        while at < count(pending)
-            here = pending[at]
-            at += 1
-            on error goto next
-            entries = list(here.path)
-            if error then
-                entries = []
-            end if
-            for each e in entries
-                if e.type = "folder" then
-                    if here.depth < _max_depth() then
-                        append(pending, { path: e.path, depth: here.depth + 1 })
+        on error goto next
+        entries = list(dir)
+        if error then
+            return found
+        end if
+        for each e in entries
+            if e.type != "folder" then
+                for each w in wanted
+                    if e.name = w + ".bas" then
+                        append(found, { name: w, path: e.path })
                     end if
-                else
-                    for each w in wanted
-                        if e.name = w + ".bas" then
-                            append(found, { name: w, path: e.path })
-                        end if
-                    next
-                end if
-            next
-        end while
+                next
+            end if
+        next
         return found
     end function
 
@@ -106,8 +104,8 @@ library gdash_shadow
             out = out + "  " + f.path + " would be loaded as '" + f.name
             out = out + "' instead of the installed library." + chr(10)
         next
-        out = out + "The platform searches the loading file's directory, recursively,"
-        out = out + " before the stdlib, and says so only as a warning on stderr." + chr(10)
+        out = out + "The platform searches the loading file's own directory before the"
+        out = out + " stdlib, and says so only as a warning on stderr." + chr(10)
         out = out + "Move or remove the file, then start gdash again."
         return out
     end function

@@ -162,6 +162,15 @@ ODBC 12 and FHS 22 re-run green.
 - A per-visual scale declaration in the record format. That is the maintainer's
   ruling to make; the brief says so.
 
+### Added after the platform answered
+
+`gdash_shadow` narrowed from a recursive walk to one directory, because the
+library-shadowing rule narrowed: beside the loading file still overrides, below
+it no longer does (`nlq_gdash12_reply.md` §3). The premise assertion in
+`tests/run_shadow.sh` went red naming the deep case, which is what asserting a
+premise is for. G13-8 has the account, including why leaving the wider guard in
+place would have been a defect rather than a leftover.
+
 ### Owed to the maintainer
 
 Design §4 says money materializes as minor units with a per-column scale. It

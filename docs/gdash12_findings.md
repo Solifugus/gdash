@@ -3,7 +3,14 @@
 Numbered from G12-1. The step-0 findings are in `gdash12_brief.md`; these are
 what building the integration turned up.
 
-## G12-1 — the shadowing rule is the LOADING FILE's directory, recursively
+## G12-1 — the shadowing rule is the LOADING FILE's own directory
+
+**Superseded in part, and that is the finding's best outcome.** What follows is
+what was measured at gbasic `159bc30` and reported. Matthew ruled on it, and as
+of the 2026-09-14 binary **a library below the loading file is no longer used**
+— it is named in a warning instead. The `beside` row is unchanged. `gdash_shadow`
+narrowed to one directory; see G13-8 for why that mattered rather than being
+merely tidy.
 
 S0-2 as first written said "a file in the current working directory". That is
 wrong, in both directions, and the correction matters both ways. Measured at
@@ -21,7 +28,7 @@ Narrower than reported (not any directory a caller happens to be in) and wider
 listing an inadequate review, and it is why `gdash_shadow` walks rather than
 lists.
 
-Corrected in `gdash12_platform_report_nlq.md` §2, since the maintainer may act
+Corrected in `gdash12_platform_report_nlq.md` §2 — and the maintainer did act
 on it.
 
 ## G12-2 — a guard cannot run before the load it guards

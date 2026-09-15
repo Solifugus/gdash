@@ -44,7 +44,15 @@ plant(){   # plant <path> <library-name>
     printf 'library %s\n    function marker()\n        return "SHADOW WON"\n    end function\nend library\n' "$2" > "$1"
 }
 
-echo "--- the premise: a stray file in the module directory wins over the stdlib ---"
+echo "--- the premise: BESIDE the loading file wins, BELOW it does not ---"
+#
+# This changed under gdash and the change is why the premise is asserted at all.
+# gdash measured (gbasic 159bc30) that a chart.bas three directories down beat
+# the stdlib, silently, and guarded against it. That was reported; Matthew ruled
+# on it; and as of the 2026-09-14 rebuild a library below the loading file is
+# not used and says so. The deep assertion went red on the next run, which is
+# the suite reporting a platform change rather than a gdash defect -- exactly
+# what asserting the premise is for.
 plant "$SRC/chart.bas" chart
 cat > "$SRC/premise_probe.bas" <<'EOF'
 program main(args)
@@ -55,12 +63,28 @@ EOF
 got="$(RUN "$SRC/premise_probe.bas" 2>/dev/null)"
 ok "a chart.bas beside the modules is loaded instead of the stdlib" "$got" "SHADOW WON"
 
-# And three directories down, which is the shape that makes a directory listing
-# an inadequate review.
+# Below it: NOT used, and the platform says so rather than dropping it in
+# silence. Both halves are asserted -- that the stray does not win, and that
+# the real library is what answered.
 rm -f "$SRC/chart.bas"
 plant "$SRC/vendor/a/b/chart.bas" chart
+got="$(RUN "$SRC/premise_probe.bas" 2>"$SCRATCH/below.err")"
+if [[ "$got" == "SHADOW WON" ]]; then
+    echo "  FAIL a file three directories down must NOT be used any more"; fail=$((fail+1))
+else
+    echo "  ok   a file three directories down is not used"; pass=$((pass+1))
+fi
+has "and the platform says it was not used, rather than dropping it silently" "was NOT used" "$SCRATCH/below.err"
+
+# One level down is the same answer. The rule is beside, not near.
+rm -rf "$SRC/vendor"
+plant "$SRC/vendor/chart.bas" chart
 got="$(RUN "$SRC/premise_probe.bas" 2>/dev/null)"
-ok "and so is one three directories down" "$got" "SHADOW WON"
+if [[ "$got" == "SHADOW WON" ]]; then
+    echo "  FAIL one directory down must not be used either"; fail=$((fail+1))
+else
+    echo "  ok   one directory down is not used either"; pass=$((pass+1))
+fi
 rm -f "$SRC/premise_probe.bas"
 rm -rf "$SRC/vendor"
 
@@ -97,15 +121,35 @@ RUN "$SRC/gdash_refresh_child.bas" "$SCRATCH/no-such-job" >/dev/null 2>"$SCRATCH
 ok "the refresh child exits 2" "$?" "2"
 has "the refresh child refuses before reading its job" "refusing to start" "$SCRATCH/child.err"
 
-echo "--- and nested, which is what makes the walk recursive ---"
+echo "--- and a file BELOW the module directory is not refused ---"
+#
+# The guard used to walk, and kept walking for a few hours after the platform
+# stopped needing it to. Refusing to start over a file the platform will never
+# load is a denial of service on a harmless file, and a guard that fires where
+# nothing is wrong is how a guard gets switched off.
 rm -f "$SRC/crypto.bas"
-plant "$SRC/vendor/deep/web.bas" web
-RUN "$SRC/gdash_cli.bas" --root "$ROOT" list >/dev/null 2>"$SCRATCH/nested.err"
-ok "a nested web.bas is refused too" "$?" "2"
-has "and the nested path is named in full" "$SRC/vendor/deep/web.bas" "$SCRATCH/nested.err"
-
-echo "--- removing it lets gdash start again ---"
+# ONE LEVEL is the boundary and the realistic one -- `src/vendor/web.bas` is a
+# directory layout somebody actually has. A guard that walks only one level
+# passes a two-level assertion, which is how the first version of this check
+# failed to notice a mutation that reintroduced the false refusal.
+for where in "$SRC/vendor/web.bas" "$SRC/vendor/deep/web.bas"; do
+    rm -rf "$SRC/vendor"
+    plant "$where" web
+    RUN "$SRC/gdash_cli.bas" --root "$ROOT" list >/dev/null 2>"$SCRATCH/nested.err"
+    ok "gdash still starts with a web.bas at ${where#$SRC/}" "$?" "0"
+    if grep -q "refusing to start" "$SCRATCH/nested.err"; then
+        echo "  FAIL gdash refused over a file the platform would not have loaded: $where"; fail=$((fail+1))
+    else
+        echo "  ok   and nothing is refused over it"; pass=$((pass+1))
+    fi
+done
 rm -rf "$SRC/vendor"
+
+echo "--- removing a real shadow lets gdash start again ---"
+plant "$SRC/sqlite.bas" sqlite
+RUN "$SRC/gdash_cli.bas" --root "$ROOT" list >/dev/null 2>"$SCRATCH/again1.err"
+ok "a shadow beside the modules still stops it" "$?" "2"
+rm -f "$SRC/sqlite.bas"
 RUN "$SRC/gdash_cli.bas" --root "$ROOT" list >/dev/null 2>"$SCRATCH/again.err"
 ok "gdash starts once the file is gone" "$?" "0"
 
