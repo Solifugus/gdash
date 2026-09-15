@@ -225,6 +225,155 @@ able to do quickly and provably.
 
 ---
 
+## 3A. Provisioning a tenant — smaller than it looks
+
+A new tenant directory is **nearly empty**, because gdash already treats almost
+every configuration file as optional with a sensible default:
+
+| file | absent means |
+|---|---|
+| `etc/connections.json` | no source profiles — every dataset fails by name, which is the right message |
+| `etc/models.json` | no model — `gdash ask` says so and names the file |
+| `etc/auth.json` | local accounts only, which is the documented default |
+| `etc/theme.json` | the built-in theme |
+| `etc/secret` | **minted on first use**, under a lock |
+| `lib/dashboards/` | an empty index page, correctly |
+
+So provisioning is: make five directories, create a first admin, write one
+registry entry. Everything else is the tenant's to add later. That is a small
+command, not a subsystem.
+
+**The order matters, and it is the order gdash already uses elsewhere.** Create
+the directories, create the admin, and write the **registry entry last** —
+because the registry is what makes a tenant resolvable, a half-created tenant is
+simply unreachable rather than half-open. That is the same shape as publish:
+write the snapshot, then rename the pointer.
+
+**Code, not a copied skeleton.** A template directory is data, and data drifts:
+a file that becomes required in a later version will not be in a template
+written against an earlier one. A `gdash tenant create` that *builds* what a
+tenant needs is versioned and testable in the way the rest of gdash is. An
+optional overlay on top — "every tenant starts with our sample dashboard and our
+theme" — is worth having and is a different thing from the skeleton itself.
+
+**The CLI is the API.** An onboarding site — yours, serving several products —
+should call `gdash tenant create` rather than write gdash's files itself. This is
+the argument gdash already makes about `gdash_store` being the only staging-store
+access: a second writer is a second source of truth about a format that will
+change. A remote onboarding service wants a small admin endpoint in front of the
+same code, never direct filesystem access.
+
+**Stamp a format version at creation.** With one root this never came up; with
+hundreds, an upgrade has to migrate every one of them. `{"format": 1, "created":
+...}` per tenant costs nothing now and is expensive to retrofit, and it is what
+lets `gdash tenant migrate --all` know what it is looking at.
+
+## 3B. Scale, in the two directions it goes
+
+### One tenant's data — there is a real ceiling, and it is a wall not a slope
+
+A refresh fetches the whole result set into memory (`got.rows`), plans the
+columns from it, materializes it into a staging file, and renames that over the
+live one. Three consequences, none of them subtle:
+
+- **A dataset is bounded by the refresh child's RAM.** Not by disk.
+- **There is no incremental refresh.** Every refresh rewrites the whole dataset.
+- **Eleven datasets per dashboard**, because a visual query attaches every
+  sibling and SQLite attaches ten databases beside the one being queried. Already
+  refused at load rather than at render.
+
+This suits what gdash is for — aggregates and summaries, not raw event logs —
+and it should be said out loud to a tenant before they point a dataset at a
+fifty-million-row table. It is also the most likely first thing a real customer
+hits, which makes it worth a measurement and a documented number rather than a
+shrug.
+
+### Many tenants — the easy direction
+
+Requests are stateless and hold nothing between them, so more tenants means more
+requests, not more state. The server scales the way any stateless web
+application does. The registry lookup is one small file read per request, in a
+request that already reads several.
+
+The scheduler is the exception, and it is the same problem named in §3B above:
+it walks one root and blocks on each refresh.
+
+## 3C. More than one server
+
+### Partition first. It is much simpler and it is available immediately.
+
+Because a tenant is a self-contained directory that shares nothing, horizontal
+scale does not need a distributed anything:
+
+```
+proxy (routes by subdomain)
+   acme.example.com   -> server 1   /srv/gdash/acme
+   globex.example.com -> server 1   /srv/gdash/globex
+   initech.example.com-> server 2   /srv/gdash/initech
+```
+
+Each server runs one gdash and one scheduler, and owns a set of tenants
+outright. Moving a tenant is: stop its scheduler, rsync the directory, repoint
+the proxy, start. No shared filesystem, no distributed locks, no consistency
+questions, no split-brain.
+
+This is a stronger position than most applications get to start from, and it is
+a direct consequence of the tenant-is-a-directory decision. **I would do this
+first and treat shared storage as a later requirement rather than an
+architecture.**
+
+### Shared disk — when you need it, and the three things to watch
+
+Shared storage buys one thing partitioning does not: **any server can serve any
+tenant**, which is what failover and not-managing-placement need.
+
+gdash is unusually well suited to it. Its coordination is a single atomic
+`rename` plus files that other processes poll — the design already assumes
+participants that share nothing but a filesystem. And the whole codebase takes a
+file lock in exactly **two** places: minting the CSRF secret, and a dataset
+refresh.
+
+Three things to watch, in the order I would test them:
+
+1. **File locking over a network filesystem is the classic hazard**, and gdash
+   has only two sites to reason about. Mint the secret at provisioning time and
+   one of them disappears. The other degrades well: if two servers both refresh
+   a dataset, the loser's work is discarded by an atomic rename, so the failure
+   is *duplicated effort*, not corruption. That is a good position to be in, and
+   it should be measured rather than assumed.
+
+2. **SQLite on a network filesystem** is conventionally discouraged, and the
+   reason is concurrent writers contending on POSIX locks over one file. gdash
+   does not do that: writers write a *staging* file and rename, and as of
+   GDASH-13 every reader attaches `mode=ro`. Worth testing `immutable=1` for
+   dataset reads, which skips SQLite's locking entirely and is arguably *true*
+   under a rename-swap model — an opened file keeps its inode when a rename
+   replaces the directory entry.
+
+3. **`run/` is the directory that actually forces the decision.** Sessions live
+   there, so either it is shared or the proxy pins a viewer to one server. The
+   login throttle lives there too, and per-server throttling means three free
+   attempts *per server* — a dilution worth naming rather than discovering.
+
+### The rule that makes shared disk easy: one writer per tenant
+
+Even on shared storage, let exactly one server be the **writer** for a given
+tenant — its refreshes and publishes — while any server may read. The scheduler
+is already a separate process, so this is a placement decision rather than new
+code, and it removes almost all of the locking question rather than answering it.
+
+The operations document already sorts gdash's five directories by whether they
+need backing up, and that classification maps almost exactly onto what needs to
+be shared:
+
+| | | shared? |
+|---|---|---|
+| `etc/` | configuration, credentials | yes — small, rarely written |
+| `lib/` | dashboards, snapshots | yes — this is the durable data |
+| `cache/` | staged datasets | **could be local**: it is disposable and refetches, at the cost of each server refreshing independently |
+| `log/` | audit | shared, or shipped off the box |
+| `run/` | sessions, throttle | yes, or pin viewers to a server |
+
 ## 4. What I would insist on
 
 1. **Unknown host refuses.** No default tenant, ever, in any code path.
