@@ -1,0 +1,9 @@
+{
+  "columns": ["account", "holder", "usd_value", "jpy_value"],
+  "rows": [
+    ["ACC-0001", "Okonjo Holdings",  "1250750.25", "430000"],
+    ["ACC-0002", "Lindqvist Trust",  "-90425.10",  "12"],
+    ["ACC-0003", "Rivera Pension",   "0.01",       "0"],
+    ["ACC-0004", "Adeyemi Ventures", "88000000.00", "1250000000"]
+  ]
+}

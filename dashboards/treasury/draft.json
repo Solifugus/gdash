@@ -1,0 +1,55 @@
+{
+  "format": 1,
+  "name": "treasury",
+  "title": "Treasury",
+  "datasets": {
+    "positions": {
+      "profile": "core_banking",
+      "refresh": "manual",
+      "sql": "select account, holder, usd_value, jpy_value from core.positions",
+      "columns": {
+        "usd_value": { "type": "money", "scale": 2, "currency": "USD" },
+        "jpy_value": { "type": "money", "scale": 0, "currency": "JPY" }
+      }
+    },
+    "ledger": {
+      "profile": "core_banking_ledger",
+      "refresh": "manual",
+      "sql": "select account, month, amount from core.ledger",
+      "columns": {
+        "amount": { "type": "money", "scale": 2, "currency": "USD" }
+      }
+    },
+    "fx": {
+      "profile": "rates",
+      "refresh": "manual",
+      "sql": "select pair, asof, rate from core.fx",
+      "columns": {
+        "rate": { "type": "money", "scale": 4 }
+      }
+    }
+  },
+  "params": {},
+  "visuals": {
+    "positions_table": {
+      "dataset": "positions",
+      "sql": "select account, holder, usd_value, jpy_value from positions order by account",
+      "encoding": {
+        "mark": "table",
+        "title": "Positions",
+        "formats": {
+          "usd_value": { "name": "currency", "currency": "USD" },
+          "jpy_value": { "name": "currency", "currency": "JPY" }
+        }
+      }
+    },
+    "monthly": {
+      "dataset": "ledger",
+      "sql": "select month, sum(amount) as amount from ledger group by month order by month",
+      "encoding": { "mark": "bar", "x": "month", "y": "amount", "format": "currency", "currency": "USD", "title": "Net movement" }
+    }
+  },
+  "tabs": [
+    { "name": "Treasury", "layout": { "vert": [ { "visual": "positions_table" }, { "visual": "monthly" } ] } }
+  ]
+}
