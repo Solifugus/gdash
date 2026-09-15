@@ -310,6 +310,10 @@ Each is a place where implementation and `gdash_design.md` have diverged, or
 where the design document is silent on something now built. A phase may report
 these; it may not edit either side to agree.
 
+**`gdash_design_edits_owed.md` is the working checklist**: seven corrections
+with the replacement sentence written out and the current text quoted verbatim,
+plus the four that need a decision before there is a sentence to write.
+
 - **§5's SSE sentence** names a carrier gdash no longer uses. Wrong in
   mechanism, right in principle (GDASH-11).
 - **Whether publish should carry the draft's data across** (G11-11). §7
