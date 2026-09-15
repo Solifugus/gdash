@@ -374,6 +374,112 @@ be shared:
 | `log/` | audit | shared, or shipped off the box |
 | `run/` | sessions, throttle | yes, or pin viewers to a server |
 
+## 3D. Ruling: failover is not a day-one requirement
+
+**Decided 2026-09-15.** Reboots and downtime are acceptable, though not
+desirable. Uptime work is expected later and is not an immediate priority.
+
+This is the single most simplifying decision available, and it should be
+recorded as a decision rather than left as a default.
+
+### What it removes from scope entirely
+
+Everything in §3C about shared storage. Not deferred — **removed**, until
+uptime becomes a requirement:
+
+- shared disk, and the network-filesystem question with it
+- SQLite over NFS, and the `immutable=1` investigation
+- distributed locking, and the two `with lock` sites as a cross-server concern
+- sharing `run/`, or configuring sticky sessions at the proxy
+- login-throttle dilution across servers
+- split-brain, close-to-open consistency windows, and placement failover
+
+A tenant lives on exactly one server, on local disk. **One writer per tenant
+stops being a rule to enforce and becomes a fact of the layout.**
+
+### What it does NOT remove
+
+- **Backups.** Downtime is acceptable; data loss is not, and the two are
+  separate promises. Per-tenant `tar` of one directory, with a *tested* restore
+  — the FHS suite already exercises backup, destroy and restore at real paths,
+  and extends per-tenant without redesign.
+- **Knowing a server is down.** Tolerating downtime is not the same as not
+  noticing it. Monitoring is now load-bearing in a way it would not be under
+  failover, because a human is the failover.
+- **A fast restore path.** If a box is lost, `gdash tenant import` from a backup
+  onto another box is the recovery, so it wants to exist and be exercised before
+  it is needed rather than written during an outage.
+- **G8-7, which is now the priority it was not before.** The systemd units have
+  been `systemd-analyze verify`'d and **never started**. If the operating model
+  is "we restart things and that is fine", the restart mechanism being untested
+  is the weakest link in the plan. Planned downtime is only cheap if the restart
+  is reliable. Operations §7's drain promise is tested (`run_drain.sh`); the
+  units around it are not.
+
+### One consequence worth stating out loud
+
+Sessions live in `run/`, which under FHS is `/run` — tmpfs, cleared on reboot,
+and the operations document calls that correct. So **a reboot signs everyone
+out.** Under this ruling that is acceptable, and it should be a sentence a
+tenant has read rather than something they discover. If it later becomes
+unacceptable, it is a path change, not a redesign.
+
+## 3E. The scheduler, answered with a measurement rather than a rework
+
+§3B named the scheduler as the one real unknown: it walks one root and blocks on
+each refresh, so one tenant's slow source stalls the rest. Under this ruling
+there is a cheap answer that needs no new code.
+
+**Measured on this machine (2026-09-15):**
+
+```
+idle scheduler process      4.1 MB RSS, single-threaded
+server, 4 workers          ~75 MB RSS total (supervisor + 5 processes)
+```
+
+The server is one process tree serving every tenant, and its cost does not grow
+with tenant count — it holds nothing between requests. The scheduler is 4 MB
+and sleeps.
+
+So: **one scheduler process per tenant, as a systemd template unit**
+(`gdash-scheduler@acme.service`), which is exactly what template units are for.
+
+| tenants on a box | scheduler memory | with the server |
+|---|---|---|
+| 20 | ~82 MB | ~160 MB |
+| 100 | ~410 MB | ~490 MB |
+| 200 | ~820 MB | ~900 MB |
+
+That carries to a few hundred tenants per box on ordinary hardware, and it gives
+**better isolation than the rework would**: separate processes cannot stall each
+other at all, where a shared pool would need fairness logic to approximate it.
+
+**The trade-off, stated rather than glossed.** A single scheduler serialized
+refreshes for free, because it blocks on `process.wait`. N schedulers do not:
+up to N refresh children can run at once, and a refresh child holds its entire
+result set in memory (§3B). The cost model therefore moves from *scheduler
+count* to *concurrent refresh count*, and that is the thing to bound — a global
+cap on refresh children, or a deliberate decision to size the box for the worst
+simultaneous case. This is a smaller and better-understood problem than
+scheduler fairness, and it is the one measurement I would take before opening
+the door to real tenants.
+
+## 3F. Keeping HA cheap to add later
+
+Deferring uptime work costs nothing later **provided four things stay true**.
+All four are true today; none requires effort to preserve, only attention.
+
+1. **No cross-request state in the process.** There is no program global in
+   `src/` today. An in-memory cache with a lifetime longer than a request is the
+   one change that would make both HA *and* partitioning materially harder.
+2. **The filesystem stays the only coordination mechanism.** Atomic rename plus
+   polled files is what makes participants that share nothing work at all.
+3. **`run/` stays genuinely disposable.** If sessions must survive a reboot
+   later, that should remain a path change rather than a redesign.
+4. **One writer per tenant stays an invariant**, even while the layout makes it
+   automatic. Written down now, shared storage later is a placement change; left
+   implicit, it becomes a locking project.
+
 ## 4. What I would insist on
 
 1. **Unknown host refuses.** No default tenant, ever, in any code path.
