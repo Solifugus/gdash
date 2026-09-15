@@ -655,6 +655,46 @@ curl -s -o /dev/null -b "$jarC" -c "$jarC" --max-time 10 -X POST -d "csrf=$tokC&
 code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarC" --max-time 10 "http://127.0.0.1:$PORT/d/team")"
 ok "an admin needs no group" "$code" "200"
 
+echo "--- money that is not dollars, over HTTP ---"
+#
+# Every money figure gdash rendered for thirteen phases was US dollars at scale
+# 2, because every fixture was. `treasury` is a banking-shaped dashboard --
+# USD at scale 2 and JPY at scale 0 in ONE dataset, as a multi-currency
+# position report is, plus rates at scale 4 -- and it is here so that "money
+# that is not dollars" is something the suite renders on every run rather than
+# something nobody tried.
+mkdir -p "$ROOT/lib/dashboards/treasury"
+cp dashboards/treasury/draft.json "$ROOT/lib/dashboards/treasury/draft.json"
+python3 - "$ROOT" <<'PYEOF'
+import json,sys
+r=sys.argv[1]
+c=json.load(open(r+'/etc/connections.json'))
+c['core_banking']        = {"kind":"fixture","path":"fixtures/bank_positions.json"}
+c['core_banking_ledger'] = {"kind":"fixture","path":"fixtures/bank_ledger.json"}
+c['rates']               = {"kind":"fixture","path":"fixtures/bank_fx.json"}
+json.dump(c, open(r+'/etc/connections.json','w'), indent=2)
+PYEOF
+"$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh treasury >/dev/null 2>&1
+ok "the treasury dashboard refreshes" "$?" "0"
+
+# Fetched as the admin: `treasury` does not opt into open access, and a
+# banking dashboard is exactly the kind that should not.
+tre="$(curl -s -b "$jarC" --max-time 10 "http://127.0.0.1:$PORT/d/treasury")"
+# THE DEFECT, AS A PAGE. Every yen figure used to render at the dollar scale:
+# a hundred times small, in a table that looked entirely normal.
+has "$tre" '$1,250,750.25' "the dollar column renders at its own scale"
+has "$tre" '-$90,425.10' "including a negative balance"
+has "$tre" "¥430,000" "and the yen column renders at ITS scale"
+has "$tre" "¥12" "a balance of twelve yen is twelve yen"
+hasnt "$tre" "¥4,300" "and not four thousand three hundred, which is what one shared scale made of it"
+# The yen sign is ONE codepoint. It shipped as the two UTF-8 bytes of one,
+# handed to chr(), so every non-dollar figure read Â¥ / Â£ / â‚¬.
+hasnt "$tre" "Â¥" "the yen sign is not double-encoded"
+# A visual over `ledger` alone used to refuse outright, because `positions`
+# was attached and its scales disagreed.
+has "$tre" "<svg" "a chart over a single-currency dataset still draws"
+hasnt "$tre" "disagree on scale" "and is not disabled by a sibling it never touches"
+
 echo "--- CSRF on a state-changing route ---"
 code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarA" --max-time 10 -X POST "http://127.0.0.1:$PORT/d/team/refresh")"
 ok "a refresh without a CSRF token is refused" "$code" "400"

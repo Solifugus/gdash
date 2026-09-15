@@ -124,3 +124,52 @@ does not say what the RENDERER does when one result set spans two scales, and
 the answer it has been giving is "assume 2". This phase makes it refuse
 instead. If the intended answer was something else — a per-visual scale
 declaration, say — that is the maintainer's ruling and this is the finding.
+
+---
+
+## DONE
+
+Delivered. `docs/gdash13_findings.md` has the detail.
+
+- **`_symbol` takes codepoints.** `¥`, `£`, `€` are one character each, which
+  the suite asserts with `len` rather than by spelling the bytes back.
+- **Scale is per column.** `gdash_render.scale_of(cols, column)`: the column's
+  own scale, else the shared scale when every money column in reach agrees,
+  else a refusal naming the column and saying what to change.
+- **`money_columns` records conflict** instead of letting `main` win a
+  column-name collision — a reversal of a tested decision, recorded in G13-5.
+- **Promotion checks before it formats**, and says why when it declines.
+- **`dashboards/treasury/draft.json` and three `bank_*` fixtures are
+  permanent**, rendered over HTTP on every run: USD at scale 2 and JPY at
+  scale 0 in one dataset, rates at scale 4, a negative balance, ¥12, and
+  $88,000,000.00.
+
+Suite: 35 suites, 0 failed — e2e 253, render 45, ask 104, store 55, format 58.
+ODBC 12 and FHS 22 re-run green.
+
+### Deliberately not built
+
+- **A per-row currency.** Real core banking stores `amount` beside
+  `currency_code` and lets scale vary by row; gdash's model is one scale per
+  column and cannot express it. The fixture uses one column per currency, which
+  is what a position report does anyway. Naming the limitation was the
+  deliverable.
+- Currency conversion or any arithmetic across currencies. `fx` is in the
+  fixture as a four-decimal non-currency money column, not as a rate anyone
+  applies.
+- Symbols beyond the four. `CHF 1,234.00` is correct and unambiguous for the
+  other 174.
+- A per-visual scale declaration in the record format. That is the maintainer's
+  ruling to make; the brief says so.
+
+### Owed to the maintainer
+
+Design §4 says money materializes as minor units with a per-column scale. It
+does not say what the **renderer** does when one result set spans two scales,
+and the answer it had been giving was "assume 2". It now refuses. If the
+intended answer was a per-visual scale declaration, that is a record-format
+change and a ruling, not a phase's to make.
+
+The same sentence covers G13-5: "the primary wins a column-name collision" was
+a decision with a passing test, and this phase reversed it on the grounds that
+it can only be silently wrong. Both are stated rather than assumed.

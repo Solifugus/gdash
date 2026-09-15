@@ -66,5 +66,108 @@ program main(args)
     s = gdash_test.ok(s, not contains(html, "<script>"), "no raw script tag survives")
     s = gdash_test.contains_text(s, html, "selected", "current value is selected")
 
+    ' --- money that is not dollars (GDASH-13) -------------------------------
+    '
+    ' Every money assertion above this line is USD at scale 2, in a dashboard
+    ' whose datasets all agree on that scale. That is why four defects lived
+    ' here for thirteen phases. A multi-currency position report -- USD at
+    ' scale 2 and JPY at scale 0, in ONE dataset, which is what a position
+    ' report is -- is the shape that finds them.
+    posp = root + "/positions.db"
+    pcols = ["account", "usd_value", "jpy_value"]
+    prows = [["ACC-1", "1250750.25", "430000"], ["ACC-2", "-90425.10", "12"]]
+    pplan = gdash_store.plan_columns(pcols, prows, { usd_value: { type: "money", scale: 2 },
+                                                    jpy_value: { type: "money", scale: 0 } })
+    pm = gdash_store.materialize(posp, "positions", pplan, prows)
+    s = gdash_test.ok(s, pm.ok, "a two-currency dataset materializes")
+
+    scales = gdash_render.money_scales(posp, {})
+    s = gdash_test.eq(s, scales["usd_value"], 2, "the dollar column keeps its own scale")
+    s = gdash_test.eq(s, scales["jpy_value"], 0, "and the yen column keeps its own, which is zero")
+    s = gdash_test.eq(s, gdash_render.money_scale(posp, {}), -2, "there is no single scale for this dataset, and saying so is the point")
+
+    ' scale_of is the function the renderer actually consults.
+    s = gdash_test.eq(s, gdash_render.scale_of(scales, "jpy_value"), 0, "a money column resolves to its own scale")
+    s = gdash_test.eq(s, gdash_render.scale_of(scales, "unknown_alias"), -2, "an aliased column over disagreeing scales does not resolve")
+    s = gdash_test.eq(s, gdash_render.scale_of({}, "anything"), -1, "and no money at all is a different answer from ambiguity")
+    s = gdash_test.eq(s, gdash_render.scale_of({ amount: 2, other: 2 }, "total"), 2, "where every money column agrees, an alias still resolves")
+
+    postab = { dataset: "positions",
+               sql: "select account, usd_value, jpy_value from positions order by account",
+               encoding: { mark: "table", title: "Positions",
+                           formats: { usd_value: { name: "currency", currency: "USD" },
+                                      jpy_value: { name: "currency", currency: "JPY" } } } }
+    pres = gdash_store.select_rows(posp, postab["sql"], {}, gdash_render.exact_columns(postab), {})
+    s = gdash_test.ok(s, pres.ok, "the positions query runs")
+    ptab = gdash_render.render_visual("positions_table", postab, pres.rows, posp, {}, {})
+
+    ' THE DEFECT, AS IT APPEARED: every yen figure was rendered at scale 2 --
+    ' a hundred times small -- in a table that looked entirely normal. A real
+    ' balance of 12 yen showed as 0.
+    s = gdash_test.contains_text(s, ptab, "$1,250,750.25", "the dollar column is right")
+    s = gdash_test.contains_text(s, ptab, "-$90,425.10", "including a negative one")
+    s = gdash_test.contains_text(s, ptab, "¥430,000", "and the yen column is right at ITS scale, not the dollar one")
+    s = gdash_test.contains_text(s, ptab, "¥12", "a balance of twelve yen is twelve yen")
+    s = gdash_test.ok(s, not contains(ptab, "¥4,300"), "and not four thousand three hundred, which is what scale 2 made of it")
+
+    ' ONE CODEPOINT. `chr(194) + chr(165)` is the two UTF-8 BYTES of the yen
+    ' sign handed to a function that takes codepoints, and it is what shipped.
+    s = gdash_test.ok(s, not contains(ptab, chr(194) + chr(165)), "the yen sign is not double-encoded")
+
+    ' A sibling's scale must not decide a visual that never touches it. This
+    ' refused outright before: `money_scale` read the money columns of the
+    ' primary AND every attachment, so one yen column anywhere in a dashboard
+    ' disabled currency formatting everywhere in it.
+    ledgerp = root + "/ledger13.db"
+    lrows = [["2026-07", "1250.75"], ["2026-08", "-430.00"]]
+    lplan = gdash_store.plan_columns(["month", "amount"], lrows, { amount: { type: "money", scale: 2 } })
+    lm = gdash_store.materialize(ledgerp, "ledger", lplan, lrows)
+    s = gdash_test.ok(s, lm.ok, "a single-currency dataset materializes beside it")
+
+    monthly = { dataset: "ledger",
+                sql: "select month, sum(amount) as amount from ledger group by month order by month",
+                encoding: { mark: "bar", x: "month", y: "amount", format: "currency", currency: "USD" } }
+    mres = gdash_store.select_rows(ledgerp, monthly["sql"], {}, gdash_render.exact_columns(monthly), { positions: posp })
+    s = gdash_test.ok(s, mres.ok, "the monthly query runs with positions attached")
+    mfrag = gdash_render.render_visual("monthly", monthly, mres.rows, ledgerp, { positions: posp }, {})
+    s = gdash_test.ok(s, not contains(mfrag, "gdash-error"), "a visual over one dataset is not disabled by another's scale")
+    s = gdash_test.contains_text(s, mfrag, "<svg", "it draws")
+
+    ' And what is still genuinely ambiguous REFUSES, naming the column, rather
+    ' than formatting at a guess. This is the case that used to be silent.
+    aliased = { dataset: "positions",
+                sql: "select account, usd_value + jpy_value as total from positions",
+                encoding: { mark: "bar", x: "account", y: "total", format: "currency", currency: "USD" } }
+    ares = gdash_store.select_rows(posp, aliased["sql"], {}, gdash_render.exact_columns(aliased), {})
+    afrag = gdash_render.render_visual("aliased", aliased, ares.rows, posp, {}, {})
+    s = gdash_test.contains_text(s, afrag, "gdash-error", "an alias with no resolvable scale is refused")
+    s = gdash_test.contains_text(s, afrag, "total", "and the refusal names the column")
+    s = gdash_test.contains_text(s, afrag, "Alias it", "and says what to do about it")
+
+    ' A TABLE column that is formatted as currency and whose scale does not
+    ' resolve must refuse too. Without this the table's refusal branch is never
+    ' taken by any fixture here, and "fall back to 2" -- the defect exactly as
+    ' it shipped -- passes every other assertion in this file. Found by
+    ' mutation, which is the only thing that could have found it.
+    aliastab = { dataset: "positions",
+                 sql: "select account, usd_value + jpy_value as total from positions",
+                 encoding: { mark: "table",
+                             formats: { total: { name: "currency", currency: "USD" } } } }
+    tres = gdash_store.select_rows(posp, aliastab["sql"], {}, gdash_render.exact_columns(aliastab), {})
+    tfrag = gdash_render.render_visual("aliastab", aliastab, tres.rows, posp, {}, {})
+    s = gdash_test.contains_text(s, tfrag, "gdash-error", "a table cell with no resolvable scale is refused, not formatted at 2")
+    s = gdash_test.contains_text(s, tfrag, "total", "naming the column")
+
+    ' A percent or number column in the same table must NOT be refused because
+    ' money elsewhere is ambiguous -- it needs no money scale at all.
+    mixedfmt = { dataset: "positions",
+                 sql: "select account, usd_value, jpy_value from positions",
+                 encoding: { mark: "table",
+                             formats: { usd_value: { name: "currency", currency: "USD" },
+                                        jpy_value: { name: "number", decimals: 0 } } } }
+    xres = gdash_store.select_rows(posp, mixedfmt["sql"], {}, gdash_render.exact_columns(mixedfmt), {})
+    xfrag = gdash_render.render_visual("mixedfmt", mixedfmt, xres.rows, posp, {}, {})
+    s = gdash_test.ok(s, not contains(xfrag, "gdash-error"), "a non-money format is not refused over a money ambiguity")
+
     exit(gdash_test.report(s))
 end program

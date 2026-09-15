@@ -276,6 +276,17 @@ library gdash_store
     ' dataset's scale, with no error anywhere. So every metadata read is
     ' schema-qualified, and it is qualified here, inside the module, where no
     ' caller can forget to.
+    ' CONFLICT IS RECORDED, NOT OVERWRITTEN. This map is keyed by COLUMN NAME
+    ' across the primary dataset and every attached sibling, because a result
+    ' column is all a renderer has: SQLite reports no provenance for one, and
+    ' `sqlite.columns(db, sql)` -- the platform ask that would give it -- has
+    ' not landed.
+    '
+    ' So two datasets can each define `amount` at different scales. This used
+    ' to be last-write-wins, with `main` written last, which is a silent
+    ' choice on a path where being wrong is indistinguishable from being right.
+    ' A name that means two things now maps to -2, and the renderer refuses
+    ' rather than picking one (G13-2).
     function _meta_from(db, schema, into)
         out = into
         on error goto next
@@ -285,7 +296,13 @@ library gdash_store
         end if
         i = 0
         while i < count(rows)
-            out[rows[i].column_name] = rows[i].scale
+            nm = rows[i].column_name
+            sc = rows[i].scale
+            if is_unknown(out[nm]) then
+                out[nm] = sc
+            else if out[nm] != sc then
+                out[nm] = -2
+            end if
             i += 1
         end while
         return out

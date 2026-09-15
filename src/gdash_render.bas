@@ -36,13 +36,41 @@ library gdash_render
         return t
     end function
 
-    ' The scale for a formatted channel comes from the dataset's own money
-    ' columns: an aggregate of minor units is still minor units at the same
-    ' scale. This phase requires the dataset's money columns to agree on a
-    ' scale, which the reference record satisfies; a per-channel scale is
-    ' GDASH-1's business along with the rest of the format map.
-    function money_scale(db_path, attach)
-        cols = gdash_store.money_columns(db_path, attach)
+    ' THE SCALE IS PER COLUMN, because `_gdash_meta` has recorded it per column
+    ' since GDASH-1 and the renderer was the one place collapsing it to one
+    ' number per dataset. A position report holding USD at scale 2 beside JPY
+    ' at scale 0 -- which is what a multi-currency position report IS --
+    ' rendered every yen figure at scale 2, a hundred times small, in a table
+    ' that looked entirely normal. A real balance of 12 yen showed as 0
+    ' (G13-2).
+    '
+    ' Three answers, in order:
+    '
+    '   the column is a money column        -> its own scale, exactly
+    '   it is not (an aliased aggregate)    -> the scale IF every money column
+    '                                          in reach agrees, since then
+    '                                          there is nothing to be wrong
+    '                                          about
+    '   they disagree, or the name means
+    '   two scales                          -> -2, and the caller REFUSES
+    '
+    ' -1 means there is no money in reach at all, which is a different refusal:
+    ' a visual that formats as currency over a dataset with no money column is
+    ' a record mistake, not an ambiguity.
+    function scale_of(cols, column)
+        if count(keys(cols)) = 0 then
+            return -1
+        end if
+        got = cols[column]
+        if not is_unknown(got) then
+            ' May itself be -2: `money_columns` records a name that means two
+            ' scales rather than picking one.
+            return got
+        end if
+        return _agreed_scale(cols)
+    end function
+
+    function _agreed_scale(cols)
         names = keys(cols)
         if count(names) = 0 then
             return -1
@@ -56,6 +84,27 @@ library gdash_render
             i += 1
         end while
         return first
+    end function
+
+    ' The whole-dataset answer, kept because a caller outside a column context
+    ' still needs one -- and because "every money column in reach agrees" is
+    ' exactly what it has always meant. It is no longer what a FORMATTED COLUMN
+    ' consults.
+    function money_scale(db_path, attach)
+        return _agreed_scale(gdash_store.money_columns(db_path, attach))
+    end function
+
+    function money_scales(db_path, attach)
+        return gdash_store.money_columns(db_path, attach)
+    end function
+
+    ' The message a refusal carries. One place, because a person who meets it
+    ' needs to be told what to change, and three copies of that sentence drift.
+    function _scale_refusal(name, column, scale)
+        if scale = -1 then
+            return "visual '" + name + "' formats '" + column + "' as currency, but no dataset it can reach declares a money column"
+        end if
+        return "visual '" + name + "' cannot tell what scale '" + column + "' is in: it is not a money column of any dataset here, and the money columns in reach disagree. Alias it to the money column it comes from, or give the datasets one scale."
     end function
 
     ' The currency a money channel renders in. Declared on the encoding so a
@@ -371,22 +420,26 @@ library gdash_render
         row0 = rows[0]
 
         is_money = enc["format"] = "currency"
+
+        ' Read once per visual, not once per cell: this opens the dataset and
+        ' every attached sibling, and a hundred-row table would otherwise open
+        ' them a hundred times.
+        scales = money_scales(db_path, attach)
+
+        ' A chart's money scale is THE SCALE OF ITS VALUE CHANNEL, looked up by
+        ' that column's own name, rather than one number asserted over the
+        ' whole dataset. `ledger.amount` is scale 2 whatever a sibling holding
+        ' yen happens to declare -- which is what made a visual over one
+        ' dataset refuse because of another one it never touched (G13-3).
         scale = 0
-        if mark = "table" then
-            probe = money_scale(db_path, attach)
-            if probe > 0 then
-                scale = probe
-            else
-                scale = 2
-            end if
-        end if
         if is_money then
-            scale = money_scale(db_path, attach)
-            if scale = -1 then
-                return _err("visual '" + name + "' formats as currency but its dataset declares no money column")
+            money_ch = string(enc["y"])
+            if mark = "value" or mark = "pie" then
+                money_ch = string(enc["value"])
             end if
-            if scale = -2 then
-                return _err("visual '" + name + "' formats as currency but its dataset's money columns disagree on scale")
+            scale = scale_of(scales, money_ch)
+            if scale < 0 then
+                return _err(_scale_refusal(name, money_ch, scale))
             end if
         end if
 
@@ -529,7 +582,22 @@ library gdash_render
                     if is_unknown(entry) then
                         shown = string(rows[r][cn])
                     else
-                        spec = format_spec(entry, scale, currency_of(visual))
+                        ' EACH COLUMN AT ITS OWN SCALE. A table is the one mark
+                        ' that can show two currencies at once, and it was the
+                        ' one place that assumed they shared a scale -- falling
+                        ' back to 2 whenever they did not, silently.
+                        '
+                        ' Only a `currency` column needs a scale at all; a
+                        ' `percent` or `number` column must not be refused
+                        ' because money elsewhere is ambiguous.
+                        cell_scale = 2
+                        if format_name(entry) = "currency" then
+                            cell_scale = scale_of(scales, cn)
+                            if cell_scale < 0 then
+                                return _err(_scale_refusal(name, cn, cell_scale))
+                            end if
+                        end if
+                        spec = format_spec(entry, cell_scale, currency_of(visual))
                         shown = gdash_format.apply(spec, rows[r][cn], rows[r][cn + "__text"])
                     end if
                     cells = concat(cells, ["<td>" + html_escape(shown) + "</td>"])

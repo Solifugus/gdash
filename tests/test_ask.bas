@@ -26,7 +26,14 @@ program main(args)
     rec["datasets"]["regions"] = {}
 
     ' --- nothing refreshed yet ---------------------------------------------
-    cold = gdash_ask.ask(p, "sales", "draft", rec, "how many orders?", model_double.saying("select 1"), {})
+    '
+    ' A DASHBOARD NAME NOTHING ELSE IN THIS FILE USES. Asking "sales" here
+    ' worked only because the root happened to be empty at this point, so the
+    ' assertion silently depended on running before the staging below AND on
+    ' the caseroot being fresh. A mutation run against a reused scratch
+    ' directory failed it, which is the assertion telling the truth about
+    ' itself: it was testing the directory, not the code.
+    cold = gdash_ask.ask(p, "coldstart", "draft", rec, "how many orders?", model_double.saying("select 1"), {})
     s = gdash_test.ok(s, not cold.ok, "a dashboard with no data cannot be asked")
     s = gdash_test.eq(s, cold.stage, "data", "and it says so as a stage, not as a failure")
     s = gdash_test.contains_text(s, cold.message, "refreshed", "in words an operator can act on")
@@ -166,7 +173,13 @@ program main(args)
     s = gdash_test.contains_text(s, down.message, "could not be reached", "carrying the reason")
 
     ' --- model profiles ----------------------------------------------------
-    none = gdash_ask.model_profile(p, "")
+    ' A ROOT WITH NO MODELS FILE, owned by this assertion. Reading the shared
+    ' root worked only while nothing had written one yet -- so on a second run
+    ' into the same directory it failed, which is the assertion admitting it
+    ' was testing the directory rather than the code. The same trap as the
+    ' cold-start one above, found the same way.
+    bare = gdash_paths.roles(root + "/nomodels")
+    none = gdash_ask.model_profile(bare, "")
     s = gdash_test.ok(s, not none.ok, "no models file configured is not an error")
     s = gdash_test.contains_text(s, none.message, "models.json", "and it names the file to write")
 
@@ -277,6 +290,48 @@ program main(args)
                             model_double.saying("select region, count(*) as n from orders.orders group by region"), {})
     cvis = gdash_ask.draft_visual(counted, rec, counted.scaled)
     s = gdash_test.ok(s, is_unknown(cvis.encoding["format"]), "a count is promoted with no currency format at all")
+
+    ' --- promotion must not produce a visual that cannot draw ---------------
+    '
+    ' GDASH-12 set `format: "currency"` whenever the value channel aggregated a
+    ' money column, without asking whether the renderer could find a SCALE for
+    ' it. On a multi-currency dashboard that promotes a visual which validates,
+    ' promotes, and then renders an error instead of a chart -- discovered by
+    ' whoever opens the dashboard rather than by whoever promoted it (G13-4).
+    made = gdash_paths.ensure_dir(gdash_paths.data_dir(p, "treasury", "draft"))
+    tcols = ["account", "usd_value", "jpy_value"]
+    trows = [["ACC-1", "1250750.25", "430000"], ["ACC-2", "-90425.10", "12"]]
+    tplan = gdash_store.plan_columns(tcols, trows, { usd_value: { type: "money", scale: 2 },
+                                                    jpy_value: { type: "money", scale: 0 } })
+    tm = gdash_store.materialize(gdash_paths.dataset_db(p, "treasury", "draft", "positions"), "positions", tplan, trows)
+    s = gdash_test.ok(s, tm.ok, "a two-currency dataset materializes")
+
+    trec = { datasets: {} }
+    trec["datasets"]["positions"] = { columns: {} }
+    trec["datasets"]["positions"]["columns"]["usd_value"] = { type: "money", scale: 2, currency: "USD" }
+    trec["datasets"]["positions"]["columns"]["jpy_value"] = { type: "money", scale: 0, currency: "JPY" }
+
+    mixed = gdash_ask.ask(p, "treasury", "draft", trec, "total usd value by account",
+                          model_double.saying("select account, sum(usd_value) as total from positions.positions group by account"), {})
+    s = gdash_test.ok(s, mixed.ok, "the question answers")
+    mvis = gdash_ask.draft_visual(mixed, trec, mixed.scaled)
+    s = gdash_test.ok(s, is_unknown(mvis.encoding["format"]), "an unresolvable money channel is NOT promoted as currency")
+    caveat = gdash_ask.currency_caveat(mixed, trec, mvis)
+    s = gdash_test.contains_text(s, caveat, "total", "and the draft says which column")
+    s = gdash_test.contains_text(s, caveat, "minor units", "and what will happen instead")
+    s = gdash_test.contains_text(s, caveat, "Alias it", "and what to do about it")
+
+    ' Aliased to the money column's own name, it resolves, and the currency
+    ' format comes back -- which is exactly what the caveat tells a person.
+    named = gdash_ask.ask(p, "treasury", "draft", trec, "total usd value by account",
+                          model_double.saying("select account, sum(usd_value) as usd_value from positions.positions group by account"), {})
+    nvis = gdash_ask.draft_visual(named, trec, named.scaled)
+    s = gdash_test.eq(s, string(nvis.encoding["format"]), "currency", "aliased to the money column, it formats as currency")
+    s = gdash_test.eq(s, gdash_ask.currency_caveat(named, trec, nvis), "", "and there is nothing left to warn about")
+
+    ' The single-currency case is unchanged: `total` is not a money column, but
+    ' every money column in reach agrees, so there is nothing to be wrong about.
+    s = gdash_test.eq(s, string(vis.encoding["format"]), "currency", "a single-currency dashboard still formats an aliased aggregate")
 
     ' --- promoting it into the record --------------------------------------
     made = gdash_paths.ensure_dir(gdash_paths.dashboard_dir(p, "sales"))

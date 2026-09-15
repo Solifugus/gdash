@@ -19,7 +19,28 @@ program main(args)
     s = gdash_test.eq(s, gdash_format.currency("-125075", 2, "USD").text, "-$1,250.75", "negative USD")
 
     ' JPY has no minor unit: it must not render two decimals.
-    s = gdash_test.eq(s, gdash_format.currency("1234", 0, "JPY").text, chr(194) + chr(165) + "1,234", "JPY at exponent 0")
+    '
+    ' THIS ASSERTION USED TO ENCODE THE BUG. It expected
+    ' `chr(194) + chr(165)` -- which is what the implementation produced, and
+    ' it produced it because someone wrote the UTF-8 BYTES of the yen sign into
+    ' a function that takes CODEPOINTS. The test was written from the code
+    ' rather than from the answer, so it passed for thirteen phases while every
+    ' JPY, GBP and EUR figure gdash rendered came out as `Â¥`, `Â£`, `â‚¬`. USD
+    ' is the only currency that could not have shown it, and USD is all the
+    ' fixtures had.
+    '
+    ' The expected values below are written as LITERAL CHARACTERS, not as
+    ' chr() arithmetic, precisely so that the next person reads the answer
+    ' rather than a recipe. A symbol is one codepoint: len is the assertion
+    ' that says so.
+    s = gdash_test.eq(s, gdash_format.currency("1234", 0, "JPY").text, "¥1,234", "JPY at exponent 0")
+    s = gdash_test.eq(s, len(gdash_format.symbol_for("JPY")), 1, "the yen sign is ONE character, not its two UTF-8 bytes")
+    s = gdash_test.eq(s, gdash_format.currency("125075", 2, "GBP").text, "£1,250.75", "GBP")
+    s = gdash_test.eq(s, len(gdash_format.symbol_for("GBP")), 1, "and the pound sign is one character")
+    s = gdash_test.eq(s, gdash_format.currency("125075", 2, "EUR").text, "€1,250.75", "EUR")
+    s = gdash_test.eq(s, len(gdash_format.symbol_for("EUR")), 1, "and the euro sign is one character")
+    s = gdash_test.eq(s, gdash_format.currency("-430000", 0, "JPY").text, "-¥430,000", "a negative zero-decimal currency")
+    s = gdash_test.eq(s, gdash_format.symbol_for("USD"), "$", "USD is ASCII, which is why nothing caught the others")
     ' KWD carries three.
     s = gdash_test.eq(s, gdash_format.currency("1234567", 3, "KWD").text, "KWD 1,234.567", "KWD at exponent 3")
 

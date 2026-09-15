@@ -671,10 +671,24 @@ library gdash_ask
         end if
         if channel != "" then
             if is_money_channel(rewritten, scaled, channel) then
-                enc["format"] = "currency"
-                cur = _currency_of(scaled)
-                if cur != "" then
-                    enc["currency"] = cur
+                ' AND ONLY IF THE RENDERER COULD FIND A SCALE FOR IT. Setting
+                ' `format: "currency"` on a channel whose scale cannot be
+                ' resolved produces a visual that validates, promotes, and then
+                ' renders an error instead of a chart -- which is worse than no
+                ' formatting, because it is discovered by whoever opens the
+                ' dashboard rather than by whoever promoted it (G13-4).
+                '
+                ' The channel resolves when it IS a money column, or when every
+                ' money column in reach agrees on a scale. On a single-currency
+                ' dashboard that is always; on a multi-currency one an aliased
+                ' aggregate has nothing to resolve to, and the draft says so
+                ' rather than the dashboard saying it later.
+                if _channel_scale(channel, scaled) >= 0 then
+                    enc["format"] = "currency"
+                    cur = _currency_of(scaled)
+                    if cur != "" then
+                        enc["currency"] = cur
+                    end if
                 end if
             end if
         end if
@@ -690,6 +704,49 @@ library gdash_ask
     ' agree on a scale for a formatted channel (gdash_render.money_scale), so
     ' one code for the visual is the same assumption stated once more; an
     ' encoding that names none renders as USD, which would be wrong in silence.
+    ' What gdash_render.scale_of will make of this column name, decided from
+    ' the same facts without opening the datasets again. Mirrors that function
+    ' deliberately: a promotion that guessed differently from the renderer
+    ' would promote visuals that do not draw.
+    function _channel_scale(channel, scaled)
+        ch = lower(trim(string(channel)))
+        agreed = -1
+        for each k in keys(scaled)
+            sc = scaled[k]
+            if lower(sc.column) = ch then
+                return sc.scale
+            end if
+            if agreed = -1 then
+                agreed = sc.scale
+            else if agreed != sc.scale then
+                agreed = -2
+            end if
+        next
+        return agreed
+    end function
+
+    ' Why a money channel was left unformatted, for the draft to say. Empty
+    ' when there is nothing to say.
+    function currency_caveat(draft, rec, vis)
+        enc = vis.encoding
+        channel = ""
+        if enc["mark"] = "value" then
+            channel = string(enc["value"])
+        else if enc["mark"] = "bar" then
+            channel = string(enc["y"])
+        end if
+        if channel = "" then
+            return ""
+        end if
+        if not is_unknown(enc["format"]) then
+            return ""
+        end if
+        if not is_money_channel(vis.sql, draft.scaled, channel) then
+            return ""
+        end if
+        return "'" + channel + "' holds money in minor units, and this dashboard's money columns do not agree on a scale -- so it will draw as raw minor units. Alias it to the money column it comes from, or give the datasets one scale."
+    end function
+
     function _currency_of(scaled)
         for each k in keys(scaled)
             if scaled[k].currency != "" then

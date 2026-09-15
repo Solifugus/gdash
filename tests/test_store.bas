@@ -127,7 +127,29 @@ program main(args)
     scaled8 = root + "/attach_scale8.db"
     m3 = gdash_store.materialize(scaled8, "fine", [{ name: "amount", kind: "money", scale: 8 }], [["1.00000000"]])
     mixed = gdash_store.money_columns(ordersp, { fine: scaled8 })
-    s = gdash_test.eq(s, mixed["amount"], 2, "the primary wins a column-name collision across schemas")
+
+    ' THIS ASSERTION IS REVERSED FROM WHAT IT SAID, AND THE REVERSAL IS THE
+    ' POINT (G13-2). It used to expect 2 -- "the primary wins a column-name
+    ' collision across schemas" -- which is a reasonable guess and is still
+    ' only a guess: in `select amount from fine`, the amount is the SIBLING's,
+    ' and nothing here can tell. SQLite reports no provenance for a result
+    ' column and `sqlite.columns(db, sql)`, the platform ask that would give
+    ' it, has not landed.
+    '
+    ' "Main wins" is therefore a rule that is right most of the time and
+    ' SILENTLY WRONG the rest, on the one path where wrong money is
+    ' indistinguishable from right money. gdash refuses a money value with
+    ' excess decimals rather than rounding it; this is the same posture. A name
+    ' that means two things maps to -2 and the renderer says so, naming the
+    ' column, so an author renames one instead of reading a wrong number.
+    s = gdash_test.eq(s, mixed["amount"], -2, "a column name meaning two scales is a conflict, not a guess")
+
+    ' Agreement is not conflict. The same name at the same scale in two
+    ' datasets is exactly as unambiguous as one, and must not refuse.
+    same2 = root + "/attach_same2.db"
+    m4 = gdash_store.materialize(same2, "twin", [{ name: "amount", kind: "money", scale: 2 }], [["1.00"]])
+    agreed = gdash_store.money_columns(ordersp, { twin: same2 })
+    s = gdash_test.eq(s, agreed["amount"], 2, "the same name at the same scale in two datasets is not a conflict")
 
     ' --- content hash: the same content hashes the same, and only that ---
     h1 = gdash_store.content_hash(["a", "b"], [["1", "2"], ["3", "4"]])

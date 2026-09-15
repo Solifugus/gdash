@@ -1018,6 +1018,10 @@ library gdash_app
         h = h + "<div class=" + q + "gdash-stale" + q + ">" + join(lines, " &middot; ") + "</div>"
 
         vis = gdash_ask.draft_visual(draft, rec, draft.scaled)
+        caveat = gdash_ask.currency_caveat(draft, rec, vis)
+        if caveat != "" then
+            h = h + "<div class=" + q + "gdash-notes" + q + ">" + gdash_render.html_escape(caveat) + "</div>"
+        end if
         themed = gdash_theme.load_theme(p)
         h = h + "<div class=" + q + "gdash-preview-visual" + q + ">" + _draft_fragment(p, name, "draft", rec, vis, themed.theme) + "</div>"
 

@@ -155,19 +155,30 @@ library gdash_format
         return out
     end function
 
+    ' CODEPOINTS, NOT UTF-8 BYTES. These were written as `chr(194) + chr(165)`
+    ' -- the two bytes of the yen sign handed to a function that takes
+    ' codepoints, so `chr(194)` produced `Â` and every JPY figure gdash ever
+    ' rendered read `Â¥1,234`. Same for `£` and `€`. Thirteen phases, invisible,
+    ' because `$` is ASCII and the fixtures were all dollars (G13-1).
+    '
+    ' Written as literal characters rather than `chr()` so that what is here is
+    ' the answer and not a recipe. Each is one codepoint, which the suite asserts
+    ' with `len` -- the check that would have caught this the first time.
     function _symbol(currency)
         if currency = "USD" then
             return "$"
         end if
         if currency = "EUR" then
-            return chr(226) + chr(130) + chr(172)
+            return "€"
         end if
         if currency = "GBP" then
-            return chr(194) + chr(163)
+            return "£"
         end if
         if currency = "JPY" then
-            return chr(194) + chr(165)
+            return "¥"
         end if
+        ' Every other ISO 4217 code renders as `CHF 1,234.00`, which is correct
+        ' and unambiguous, and is why this phase adds no further symbols.
         return currency + " "
     end function
 
