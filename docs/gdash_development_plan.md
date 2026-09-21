@@ -209,7 +209,16 @@ plan now leans on restarts being reliable, and the restart mechanism has never
 been executed. GDASH-16 comes before GDASH-17 because a tenant that can spend
 money without a ceiling should not be given the ability to spend money.
 
-### GDASH-14 — The units, actually started  *(G8-7, now blocking)*
+### GDASH-14 — The units, actually started  *(G8-7)*  — **COMPLETE**
+
+Brief: `gdash14_brief.md`. Findings: `gdash14_findings.md`. The first
+`systemctl start` in the project's history failed, and the cause was a sequence
+the install's own message prescribes (G14-1). `tests/run_systemd.sh` boots
+systemd as PID 1 in rootless podman — which operations §10 had recorded as
+impossible — and exercises enable, start, serve, refresh under full hardening,
+restart, `kill -9`, the timer, stop and uninstall: 37 assertions.
+
+The original scope follows.
 
 Not new work. `systemd-analyze verify` has accepted every directive since
 GDASH-8 and **no `systemctl start` has ever happened** — operations §10 says so

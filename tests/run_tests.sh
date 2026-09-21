@@ -157,6 +157,17 @@ if [[ "${GDASH_ODBC_TEST:-0}" == "1" ]]; then
     fi
 fi
 
+# The units, actually started. Opt-in for the same reason as the FHS suite, and
+# the reason operations §10 gave for never having done it -- "there is no
+# systemd in the container used for testing" -- turned out to be wrong.
+if [[ "${GDASH_SYSTEMD_TEST:-0}" == "1" ]]; then
+    echo "--- systemd ---"
+    ran=$((ran + 1))
+    if ! "$HERE/run_systemd.sh"; then
+        failed=$((failed + 1))
+    fi
+fi
+
 # The install, at real FHS paths. Opt-in: it needs root, which means a
 # container, which means podman. Named here so `make check` mentions it rather
 # than leaving the install untested and unmentioned.

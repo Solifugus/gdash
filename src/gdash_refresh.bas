@@ -224,8 +224,24 @@ library gdash_refresh
             return { ok: false, message: "dataset '" + dataset + "' is a draft; draft datasets refresh manually only", version: 0, rows: 0, unchanged: false, skipped: false }
         end if
 
-        made = gdash_paths.ensure_dir(gdash_paths.data_dir(p, dashboard, mode))
-        made = gdash_paths.ensure_dir(p.run_dir)
+        ' CHECKED, not assumed. This was `made = ensure_dir(...)` twice with the
+        ' result dropped, and the install's own first-run sequence makes it
+        ' fail: the message tells an administrator to run the CLI before the
+        ' service exists, so `<cache>/<dashboard>/` ends up owned by root while
+        ' `<cache>` is owned by the service user, and the service then cannot
+        ' create `published/` inside it (G14-1).
+        '
+        ' The failure has to be a VALUE here. What happened instead was worse
+        ' than an unhelpful message: the write below failed and left an error
+        ' PENDING AND UNACKNOWLEDGED, and `with lock` raised into it and escaped
+        ' the frame -- taking the whole scheduler pass with it.
+        datadir = gdash_paths.data_dir(p, dashboard, mode)
+        if not gdash_paths.ensure_dir(datadir) then
+            return { ok: false, message: "cannot create the data directory " + datadir + " (check that the service user owns it and every directory above it)", version: 0, rows: 0, unchanged: false, skipped: false }
+        end if
+        if not gdash_paths.ensure_dir(p.run_dir) then
+            return { ok: false, message: "cannot create the run directory " + p.run_dir, version: 0, rows: 0, unchanged: false, skipped: false }
+        end if
 
         statepath = gdash_paths.dataset_state(p, dashboard, mode, dataset)
         lockpath = gdash_paths.dataset_lock(p, dashboard, mode, dataset)
@@ -235,6 +251,13 @@ library gdash_refresh
         lf {file} = lockpath
         if not gdash_paths.path_exists(lockpath) then
             write(lf, "")
+            ' CHECKED PROMPTLY. gBASIC holds one pending error at a time, and a
+            ' raise arriving while one is unacknowledged escapes the frame --
+            ' so this check is what keeps a lock that cannot be created from
+            ' becoming a crash three lines later.
+            if error then
+                return { ok: false, message: "cannot create the dataset lock " + lockpath + " (check that the service user owns the directory)", version: 0, rows: 0, unchanged: false, skipped: false }
+            end if
         end if
 
         outcome = { ok: false, message: "could not take the dataset lock", version: 0, rows: 0, unchanged: false, skipped: false }
@@ -315,7 +338,18 @@ library gdash_refresh
                             failed += 1
                             notes = concat(notes, [name + "." + ds[j] + ": no connection profile named '" + string(rec["datasets"][ds[j]]["profile"]) + "'"])
                         else
+                            ' GUARDED. `pass` counts failures, so it was built
+                            ' to be resilient -- but a RAISE bypassed the
+                            ' counting and killed the run, turning one
+                            ' dashboard's misconfiguration into a total
+                            ' scheduling outage (G14-2). A pass that gives up
+                            ' on the third of nine dashboards is worse than one
+                            ' that reports the third and does the other eight.
+                            on error goto next
                             r = run(p, name, "published", rec, ds[j], prof, "policy")
+                            if error then
+                                r = { ok: false, message: "refresh raised: " + error.message, version: 0, rows: 0, unchanged: false, skipped: false }
+                            end if
                             if not r.ok then
                                 failed += 1
                                 notes = concat(notes, [name + "." + ds[j] + ": " + r.message])

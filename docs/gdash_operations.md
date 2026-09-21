@@ -47,6 +47,28 @@ templated at install time: `PREFIX=/opt/gdash` produces units that name
 that starts only `gdash` has dashboards that never update, and nothing will say
 so — the pages will simply show old "data as of" timestamps.
 
+**Give the service account the data roles before running anything.** `make
+install` creates `/etc/gdash`, `/var/lib/gdash`, `/var/cache/gdash` and
+`/var/log/gdash` **root-owned**, because the account may not exist yet:
+
+```sh
+useradd --system --no-create-home gdash
+chown -R gdash:gdash /etc/gdash /var/lib/gdash /var/cache/gdash /var/log/gdash
+```
+
+**Do this before you run `gdash` as root.** systemd's `StateDirectory=` and
+friends fix the ownership of the four top-level directories when the service
+first starts, but not of anything the CLI created inside them first — so an
+administrator who validates and refreshes a dashboard before starting the
+service leaves `<cache>/<dashboard>/` owned by root, and the service then
+cannot create the published data directory inside it. gdash reports that
+clearly now rather than crashing (G14-1), but the refresh still fails until the
+ownership is fixed. Running the CLI as the service account avoids it entirely:
+
+```sh
+runuser -u gdash -- gdash validate sales
+```
+
 ## 3. Where things live
 
 | path | what | back it up? |
@@ -311,10 +333,14 @@ Authoring is the record file itself: edit `draft.json`, `gdash validate`, then
 
 Honesty about the gap between this document and a running system:
 
-- **The units have been checked with `systemd-analyze verify`, not started.**
-  Every directive is accepted and the templating is verified, but no `systemctl
-  start` has happened in this environment — there is no systemd in the
-  container used for testing. The first real start is your afternoon.
+- **The units are started, stopped, restarted and killed on every opt-in run**
+  (`GDASH_SYSTEMD_TEST=1 tests/run_systemd.sh`). This entry used to say the
+  opposite, and gave the reason as "there is no systemd in the container used
+  for testing" — **which was wrong**: rootless podman boots systemd as PID 1
+  given `--systemd=always --cap-add=all`. Verify checks that a unit parses;
+  only starting one checks that `ProtectSystem=strict`,
+  `CapabilityBoundingSet=`, `User=` and `StateDirectory=` let gdash do its
+  work. Starting them found a real defect the first time (G14-1).
 - **The install, refresh, publish, serve, backup and restore have all run** at
   real FHS paths as root, in a container, with no `GDASH_*` set.
 - **TLS has not been served by gdash**, because it cannot be yet (§6).

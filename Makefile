@@ -57,9 +57,14 @@ install:
 	$(INSTALL) -d -m 0755 $(DESTDIR)$(CACHEDIR)
 	$(INSTALL) -d -m 0755 $(DESTDIR)$(LOGDIR)
 	@echo
-	@echo "gdash installed. Two things remain, and neither is done for you:"
+	@echo "gdash installed. Three things remain, and none is done for you:"
 	@echo "  1. create the service account:  useradd --system --no-create-home gdash"
-	@echo "  2. read docs/gdash_operations.md, then: systemctl enable --now gdash"
+	@echo "  2. give it the data roles:"
+	@echo "       chown -R gdash:gdash $(CONFDIR) $(STATEDIR) $(CACHEDIR) $(LOGDIR)"
+	@echo "     These are created root-owned above, because the account may not"
+	@echo "     exist yet. Running the CLI as root before that chown leaves"
+	@echo "     root-owned directories the service cannot write into (G14-1)."
+	@echo "  3. read docs/gdash_operations.md, then: systemctl enable --now gdash"
 
 # Removes what install put there AND NOTHING ELSE. The data directories are
 # left alone on purpose: an uninstall that deletes dashboards is a catastrophe

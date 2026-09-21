@@ -6,6 +6,7 @@ program main(args)
     load gdash_store from "../src/gdash_store.bas"
     load gdash_format from "../src/gdash_format.bas"
     load gdash_refresh from "../src/gdash_refresh.bas"
+    load gdash_publish from "../src/gdash_publish.bas"
 
     s = gdash_test.suite("refresh")
     root = args[0]
@@ -122,6 +123,96 @@ program main(args)
     s = gdash_test.contains_text(s, audit, "refresh.failed", "so is a failed refresh")
     s = gdash_test.contains_text(s, audit, "refresh.unchanged", "so is an unchanged one")
     s = gdash_test.ok(s, not contains(audit, "password"), "and no credential reaches the log")
+
+    ' --- a dataset directory that cannot be created (G14-1) ----------------
+    '
+    ' FOUND BY STARTING THE UNIT, which is what GDASH-14 was for. The install
+    ' message tells an administrator to run the CLI before the service exists,
+    ' so `/var/cache/gdash/<name>/` ends up owned by root while
+    ' `/var/cache/gdash` is owned by the service user -- and the first refresh
+    ' the SERVICE performs cannot create `published/` inside it.
+    '
+    ' Simulated here with a regular FILE where the directory must be, which
+    ' fails the same way (ENOTDIR rather than EACCES) and needs no chmod, no
+    ' second user and no container.
+    '
+    ' Two things were wrong. `ensure_dir`'s result was assigned and never
+    ' checked; then the failing lock-file write left an error PENDING AND
+    ' UNACKNOWLEDGED, and the `with lock` that followed raised into it and
+    ' escaped the frame -- the exact hazard gdash's own notes warn about.
+    blocked = { kind: "fixture", path: "fixtures/orders.json" }
+    made = gdash_paths.ensure_dir(p.cache_dir + "/blocked")
+    blocker {file} = p.cache_dir + "/blocked/published"
+    write(blocker, "a regular file where a directory must be")
+
+    brec = gdash_record.load_file("dashboards/sales/draft.json").record
+
+    ' OBSERVED, NOT SUFFERED. The defect is that this RAISES and escapes the
+    ' frame -- which a test cannot report by dying of it, and which would hide
+    ' every assertion below. Catching it here turns the regression into a named
+    ' failure instead of a stack trace.
+    on error goto next
+    rb = gdash_refresh.run(p, "blocked", "published", brec, "orders", blocked, "policy")
+    raised = error
+    s = gdash_test.ok(s, not raised, "run() RETURNS on a directory it cannot create, rather than raising")
+    if raised then
+        rb = { ok: false, message: "(it raised)", version: 0, rows: 0, unchanged: false, skipped: false }
+    end if
+    s = gdash_test.ok(s, not rb.ok, "and the outcome is a failure")
+    s = gdash_test.contains_text(s, rb.message, "blocked", "and the message names the path")
+    s = gdash_test.ok(s, not rb.unchanged, "it is not reported as unchanged")
+
+    ' --- and one dashboard's failure must not stop the pass (G14-2) --------
+    '
+    ' `pass()` counts failures, so it was designed to be resilient -- but a
+    ' RAISE bypassed the counting entirely and killed the whole scheduler run.
+    ' One dashboard with a permissions problem took every other dashboard's
+    ' refresh down with it, which turns a single misconfiguration into a total
+    ' scheduling outage.
+    '
+    ' WHAT THIS ASSERTS, PRECISELY: that a dashboard whose refresh FAILS does
+    ' not stop the pass. It does not exercise the `on error` guard now standing
+    ' around `run` inside `pass` -- with the checks above in place, no fixture
+    ' here can make `run` raise at all.
+    '
+    ' The guard is kept, and it is not merely decorative: measured under
+    ' mutation in tests/run_systemd.sh, removing the inner checks while leaving
+    ' the guard turns a runtime error that killed the whole pass into a counted
+    ' failure that does not. It is what stands between a permission problem and
+    ' a total scheduling outage if any future raise appears inside `run` --
+    ' which calls into a network fetch, a child process, SQLite and a rename.
+    made = gdash_paths.ensure_dir(gdash_paths.dashboard_dir(p, "blocked"))
+    bf {file} = gdash_paths.record_file(p, "blocked")
+    write(bf, encode(brec))
+    pub1 = gdash_publish.publish(p, "blocked")
+
+    ' The healthy one needs an INTERVAL policy, or a policy pass correctly
+    ' skips it and the assertion below proves nothing. (It failed exactly that
+    ' way first time round, which is the fixture telling the truth.)
+    made = gdash_paths.ensure_dir(gdash_paths.dashboard_dir(p, "healthy"))
+    hrec = brec
+    for each dsname in keys(hrec["datasets"])
+        hrec["datasets"][dsname]["refresh"] = "interval"
+        hrec["datasets"][dsname]["every"] = 1
+    next
+    hf {file} = gdash_paths.record_file(p, "healthy")
+    write(hf, encode(hrec))
+    pub2 = gdash_publish.publish(p, "healthy")
+    s = gdash_test.ok(s, pub1.ok and pub2.ok, "two dashboards published for the pass")
+
+    ' `pass` resolves profiles from the connections file, where the tests above
+    ' hand `run` a profile directly. Without this both dashboards fail -- one
+    ' for the blocked directory and one for a missing profile -- and the
+    ' assertion below would pass for the wrong reason.
+    made = gdash_paths.ensure_dir(p.config_dir)
+    cf {file} = gdash_paths.connections_file(p)
+    write(cf, encode({ warehouse: { kind: "fixture", path: "fixtures/orders.json" },
+                       regionbook: { kind: "fixture", path: "fixtures/regions.json" } }))
+
+    result = gdash_refresh.pass(p)
+    s = gdash_test.ok(s, result.failed > 0, "the blocked dashboard is counted as failed")
+    s = gdash_test.ok(s, result.refreshed > 0, "AND THE HEALTHY ONE STILL REFRESHED -- the pass survived")
+    s = gdash_test.contains_text(s, join(result.notes, " | "), "blocked", "the note names the dashboard that failed")
 
     exit(gdash_test.report(s))
 end program
