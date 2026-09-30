@@ -206,7 +206,8 @@ throughout** — it is what a deployment with no tenant registry is.
 
 The ordering below is not arbitrary. GDASH-14 comes first because the whole
 plan now leans on restarts being reliable, and the restart mechanism has never
-been executed. GDASH-16 comes before GDASH-17 because a tenant that can spend
+been executed. **GDASH-19 (Controls) is independent of all of these** and may be
+taken at any point among them. GDASH-16 comes before GDASH-17 because a tenant that can spend
 money without a ceiling should not be given the ability to spend money.
 
 ### GDASH-14 — The units, actually started  *(G8-7)*  — **COMPLETE**
@@ -293,6 +294,49 @@ An admin endpoint in front of the same code the CLI calls, for a remote
 onboarding service to drive. Named here so that "the CLI is the API" stays a
 decision rather than a constraint discovered later. The onboarding site itself
 is a separate product and is not gdash's to build.
+
+## GDASH-19 — Controls  *(brief: gdash19_brief.md; step 0 complete)*
+
+**Independent of GDASH-15 … 18 and may be taken before them.** It touches the
+record format, the renderer and the shim; the tenancy phases touch the resolver,
+the CLI and the units. Numbered after them to avoid renumbering three documents,
+not to express an order.
+
+Opened by the maintainer's question: **with NLQ there, how many controls does a
+dashboard need?** The position this phase is built on is that NLQ removes the
+need for *many* controls, not for controls — it kills the "a filter per column,
+just in case" instinct and leaves a few that must be good. Recorded with its
+four reasons in the brief, because it is a design position rather than a
+preference; the load-bearing one is that **controls run reviewed SQL and
+questions do not**, which is the whole argument for the draft-visual shape one
+step further on.
+
+Step 0 measured six things and blocked on none. What matters:
+
+- A date column materializes as **`text`**; there is no date kind, and
+  `_gdash_meta` holds no min/max — so **coverage is one cheap query** and the
+  control must name its column.
+- A range over ISO-8601 text compares chronologically — **and only for ISO**.
+- The same param twice is already handled: `scan` dedupes `names` for the
+  dependency graph and expands `order` for binding, so `:from`/`:to` need
+  nothing new.
+- **Multi-select needs no new idiom.** `user_groups` already travels as
+  `|a|b|` tested with `like '%|x|%'`, delimiters both ends; measured working in
+  reverse for a selected list.
+- Control `kind` is validated and refused by name, and the renderer does not
+  branch on it — so a new kind is additive at two named places.
+
+Building: a date range with a **closed, load-time-validatable** vocabulary of
+relative expressions resolved server-side; multi-select on the existing
+delimited convention; reset; and drill-down split three ways — click-to-filter
+already ships, drill-to-detail is documented as a pattern, hierarchical drill is
+refused by name.
+
+**The hazard the phase must not ship without.** gdash serves a materialized
+dataset, so a range outside what was imported returns an empty chart that reads
+as "no sales in June" rather than "we did not import June" — the same class of
+plausible-wrong-answer as the money bug. The control must know its coverage and
+the page must say it.
 
 ---
 

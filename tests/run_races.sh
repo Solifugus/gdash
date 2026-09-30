@@ -19,6 +19,7 @@ GBASIC="${GDASH_GBASIC:-$HOME/development/gbasic/gbasic}"
 export GDASH_GBASIC="$GBASIC"
 
 PORT=8780
+port_must_be_free "$PORT"
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/gdash-races-XXXXXX")"
 ROOT="$SCRATCH/root"
 mkdir -p "$ROOT/etc" "$ROOT/lib/dashboards/sales" "$ROOT/cache" "$ROOT/log" "$ROOT/run"
@@ -26,15 +27,35 @@ mkdir -p "$ROOT/etc" "$ROOT/lib/dashboards/sales" "$ROOT/cache" "$ROOT/log" "$RO
 pass=0; fail=0
 ok(){ if [[ "$2" == "$3" ]]; then echo "  ok   $1"; pass=$((pass+1)); else echo "  FAIL $1: expected <$3> got <$2>"; fail=$((fail+1)); fi; }
 
+# A gdash server that was ALREADY RUNNING when this suite started is not ours,
+# and killing it is not the suite's business. The sweep below matches by NAME
+# because the supervisor's workers are not $! -- so it cannot simply kill the pid
+# it started -- and that made it collateral: running the suite silently killed a
+# demo server somebody had deliberately started, after colliding with it on the
+# fixed port. The collision looked like a flake; the kill looked like nothing at
+# all (G19-1).
+PREEXISTING=" $(pgrep -f "gdash_server.bas\|gdash_scheduler.bas" 2>/dev/null | tr '\n' ' ') "
 reap(){
     local pid
     for pid in $(pgrep -f "gdash_server.bas" 2>/dev/null); do
         [[ "$(cat /proc/$pid/comm 2>/dev/null)" == "gbasic" ]] || continue
+        [[ "$PREEXISTING" == *" $pid "* ]] && continue
         kill "$pid" 2>/dev/null
     done
 }
 cleanup(){ reap; rm -rf "$SCRATCH"; }
 trap cleanup EXIT
+
+# A fixed port that is already occupied produces a failure with nothing to do
+# with the thing being tested. Say so instead of failing obscurely.
+port_must_be_free(){
+    if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$1\$"; then
+        echo "port $1 is already in use -- something else is serving on it." >&2
+        echo "  stop it first; this suite needs the port and will not kill a stranger." >&2
+        exit 2
+    fi
+}
+
 
 cp dashboards/sales/draft.json "$ROOT/lib/dashboards/sales/draft.json"
 cat > "$ROOT/etc/connections.json" <<JSON
