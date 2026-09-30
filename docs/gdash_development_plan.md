@@ -311,7 +311,7 @@ preference; the load-bearing one is that **controls run reviewed SQL and
 questions do not**, which is the whole argument for the draft-visual shape one
 step further on.
 
-Step 0 measured six things and blocked on none. What matters:
+Step 0 measured eight things and blocked on none. What matters:
 
 - A date column materializes as **`text`**; there is no date kind, and
   `_gdash_meta` holds no min/max — so **coverage is one cheap query** and the
@@ -337,6 +337,19 @@ dataset, so a range outside what was imported returns an empty chart that reads
 as "no sales in June" rather than "we did not import June" — the same class of
 plausible-wrong-answer as the money bug. The control must know its coverage and
 the page must say it.
+
+**Ruled 2026-09-30:** bounds are recorded **at import**, not queried per render —
+once per refresh in the pass that already writes `_gdash_meta`, which makes
+coverage a declared fact about the data rather than something re-derived. The
+relative vocabulary stands as proposed.
+
+That forces the question of *which* columns get bounds, and the answer converges
+on a new `{"type": "date"}` column declaration which also validates ISO-8601 at
+materialization (rejected, not coerced — the money posture), gives a date control
+something safe to point at, and fixes S0-8: **a declared type gdash does not
+implement is currently dropped in silence**, where an unknown control `kind` is
+refused by name. Bounds live in a sibling `_gdash_bounds` table, so a dataset
+from an older build reports coverage *unknown* instead of a guess.
 
 ---
 

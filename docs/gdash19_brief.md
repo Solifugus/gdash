@@ -44,7 +44,7 @@ And an inversion worth naming for the SaaS product: **controls are the free
 interaction and questions cost money.** That makes controls *more* important in
 what is being built, not less.
 
-## Step 0 — six measurements, none of them blocking
+## Step 0 — eight measurements, none of them blocking
 
 ### S0-1 — a date column materializes as `text`, and there is no date kind
 
@@ -154,6 +154,83 @@ A footnote that earns its place: while clearing the port to re-run, I used
 `run_e2e.sh` carries a comment warning about exactly that, ending "which cost an
 hour once". The comment was right and being written down was not enough.
 
+### S0-8 — a declared column type gdash does not implement is silently dropped
+
+```
+"columns": { "month": { "type": "date" } }   ->  ok=true  errors=[]  warnings=[]
+```
+
+It validates clean. `plan_columns` special-cases **only** `money`; everything
+else falls through to inference, so the column materializes as `text` and the
+declaration has **no error, no warning and no effect**.
+
+Compare the control side, which gets this right (S0-6):
+
+```
+control 'region_picker' has kind 'daterange'; this build implements 'select'
+```
+
+The same posture is missing one level down. An author who declares a type gdash
+does not implement should be told so, not ignored — and the fix is the same
+change as the date work below.
+
+## Rulings (maintainer, 2026-09-30)
+
+**1. Bounds are recorded at import, not queried per render.** Better than the
+per-render `min/max` this brief originally proposed: computed once per refresh in
+the pass that already writes `_gdash_meta`, rather than once per page per
+control, and it makes coverage a *declared fact about the data* alongside kind
+and scale rather than something re-derived each time.
+
+**2. The relative vocabulary as proposed stands** — `today`, `last_7d`,
+`last_30d`, `last_90d`, `mtd`, `qtd`, `ytd`, `last_month`, `last_quarter`,
+`last_year`, `custom`.
+
+### What ruling 1 converges with, and why that is the shape
+
+"Which columns get bounds" needs an answer, and the honest one is *the ones
+declared as dates*. That single declaration resolves four separate problems:
+
+| problem | resolved by `{"type": "date"}` |
+|---|---|
+| which columns get bounds recorded | the declared ones, and no others |
+| the ISO hazard (S0-3) | **validated at materialization, rejected not coerced** |
+| what a date control may point at | a column declared `date` |
+| S0-8's silent drop | an unimplemented type becomes an error by name |
+
+The ISO row is the load-bearing one, and it is deliberately the same posture as
+money: design §4 says source strings with more decimals than the scale are
+*rejected, not rounded*. A date column whose source hands back `01/15/2026` is
+the same kind of problem and gets the same answer — fail the refresh, leave the
+old dataset untouched, which is stale-but-coherent behaving as designed.
+
+**`date` does NOT change the stored form.** Money declares a type *and* converts
+(decimal text → INTEGER minor units); `date` declares a type and stores TEXT
+unchanged. ISO-8601 already sorts chronologically (S0-3), so converting to epoch
+integers would buy nothing and break every query an author has already written.
+`date` means **validated and bounded**, not **converted** — worth stating,
+because the money precedent invites the opposite assumption.
+
+### Where bounds live: a sibling table, not more columns in `_gdash_meta`
+
+`_gdash_bounds(column_name, lo, hi)`, written in the same pass. Three reasons:
+
+- Existing readers do `select column_name, kind, scale from _gdash_meta`. Adding
+  columns is fine for new files and wrong for old ones, and the store already
+  carries a comment acknowledging that "a dataset refreshed by an older build
+  could have one without the other".
+- **A missing table is meaningful**: the dataset predates bounds, so coverage is
+  *unknown* — and a control that says "coverage unknown" tells the truth, where
+  one that claims an inferred range does not.
+- No existing query changes.
+
+### And "when a control is added" is validation, not state
+
+Bounds computed at authoring time go stale at the next refresh, so they cannot be
+the source of truth. What that moment *should* do is check: `gdash validate`
+confirms a date control names a column declared `date`, and reports the current
+coverage to the author as information. Feedback, not state.
+
 ## Scope
 
 ### 1. A date range — the one real gap, and the reason for the phase
@@ -171,6 +248,15 @@ Two rulings, both consequences of things gdash already does:
 
 It publishes two params, which S0-4 shows needs nothing new.
 
+### 1b. `{"type": "date"}` — the declaration the rest hangs off
+
+- **Any declared type gdash does not implement becomes a load-time error naming
+  it**, which fixes S0-8 for every future type rather than only this one.
+- `date` materializes as TEXT, unchanged, and is **validated ISO-8601 at
+  materialization**. A non-ISO value fails the refresh with a message naming the
+  column and the offending value, leaving the previous dataset in place.
+- Bounds for every declared date column go into `_gdash_bounds` in the same pass.
+
 ### 2. THE HAZARD THIS PHASE MUST NOT SHIP WITHOUT
 
 gdash serves a **materialized** dataset, not a live query. A viewer can select a
@@ -179,15 +265,16 @@ sales in June"* rather than *"we did not import June."*
 
 That is the same class of failure as the money bug: a plausible answer with
 nothing to check it against, and the reason GDASH-13 existed. So the date
-control must know its dataset's actual coverage (S0-2 says one query) and the
-page must say it. "Data as of" already exists; this wants **"data covers X to
+control must know its dataset's actual coverage — recorded at import per ruling
+1 — and the page must say it. A dataset with no `_gdash_bounds` says "coverage
+unknown" rather than guessing. "Data as of" already exists; this wants **"data covers X to
 Y"**, with a selection outside that range visibly clamped or flagged rather than
 silently empty.
 
-**And the ISO assumption must be enforced, not assumed** (S0-3). A source
-returning `01/15/2026` compares wrongly and silently. Either the date column is
-validated as ISO-8601 at materialization, or a date control refuses a column it
-cannot prove is ISO. Refusing is cheaper and fails closed.
+**And the ISO assumption is enforced at materialization** (S0-3, ruling 1): a
+column declared `date` whose source hands back `01/15/2026` fails the refresh and
+leaves the old dataset untouched, exactly as an over-precise money value does. A
+date control may only name a column declared `date`, so it never has to guess.
 
 ### 3. Multi-select
 
@@ -244,11 +331,18 @@ path.
 
 ## Owed to the maintainer
 
-Design §2 describes params and controls with `select` as the only kind. A date
-range that resolves server-side introduces something params do not currently
-have: **a value whose stored form and bound form differ** (an expression in the
-URL, two dates in the SQL). That is a record-format and a §2 change, and the
-ruling is the maintainer's.
+Two §2 changes and one §4, all record-format:
+
+- **A date range introduces a param whose stored form and bound form differ** —
+  an expression in the URL, two dates in the SQL. Nothing in §2 contemplates it.
+- **`{"type": "date"}` is a new column type**, and §2's column map currently
+  describes `{ type, scale, currency }` for money only.
+- **§4 gains a second "rejected, not rounded" rule.** A non-ISO date is refused
+  the way an over-precise money value is, and §4 is where that posture lives.
+
+Decided in this brief rather than left open, because ruling 1 forces the question
+and the money precedent answers it — but they are format changes and the shape is
+the maintainer's to overrule.
 
 It also interacts with an open ruling already on the list: whether publish
 carries the draft's data across (G11-11). A date range is the first control
