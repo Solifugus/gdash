@@ -136,6 +136,13 @@ if ! "$HERE/../scripts/gen_catalog_appendix.py" --check; then
     failed=$((failed + 1))
 fi
 
+# The SQL corpus G-SQL measures its dialect against is generated from the
+# records, the store and the canned model replies. Stale is a failure too.
+ran=$((ran + 1))
+if ! "$HERE/../scripts/gen_sql_corpus.py" --check; then
+    failed=$((failed + 1))
+fi
+
 # The shared-nothing property under more than one worker. Still hermetic:
 # loopback only, fixture source, no database, no display. Skipped with the
 # same switch as the end-to-end run, since both want a port.
