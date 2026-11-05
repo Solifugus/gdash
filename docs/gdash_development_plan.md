@@ -351,6 +351,35 @@ implement is currently dropped in silence**, where an unknown control `kind` is
 refused by name. Bounds live in a sibling `_gdash_bounds` table, so a dataset
 from an older build reports coverage *unknown* instead of a guess.
 
+## GDASH-20 — The staging store on G-SQL  *(brief: gdash20_brief.md; step 0 complete, S0-6 blocks)*
+
+The plan is `gsql_migration_plan.md`, and every decision in it is ruled:
+
+- one database per (dashboard, stage), in the tenant's directory;
+- datasets are tables, refreshed by a staging table renamed in one
+  transaction;
+- reads run in `begin("read")`;
+- money is `money(<currency>)`, stored exactly and rounded half-even only for
+  display;
+- params declare a type.
+
+**Taken before GDASH-19,** whose date and bounds rulings were written against
+SQLite.
+
+What step 0 found:
+
+- **The suite was red on the current build before the phase began.** gbasic
+  made `unknown` three-valued, and 14 suites raised on absent fields. Fixed
+  first, behaviour unchanged (f8fd8b5).
+- **The corpus runs unchanged on G-SQL**, apart from the meaning change D4a
+  intends.
+- **At 10⁶ rows a refresh's staging write takes about 20–50 s,** with the
+  client's memory flat.
+- **The blocker: the owner's socket.** It lives in a per-user runtime
+  directory, and under the units' `PrivateTmp` the server and the scheduler
+  would not find each other's owner. Asked of the platform
+  (`gdash20_platform_ask_gsql.md`, A1). Not designed around.
+
 ---
 
 ## Still open, carried forward

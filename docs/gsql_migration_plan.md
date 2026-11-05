@@ -1,7 +1,6 @@
 # gdash on G-SQL: the migration plan
 
-**Status:** proposal, ready to become a brief (proposed number GDASH-20) when
-the phase opens. Every decision in §3 is settled. The maintainer ruled on D1,
+**Status:** opened as GDASH-20 on 2026-11-05 (`gdash20_brief.md`). Every decision in §3 is settled. The maintainer ruled on D1,
 D3, D4, D4a and D5 on 2026-11-02 and 2026-11-03, and left D2 to this plan's
 judgement. The four gBASIC findings from the first draft are resolved on gbasic
 master (§7). Every behaviour in §2 was re-measured on 2026-11-03 against the
