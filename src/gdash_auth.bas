@@ -53,7 +53,7 @@ library gdash_auth
         if is_unknown(g) then
             g = []
         end if
-        return { name: name, email: string(default(email, "")), groups: g, admin: admin = true }
+        return { name: name, email: string(default(email, "")), groups: g, admin: default(admin, false) = true }
     end function
 
     function outcome(ok, known, available, message, identity)
@@ -262,7 +262,7 @@ library gdash_auth
         if is_unknown(cfg) then
             return ["auth config is not an object"]
         end if
-        if cfg["format"] != 1 then
+        if default(cfg["format"], 0) != 1 then
             errors = concat(errors, ["unsupported auth config format: " + string(default(cfg["format"], "none")) + " (this build reads format 1)"])
         end if
         d = cfg["directory"]

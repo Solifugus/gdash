@@ -24,7 +24,7 @@ library auth_double
         if is_unknown(who) then
             return gdash_auth.miss()
         end if
-        if who["disabled"] = true then
+        if default(who["disabled"], false) = true then
             return gdash_auth.reject()
         end if
         if string(who["password"]) != password then
@@ -41,7 +41,7 @@ library auth_double
         if is_unknown(who) then
             return gdash_auth.miss()
         end if
-        if who["disabled"] = true then
+        if default(who["disabled"], false) = true then
             return gdash_auth.reject()
         end if
         return gdash_auth.accept(gdash_auth.make_identity(username, who["email"], who["groups"], who["admin"] = true))

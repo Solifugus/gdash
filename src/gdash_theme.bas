@@ -50,7 +50,7 @@ library gdash_theme
         if type(v) != "record" then
             return ["theme must be a JSON object"]
         end if
-        if v["format"] != 1 then
+        if default(v["format"], 0) != 1 then
             errors = concat(errors, ["unsupported theme format: " + string(default(v["format"], "none")) + " (this build reads format 1)"])
         end if
         pal = v["palette"]

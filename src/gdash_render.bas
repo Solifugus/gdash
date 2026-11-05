@@ -419,7 +419,7 @@ library gdash_render
         end if
         row0 = rows[0]
 
-        is_money = enc["format"] = "currency"
+        is_money = default(enc["format"], "") = "currency"
 
         ' Read once per visual, not once per cell: this opens the dataset and
         ' every attached sibling, and a hundred-row table would otherwise open
@@ -635,7 +635,7 @@ library gdash_render
             end while
             return out
         end if
-        if enc["format"] != "currency" then
+        if default(enc["format"], "") != "currency" then
             return []
         end if
         if mark = "value" then

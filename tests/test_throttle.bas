@@ -23,6 +23,10 @@ program main(args)
         junk {file} = gdash_paths.throttle_dir(p) + "/" + stale.name
         delete(junk)
     next
+    ' A fresh root has no directory to list; that is the case being tolerated,
+    ' and an error left unacknowledged is reported when the program exits.
+    if error then
+    end if
 
     ' --- the grace: a typo is free ---------------------------------------
     ' `grace` counts ATTEMPTS, and the wait is read before the next attempt is

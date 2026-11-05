@@ -106,7 +106,7 @@ library directory_double
     ' the directory returns, which is the whole point of a double.
     function search(ctx, conn, spec)
         noted = _note(ctx, "search:" + string(spec["base"]) + "|" + string(spec["filter"]))
-        if ctx["search_fail"] = true then
+        if default(ctx["search_fail"], false) = true then
             return { ok: false, entries: [] }
         end if
         rules = ctx["rules"]

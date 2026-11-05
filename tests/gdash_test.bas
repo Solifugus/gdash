@@ -7,15 +7,24 @@ library gdash_test
         return { name: name, passed: 0, failed: 0, failures: [] }
     end function
 
+    ' An `unknown` condition is a failure that says so, not a raise: since
+    ' gBASIC's three-valued logic (gbasic 4f3eb1e), an assertion over an absent
+    ' value answers unknown, and a suite that dies there reports nothing after it.
     function ok(s, cond, label)
+        if is_unknown(cond) then
+            return { name: s.name, passed: s.passed, failed: s.failed + 1, failures: concat(s.failures, [label + " -- the condition was unknown"]) }
+        end if
         if cond then
             return { name: s.name, passed: s.passed + 1, failed: s.failed, failures: s.failures }
         end if
         return { name: s.name, passed: s.passed, failed: s.failed + 1, failures: concat(s.failures, [label]) }
     end function
 
+    ' "The same value", not the operator: `unknown = unknown` is unknown, and a
+    ' test that expects an absence must be able to say so. Compound `=` uses
+    ' the deep equality, where unknown is the same value as unknown.
     function eq(s, actual, expected, label)
-        if actual = expected then
+        if [actual] = [expected] then
             return ok(s, true, label)
         end if
         return ok(s, false, label + " -- expected <" + string(expected) + "> got <" + string(actual) + ">")

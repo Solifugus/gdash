@@ -720,9 +720,9 @@ library gdash_ask
 
         ' The channel that carries a quantity, if this mark has one.
         channel = ""
-        if enc["mark"] = "value" then
+        if default(enc["mark"], "") = "value" then
             channel = string(enc["value"])
-        else if enc["mark"] = "bar" then
+        else if default(enc["mark"], "") = "bar" then
             channel = string(enc["y"])
         end if
         if channel != "" then
@@ -786,9 +786,9 @@ library gdash_ask
     function currency_caveat(draft, rec, vis)
         enc = vis.encoding
         channel = ""
-        if enc["mark"] = "value" then
+        if default(enc["mark"], "") = "value" then
             channel = string(enc["value"])
-        else if enc["mark"] = "bar" then
+        else if default(enc["mark"], "") = "bar" then
             channel = string(enc["y"])
         end if
         if channel = "" then

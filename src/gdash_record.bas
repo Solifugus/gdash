@@ -201,7 +201,7 @@ library gdash_record
 
         if not _has(rec, "format") then
             errors = concat(errors, ["record has no 'format'"])
-        else if rec["format"] != 1 then
+        else if default(rec["format"], 0) != 1 then
             errors = concat(errors, ["unsupported record format: " + string(rec["format"]) + " (this build reads format 1)"])
         end if
 
@@ -213,7 +213,7 @@ library gdash_record
         ' (design §8). A record with no 'access' key is refused by the server;
         ' validation only insists the value be one it understands.
         if _has(rec, "access") then
-            if rec["access"] != "open" then
+            if default(rec["access"], "") != "open" then
                 errors = concat(errors, ["unsupported access mode: '" + string(rec["access"]) + "' (this build understands 'open')"])
             end if
         end if
@@ -317,7 +317,7 @@ library gdash_record
                 k = 0
                 while k < count(cn)
                     col = cols[cn[k]]
-                    if col["type"] = "money" then
+                    if default(col["type"], "") = "money" then
                         sc = col["scale"]
                         if is_unknown(sc) then
                             errors = concat(errors, ["money column '" + dn + "." + cn[k] + "' has no 'scale'"])
@@ -613,7 +613,7 @@ library gdash_record
                 errors = concat(errors, ["control '" + cnm + "' must be an object"])
                 c = {}
             end if
-            if c["kind"] != "select" then
+            if default(c["kind"], "") != "select" then
                 errors = concat(errors, ["control '" + cnm + "' has kind '" + string(c["kind"]) + "'; this build implements 'select'"])
             end if
             if not _has(c, "param") then

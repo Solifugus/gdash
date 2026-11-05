@@ -94,7 +94,7 @@ library gdash_users
             burned = password_verify(password, "$y$j9T$notarealsaltvalue$notarealhashvalueatallnotarealhashvalue")
             return { ok: false, message: "that username and password do not match", user: {} }
         end if
-        if u["disabled"] = true then
+        if default(u["disabled"], false) = true then
             burned = password_verify(password, string(default(u["password_hash"], "x")))
             return { ok: false, message: "that username and password do not match", user: {} }
         end if
@@ -103,7 +103,7 @@ library gdash_users
         if error or not good then
             return { ok: false, message: "that username and password do not match", user: {} }
         end if
-        return { ok: true, message: "", user: { name: username, email: email_of(u), groups: groups_of(u), admin: u["admin"] = true } }
+        return { ok: true, message: "", user: { name: username, email: email_of(u), groups: groups_of(u), admin: default(u["admin"], false) = true } }
     end function
 
     function groups_of(u)
@@ -151,10 +151,10 @@ library gdash_users
         if is_unknown(u) then
             return unknown
         end if
-        if u["disabled"] = true then
+        if default(u["disabled"], false) = true then
             return unknown
         end if
-        return { name: username, email: email_of(u), groups: groups_of(u), admin: u["admin"] = true }
+        return { name: username, email: email_of(u), groups: groups_of(u), admin: default(u["admin"], false) = true }
     end function
 
     ' --- the provider seam (GDASH-5) --------------------------------------

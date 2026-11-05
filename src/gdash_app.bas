@@ -233,7 +233,7 @@ library gdash_app
         if is_unknown(g) then
             g = []
         end if
-        return { authed: true, name: string(identity["name"]), email: string(default(identity["email"], "")), groups: g, admin: identity["admin"] = true, sid: sid }
+        return { authed: true, name: string(identity["name"]), email: string(default(identity["email"], "")), groups: g, admin: default(identity["admin"], false) = true, sid: sid }
     end function
 
     function identity_of(v)
@@ -263,7 +263,7 @@ library gdash_app
     ' `access` is admins-only, an unauthenticated viewer gets nothing that is
     ' not explicitly open, and `edit` never falls back to `view`.
     function allowed(rec, v, need)
-        if need = "view" and rec["access"] = "open" then
+        if need = "view" and default(rec["access"], "") = "open" then
             return true
         end if
         if not v.authed then

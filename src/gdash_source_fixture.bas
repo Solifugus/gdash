@@ -45,7 +45,7 @@ library gdash_source_fixture
         if is_unknown(cols) or is_unknown(rows) then
             return { ok: false, columns: [], rows: [], message: "fixture needs 'columns' and 'rows'" }
         end if
-        if doc["fail"] = true then
+        if default(doc["fail"], false) = true then
             ' Lets a test drive the failure path without breaking anything real.
             return { ok: false, columns: [], rows: [], message: "fixture is configured to fail" }
         end if

@@ -268,10 +268,10 @@ program main(args)
             while j < count(have)
                 u = gdash_users.lookup(db, have[j])
                 marks = []
-                if u["admin"] = true then
+                if default(u["admin"], false) = true then
                     marks = concat(marks, ["admin"])
                 end if
-                if u["disabled"] = true then
+                if default(u["disabled"], false) = true then
                     marks = concat(marks, ["disabled"])
                 end if
                 tail = ""
@@ -319,8 +319,8 @@ program main(args)
                     email = gdash_users.email_of(existing)
                 end if
                 if sub = "passwd" then
-                    admin = existing["admin"] = true
-                    disabled = existing["disabled"] = true
+                    admin = default(existing["admin"], false) = true
+                    disabled = default(existing["disabled"], false) = true
                 end if
             end if
             if opt_groups != "" then
@@ -345,11 +345,11 @@ program main(args)
             if count(rest) > 2 then
                 g = split(rest[2], ",")
             end if
-            db = gdash_users.upsert(db, who, "", gdash_users.email_of(existing), g, existing["admin"] = true, existing["disabled"] = true)
+            db = gdash_users.upsert(db, who, "", gdash_users.email_of(existing), g, default(existing["admin"], false) = true, default(existing["disabled"], false) = true)
         else if sub = "disable" then
-            db = gdash_users.upsert(db, who, "", gdash_users.email_of(existing), gdash_users.groups_of(existing), existing["admin"] = true, true)
+            db = gdash_users.upsert(db, who, "", gdash_users.email_of(existing), gdash_users.groups_of(existing), default(existing["admin"], false) = true, true)
         else if sub = "enable" then
-            db = gdash_users.upsert(db, who, "", gdash_users.email_of(existing), gdash_users.groups_of(existing), existing["admin"] = true, false)
+            db = gdash_users.upsert(db, who, "", gdash_users.email_of(existing), gdash_users.groups_of(existing), default(existing["admin"], false) = true, false)
         else if sub = "remove" then
             db = gdash_users.drop_user(db, who)
         else

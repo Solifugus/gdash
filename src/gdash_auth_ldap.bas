@@ -320,7 +320,7 @@ library gdash_auth_ldap
         if not is_unknown(cfg["port"]) then
             c["port"] = cfg["port"]
         end if
-        if cfg["verify"] = false then
+        if default(cfg["verify"], true) = false then
             c["verify"] = false
         end if
         if trim(string(default(cfg["ca_file"], ""))) != "" then
