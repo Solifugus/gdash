@@ -183,7 +183,7 @@ was given for the parameter $1". `test_store` caught it.
   staging by hunk, which this environment cannot do interactively. The commit
   message lists the parts.
 
-## G20-15 — a concurrent-render request that is never answered, intermittently — *captured; with gbasic*
+## G20-15 — a concurrent-render request that is never answered, intermittently — *root cause found: gBASIC's client; fix awaiting the maintainer*
 
 `run_workers.sh` "eight concurrent renders all succeed" failed twice in about
 a dozen runs. Four of the eight `curl`s got no response within 20 s (`000`),
@@ -225,6 +225,31 @@ gbasic's own measurement it should be served in milliseconds on data this
 small. The evidence and a reproduction went to the gbasic session. The
 owner side (its pid, and when it stopped) is the missing half: connections do
 not expose the owner's pid, and the owners had exited by capture time.
+
+**Root cause (gbasic, 2026-11-07, with owner-side tracing).** gbasic
+sampled `/proc/locks`, the owner processes and `db.sock` every 20 ms while
+looping `run_workers.sh`, and reproduced a 10,036.8 ms connect. During the
+stall nothing held the store's lock, no socket existed and no owner process
+existed. Just before it, five linger-0 owners had each been started and were
+gone within about 200 ms.
+
+So nothing was being waited for. The 10 s is the **client's own reconnect
+deadline** (`client.c`, `DEFAULT_WAIT_MS`):
+
+1. The owner a client started answered "busy", because another owner had
+   the lock.
+2. That winning owner then stopped, which at linger 0 takes milliseconds.
+3. The client kept retrying a socket path that no longer existed, for its
+   full deadline, instead of starting an owner again.
+
+The proposed fix, in the client: while waiting, if the lock is free and no
+socket answers, start again at once. gbasic has put it to the maintainer
+before changing anything.
+
+**Production impact: practically none.** The hole needs the winning owner to
+stop inside the client's retry window. At the production linger of 30 s, the
+winner is still up when a racing client retries. The suite keeps linger 0,
+which is what exposes the bug, and its workers test will confirm the fix.
 
 The same traces also measured the single-threaded owner. Concurrent
 deliberately slow queries in the drain test, about 4 s each alone, took
