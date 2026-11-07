@@ -78,7 +78,12 @@ program main(args)
     s = gdash_test.contains_text(s, said, "money in USD", "and which currency a money column holds")
 
     ' --- the happy path ----------------------------------------------------
-    s = gdash_test.ok(s, good.ok, "a good query answers")
+    s = gdash_test.ok(s, good.ok, "a good query answers -- " + string(good.stage) + ": " + string(good.message))
+    if not good.ok then
+        ' Everything below reads the answer; stop here with the reason rather
+        ' than die indexing an answer that is not there.
+        exit(gdash_test.report(s))
+    end if
     s = gdash_test.eq(s, good.stage, "answered", "at the answered stage")
     s = gdash_test.eq(s, string(good.answer.value), "3", "with the value the query returned")
     s = gdash_test.eq(s, good.sql, "select count(*) as n from orders", "carrying the query it ran")
@@ -351,19 +356,18 @@ program main(args)
                           model_double.saying("select account, sum(usd_value) as total from positions group by account"), {})
     s = gdash_test.ok(s, mixed.ok, "the question answers")
     mvis = gdash_ask.draft_visual(mixed, trec, mixed.scaled)
-    s = gdash_test.ok(s, is_unknown(mvis.encoding["format"]), "an unresolvable money channel is NOT promoted as currency")
-    caveat = gdash_ask.currency_caveat(mixed, trec, mvis)
-    s = gdash_test.contains_text(s, caveat, "total", "and the draft says which column")
-    s = gdash_test.contains_text(s, caveat, "display scale", "and why it was left unformatted")
-    s = gdash_test.contains_text(s, caveat, "Alias it", "and what to do about it")
+    ' Since G20-9 an unresolved scale renders at the currency's own places, so
+    ' the money channel is promoted as currency, in the VALUE'S currency.
+    s = gdash_test.eq(s, string(mvis.encoding["format"]), "currency", "an aggregate of money on a two-currency dashboard is promoted as currency")
+    s = gdash_test.eq(s, string(mvis.encoding["currency"]), "USD", "in the currency its value holds")
 
-    ' Aliased to the money column's own name, it resolves, and the currency
-    ' format comes back -- which is exactly what the caveat tells a person.
-    named = gdash_ask.ask(p, "treasury", "draft", trec, "total usd value by account",
-                          model_double.saying("select account, sum(usd_value) as usd_value from positions group by account"), {})
-    nvis = gdash_ask.draft_visual(named, trec, named.scaled)
-    s = gdash_test.eq(s, string(nvis.encoding["format"]), "currency", "aliased to the money column, it formats as currency")
-    s = gdash_test.eq(s, gdash_ask.currency_caveat(named, trec, nvis), "", "and there is nothing left to warn about")
+    ' THE CASE THAT CHOOSING "THE FIRST CURRENCY IN REACH" GOT WRONG: a yen
+    ' aggregate on a dashboard whose first money column is dollars. Stating USD
+    ' on it would be refused at render, as the value is JPY.
+    yen = gdash_ask.ask(p, "treasury", "draft", trec, "total jpy value by account",
+                        model_double.saying("select account, sum(jpy_value) as total from positions group by account"), {})
+    yvis = gdash_ask.draft_visual(yen, trec, yen.scaled)
+    s = gdash_test.eq(s, string(yvis.encoding["currency"]), "JPY", "a yen aggregate is promoted in yen, not in the first currency in reach")
 
     ' The single-currency case is unchanged: `total` is not a money column, but
     ' every money column in reach agrees, so there is nothing to be wrong about.

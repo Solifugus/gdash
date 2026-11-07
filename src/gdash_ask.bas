@@ -349,11 +349,16 @@ library gdash_ask
         units_told = true
         on error goto next
         plan = nlq.plan(cat, vocab, q, { dialect: _dialect(), exemplars: ex, notes: told })
-        if error then
+        first = error
+        if first then
             units_told = false
             plan = nlq.plan(cat, vocab, q, { dialect: _dialect(), exemplars: ex })
-            if error then
-                return _stop("ground", q, "the question could not be planned against this data", { as_of: stamps })
+            second = error
+            if second then
+                ' The library's own reason travels with the refusal: "could not
+                ' be planned" alone hid a raise that had nothing to do with
+                ' the question (found when an installed nlq changed under gdash).
+                return _stop("ground", q, "the question could not be planned against this data: " + second.message, { as_of: stamps })
             end if
         end if
         if not plan.ok then
@@ -722,22 +727,22 @@ library gdash_ask
             if _carries_money(draft.rows, rewritten, scaled, channel) then
                 ' AND ONLY IF THE RENDERER COULD FIND A SCALE FOR IT. Setting
                 ' `format: "currency"` on a channel whose scale cannot be
-                ' resolved produces a visual that validates, promotes, and then
-                ' renders an error instead of a chart -- which is worse than no
-                ' formatting, because it is discovered by whoever opens the
-                ' dashboard rather than by whoever promoted it (G13-4).
+                ' resolved produced a visual that validated, promoted, and then
+                ' rendered an error instead of a chart (G13-4). Since G20-9 an
+                ' unresolved scale renders at the currency's own places, so a
+                ' money channel is always formatted.
                 '
-                ' The channel resolves when it IS a money column, or when every
-                ' money column in reach agrees on a scale. On a single-currency
-                ' dashboard that is always; on a multi-currency one an aliased
-                ' aggregate has nothing to resolve to, and the draft says so
-                ' rather than the dashboard saying it later.
-                if _channel_scale(channel, scaled) >= 0 then
-                    enc["format"] = "currency"
+                ' THE CURRENCY IS THE VALUE'S, read from the draft's rows: on a
+                ' multi-currency dashboard the first currency in reach could be
+                ' the wrong one, and a stated currency that disagrees with the
+                ' value is refused at render.
+                enc["format"] = "currency"
+                cur = _value_currency(draft.rows, channel)
+                if cur = "" then
                     cur = _currency_of(scaled)
-                    if cur != "" then
-                        enc["currency"] = cur
-                    end if
+                end if
+                if cur != "" then
+                    enc["currency"] = cur
                 end if
             end if
         end if
@@ -749,51 +754,15 @@ library gdash_ask
                  encoding: enc }
     end function
 
-    ' The currency to render in. gdash requires a dataset's money columns to
-    ' agree on a scale for a formatted channel (gdash_render.money_scale), so
-    ' one code for the visual is the same assumption stated once more; an
-    ' encoding that names none renders as USD, which would be wrong in silence.
-    ' What gdash_render.scale_of will make of this column name, decided from
-    ' the same facts without opening the datasets again. Mirrors that function
-    ' deliberately: a promotion that guessed differently from the renderer
-    ' would promote visuals that do not draw.
-    function _channel_scale(channel, scaled)
-        ch = lower(trim(string(channel)))
-        agreed = -1
-        for each k in keys(scaled)
-            sc = scaled[k]
-            if lower(sc.column) = ch then
-                return sc.scale
+    ' The currency of the value a draft's channel actually holds, or "".
+    function _value_currency(rows, channel)
+        if type(rows) = "array" and count(rows) > 0 then
+            v = rows[0][channel]
+            if type(v) = "money" then
+                return money.currency(v)
             end if
-            if agreed = -1 then
-                agreed = sc.scale
-            else if agreed != sc.scale then
-                agreed = -2
-            end if
-        next
-        return agreed
-    end function
-
-    ' Why a money channel was left unformatted, for the draft to say. Empty
-    ' when there is nothing to say.
-    function currency_caveat(draft, rec, vis)
-        enc = vis.encoding
-        channel = ""
-        if default(enc["mark"], "") = "value" then
-            channel = string(enc["value"])
-        else if default(enc["mark"], "") = "bar" then
-            channel = string(enc["y"])
         end if
-        if channel = "" then
-            return ""
-        end if
-        if not is_unknown(enc["format"]) then
-            return ""
-        end if
-        if not _carries_money(draft.rows, vis.sql, draft.scaled, channel) then
-            return ""
-        end if
-        return "'" + channel + "' holds money, and this dashboard's money columns do not agree on a display scale -- so it is left unformatted rather than drawn at a guessed number of places. Alias it to the money column it comes from, or give the datasets one scale."
+        return ""
     end function
 
     ' The rows first, because they know: a value that came back as money is

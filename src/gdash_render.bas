@@ -50,11 +50,10 @@ library gdash_render
     '                                          there is nothing to be wrong
     '                                          about
     '   they disagree, or the name means
-    '   two scales                          -> -2, and the caller REFUSES
+    '   two scales                          -> -2
     '
-    ' -1 means there is no money in reach at all, which is a different refusal:
-    ' a visual that formats as currency over a dataset with no money column is
-    ' a record mistake, not an ambiguity.
+    ' -1 means there is no money in reach at all. Neither is refused any more:
+    ' `places_for` turns both into the currency's own places (G20-9).
     function scale_of(cols, column)
         if count(keys(cols)) = 0 then
             return -1
@@ -96,13 +95,28 @@ library gdash_render
         return gdash_store.money_columns(db_path)
     end function
 
-    ' The message a refusal carries. One place, because a person who meets it
-    ' needs to be told what to change, and three copies of that sentence drift.
-    function _scale_refusal(name, column, scale)
-        if scale = -1 then
-            return "visual '" + name + "' formats '" + column + "' as currency, but no dataset it can reach declares a money column"
+    ' The places a money cell is shown at. Its column's display scale when that
+    ' resolves; otherwise THE CURRENCY'S OWN minor places -- two for USD, none
+    ' for JPY (G20-9, ruled 2026-11-07). With minor units an unresolved scale
+    ' could show a value a hundred times off, so the renderer refused; with
+    ' exact money it can only show more or fewer places, and the currency's
+    ' convention is the honest default.
+    function places_for(scale, value, code)
+        if scale >= 0 then
+            return scale
         end if
-        return "visual '" + name + "' cannot tell what scale '" + column + "' is in: it is not a money column of any dataset here, and the money columns in reach disagree. Alias it to the money column it comes from, or give the datasets one scale."
+        cur = string(default(code, ""))
+        if type(value) = "money" then
+            cur = money.currency(value)
+        end if
+        if cur = "" then
+            cur = "USD"
+        end if
+        mp = gdash_format.minor_places(cur)
+        if mp < 0 then
+            return 2
+        end if
+        return mp
     end function
 
     ' The currency the record STATES for a money channel, or "" when it states
@@ -438,9 +452,6 @@ library gdash_render
                 money_ch = string(enc["value"])
             end if
             scale = scale_of(scales, money_ch)
-            if scale < 0 then
-                return _err(_scale_refusal(name, money_ch, scale))
-            end if
         end if
 
         if mark = "value" then
@@ -449,7 +460,7 @@ library gdash_render
                 return _err("visual '" + name + "': channel 'value' names column '" + string(ch) + "', which the query does not return")
             end if
             if is_money then
-                got = gdash_format.currency(row0[ch], scale, currency_of(visual))
+                got = gdash_format.currency(row0[ch], places_for(scale, row0[ch], currency_of(visual)), currency_of(visual))
                 if not got.ok then
                     return _err("visual '" + name + "': " + got.message)
                 end if
@@ -578,10 +589,11 @@ library gdash_render
                         ' because money elsewhere is ambiguous.
                         cell_scale = 2
                         if format_name(entry) = "currency" then
-                            cell_scale = scale_of(scales, cn)
-                            if cell_scale < 0 then
-                                return _err(_scale_refusal(name, cn, cell_scale))
+                            stated = currency_of(visual)
+                            if type(entry) = "record" then
+                                stated = string(default(entry["currency"], stated))
                             end if
+                            cell_scale = places_for(scale_of(scales, cn), rows[r][cn], stated)
                         end if
                         spec = format_spec(entry, cell_scale, currency_of(visual))
                         shown = gdash_format.apply(spec, rows[r][cn])

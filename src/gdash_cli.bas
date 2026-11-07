@@ -844,7 +844,6 @@ program main(args)
         end if
 
         vis = gdash_ask.draft_visual(draft, loaded.record, draft.scaled)
-        caveat = gdash_ask.currency_caveat(draft, loaded.record, vis)
         done = gdash_ask.promote(p, name, promote_as, vis)
         if not done.ok then
             print to error done.message
@@ -852,9 +851,6 @@ program main(args)
         end if
         print("")
         print(done.message + " on dashboard " + name + ", as a " + string(vis.encoding["mark"]) + " over dataset " + vis.dataset)
-        if caveat != "" then
-            print("  note: " + caveat)
-        end if
         print("  gdash validate " + name + "   to check it")
         print("  gdash publish  " + name + "   when people should see it")
         exit(0)

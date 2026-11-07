@@ -137,32 +137,31 @@ program main(args)
     s = gdash_test.ok(s, not contains(mfrag, "gdash-error"), "a visual over one dataset is not disabled by another's scale")
     s = gdash_test.contains_text(s, mfrag, "<svg", "it draws")
 
-    ' And what is still genuinely ambiguous REFUSES, naming the column, rather
-    ' than formatting at a guess. This is the case that used to be silent.
-    ' (An alias over ONE currency: `usd_value + jpy_value` is now refused by
-    ' G-SQL itself, as dollars added to yen.)
+    ' AN UNRESOLVED SCALE NO LONGER REFUSES (G20-9, ruled 2026-11-07). With
+    ' minor units the wrong scale showed a value a hundred times off, so this
+    ' refused; with exact money only the number of places is in question, and
+    ' it falls back to the currency's own -- two for USD, none for JPY.
     aliased = { dataset: "positions",
                 sql: "select account, usd_value * 1 as total from positions",
                 encoding: { mark: "bar", x: "account", y: "total", format: "currency", currency: "USD" } }
     ares = gdash_store.select_rows(posp, aliased["sql"], {})
     afrag = gdash_render.render_visual("aliased", aliased, ares.rows, posp, {})
-    s = gdash_test.contains_text(s, afrag, "gdash-error", "an alias with no resolvable scale is refused")
-    s = gdash_test.contains_text(s, afrag, "total", "and the refusal names the column")
-    s = gdash_test.contains_text(s, afrag, "Alias it", "and says what to do about it")
+    s = gdash_test.ok(s, not contains(afrag, "gdash-error"), "an alias with no resolvable scale draws rather than refusing")
+    s = gdash_test.contains_text(s, afrag, "<svg", "as a chart")
 
-    ' A TABLE column that is formatted as currency and whose scale does not
-    ' resolve must refuse too. Without this the table's refusal branch is never
-    ' taken by any fixture here, and "fall back to 2" -- the defect exactly as
-    ' it shipped -- passes every other assertion in this file. Found by
-    ' mutation, which is the only thing that could have found it.
+    ' The TABLE path, which is where the places can be read. Each cell falls
+    ' back to its own value's currency: dollars at two places, yen at none.
     aliastab = { dataset: "positions",
-                 sql: "select account, usd_value * 1 as total from positions",
+                 sql: "select account, usd_value * 1 as total, jpy_value * 1 as yen from positions order by account",
                  encoding: { mark: "table",
-                             formats: { total: { name: "currency", currency: "USD" } } } }
+                             formats: { total: "currency", yen: "currency" } } }
     tres = gdash_store.select_rows(posp, aliastab["sql"], {})
     tfrag = gdash_render.render_visual("aliastab", aliastab, tres.rows, posp, {})
-    s = gdash_test.contains_text(s, tfrag, "gdash-error", "a table cell with no resolvable scale is refused, not formatted at 2")
-    s = gdash_test.contains_text(s, tfrag, "total", "naming the column")
+    s = gdash_test.ok(s, not contains(tfrag, "gdash-error"), "a table cell with no resolvable scale is formatted, not refused")
+    s = gdash_test.contains_text(s, tfrag, "$1,250,750.25", "a dollar alias at USD's two places")
+    s = gdash_test.contains_text(s, tfrag, "¥430,000", "and a yen alias at JPY's none, in its own currency")
+    s = gdash_test.eq(s, gdash_render.places_for(-2, unknown, "KWD"), 3, "with no value to ask, the stated currency decides the places")
+    s = gdash_test.eq(s, gdash_render.places_for(4, unknown, "USD"), 4, "and a resolved scale always wins")
 
     ' A percent or number column in the same table must NOT be refused because
     ' money elsewhere is ambiguous -- it needs no money scale at all.
