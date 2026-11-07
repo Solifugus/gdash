@@ -15,7 +15,7 @@ libssl3 libxml2 libcrypt1 libgirepository-2.0-0 libpcre2-8-0
 ```
 
 gdash stages its data in G-SQL, which is part of the interpreter, so there is
-no database to install. It needs a gBASIC build at or after `e902acf`
+no database to install. It needs a gBASIC build at or after `d2e310e`
 (`gbasic --version` prints `0.10.0+<rev>`), and builds since then link PCRE2.
 `libsqlite3` is still linked by the interpreter; gdash itself no longer uses
 it.
@@ -121,11 +121,13 @@ nothing has used it for its linger: 30 seconds by default, set with
 `GDASH_GSQL_LINGER` (seconds) in `/etc/gdash/environment`. A dashboard nobody
 is looking at has no process. `systemctl stop gdash` stops the owners with the
 rest of the service, each cleanly. Delete `/var/cache/gdash` only while the
-service is stopped, as before. One limit is known and asked of the platform
-(`gdash20_platform_ask_gsql.md` A1): an owner's socket lives in a per-user
-directory that `PrivateTmp` separates between the server and the scheduler
-units, so the units must not be relied on to refresh a dashboard someone has
-open until that lands.
+service is stopped, as before. An owner's socket lives inside its database
+directory, so the server unit, the scheduler unit and an administrator's shell
+all reach the same owner whatever `/tmp` each has. That needs gBASIC at or
+after `d2e310e`. On an earlier build, a scheduled refresh stalls behind a
+dashboard someone has open (GDASH-20, G20-2). **Do not make the cache
+group-writable:** G-SQL refuses a database directory other users can write
+(mode 0770), and 0700, as it creates them, is right.
 
 ## 5. Sizing
 

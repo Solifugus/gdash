@@ -138,13 +138,14 @@ echo "--- A1: a refresh while a viewer has the dashboard open ---"
 # THE CASE GDASH-20 S0-6 PREDICTED, MEASURED. A viewer's page makes a server
 # worker start the G-SQL owner of timed/published (linger 30 s). The scheduler
 # then refreshes the same database from ANOTHER unit, and PrivateTmp gives each
-# unit its own /tmp -- where the owner's socket lives when XDG_RUNTIME_DIR is
-# unset. So the scheduler cannot find the server's owner.
+# unit its own /tmp -- where the owner's socket used to live when
+# XDG_RUNTIME_DIR was unset, so the scheduler could not find the server's owner.
 #
-# This is a probe of a KNOWN LIMIT (gdash20_platform_ask_gsql.md A1), not a
-# pass: it is green while the limit holds, and goes red, saying so, when the
-# platform fixes it -- at which point it becomes a plain assertion that the
-# refresh is prompt.
+# Until gbasic d2e310e this was a probe of a KNOWN LIMIT: measured on db72b76
+# the pass stalled 28.5 s, until the server owner's 30 s linger ran out, and
+# under steady viewing it would stall for as long as people looked. A1 put the
+# owner's socket in the database directory, which every unit can reach
+# whatever its /tmp, so this is now a plain assertion: the refresh is prompt.
 touch_db="$(sh_ct 'curl -s -o /dev/null -w "%{http_code}" --max-time 10 http://127.0.0.1:8780/d/timed')"
 ok "a viewer opens the published dashboard, so its owner is running" "$touch_db" "200"
 sh_ct 'sleep 1.5' >/dev/null 2>&1
@@ -156,15 +157,12 @@ echo "  measured: the scheduler pass took ${a1ms}ms (the server owner's linger i
 a1log="$(since_cursor "$cur" gdash-scheduler)"
 a1line="$(grep -oE 'schedule: [0-9]+ checked, [0-9]+ refreshed, [0-9]+ unchanged, [0-9]+ failed' <<<"$a1log" | head -1)"
 echo "  measured: ${a1line:-no schedule line}"
-# MEASURED SHAPE (2026-11-06, build db72b76): not a failure but a STALL. The
-# scheduler's client cannot see the server's owner, loses the lock race,
-# retries -- and gets through only once the server's owner lingers out: 28.5 s
-# against a 30 s linger begun 1.5 s earlier. Under steady viewing every request
-# renews that linger, so the stall lasts as long as people are looking.
-if grep -qE ', [1-9][0-9]* failed' <<<"$a1line" || (( a1ms > 10000 )); then
-    echo "  ok   KNOWN LIMIT A1 holds: a refresh stalls or fails while the server holds the database open"; pass=$((pass+1))
+yes_ "the refresh does not fail while a viewer holds the database open" \
+     "$(grep -E ', 0 failed' <<<"$a1line")"
+if (( a1ms < 10000 )); then
+    echo "  ok   and it is prompt: ${a1ms}ms, where db72b76 stalled 28.5 s"; pass=$((pass+1))
 else
-    echo "  FAIL A1 no longer reproduces (${a1ms}ms, no failure) -- if the platform fixed it, make this a plain assertion that the refresh is prompt"; fail=$((fail+1))
+    echo "  FAIL the refresh waited ${a1ms}ms behind the server's owner -- A1 has regressed"; fail=$((fail+1))
 fi
 
 echo "--- G14-1: a directory the service user cannot write into ---"

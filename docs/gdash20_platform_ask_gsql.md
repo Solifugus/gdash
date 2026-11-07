@@ -11,7 +11,7 @@ staging table renamed over the live one in one transaction, under readers in
 step 0). This ask lists what is missing in priority order. Only A1 blocks
 anything.
 
-## A1. Every process that can reach a database must find its owner. **Blocks deployment.**
+## A1. Every process that can reach a database must find its owner. **Done: gbasic `d2e310e`**, measured by gdash under real systemd (361 ms, where `db72b76` stalled 28.5 s).
 
 **The problem.** A client finds a database's owner through a socket in
 `$XDG_RUNTIME_DIR/gbasic`, or `/tmp/gbasic-<uid>` when that is unset

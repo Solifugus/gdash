@@ -15,7 +15,7 @@ one that mattered: it was built as `admin = true`, and was `unknown` for a
 user record with no `admin` key. This was fixed first, as its own commit,
 with no change in behaviour.
 
-## G20-2 — the owner's socket under `PrivateTmp` — *asked* (A1), now measured
+## G20-2 — the owner's socket under `PrivateTmp` — *fixed by the platform* (A1, gbasic `d2e310e`), measured both ways
 
 This is S0-6, the one step-0 check that failed. It was predicted by analysis
 in step 0 and has now been measured. `run_systemd.sh` gained a probe that
@@ -37,11 +37,15 @@ never stops. The refresh then stalls until the client's retries run out and
 the pass fails. The probe is green while the limit holds, and goes red when A1
 lands, saying so.
 
-The gbasic session has taken A1 in the preferred shape, a socket inside the
-database directory. It is in progress on gbasic master (`9a9738b`, `85e4901`,
-`d35aef9`, all marked WIP) and is not in the installed build. Until it lands,
-the units must not be relied on to refresh a dashboard someone has open
-(`gdash_operations.md` §4).
+**Fixed by gbasic `d2e310e`**, which puts the socket inside the database
+directory. The probe is now a plain assertion. Under real systemd, against a
+build of `d2e310e` made from a clean `git archive` in the scratchpad (the
+installed interpreter was still `db72b76`), the same overlapping pass took
+**361 ms**, with nothing failed. That is the first real-systemd measurement of
+A1, and the systemd suite is 40/40. The hermetic suite is 37/37 on that build.
+gdash's connect code did not change. The one new constraint is that a
+database directory other users can write is refused, and `gdash_operations.md`
+§4 says so.
 
 ## G20-3 — trailing zeros fail a money column again — *asked* (A6), stopgap in place
 
@@ -167,7 +171,7 @@ platform stamp did not fire, because no run straddled the change.
 - **Step 0's refresh timings** (S0-7) stand: 10⁶ rows in about 48 s at one
   row a statement, with the client's memory flat. The child batches 10 rows
   a statement.
-- **systemd (real units, podman):** green, including the new A1 probe, which
-  passes by measuring the stall above.
+- **systemd (real units, podman):** 39/39 on `db72b76`, with the probe
+  measuring the stall, and 40/40 on `d2e310e` with it fixed (361 ms).
 - **Not run:** `run_fhs.sh` and `run_ldap.sh`. Neither touches the store's
   semantics beyond what the hermetic suite covers.

@@ -382,9 +382,10 @@ What step 0 found:
 
 **Built on the maintainer's instruction not to wait for A1** (2026-11-06).
 All suites are green on `0.10.0+db72b76`: hermetic, ODBC, live Postgres and
-systemd. A1, measured, is a refresh stall of up to the owner's linger, longer
-under steady viewing; gbasic has it in progress. Building found two more
-platform asks:
+systemd. A1, measured on `db72b76`, was a refresh stall of up to the owner's
+linger, longer under steady viewing. gbasic fixed it in `d2e310e`, and the
+systemd suite measures 361 ms on that build. Building found two more platform
+asks:
 
 - **A5:** the dialect gaps (`substr`, `GROUP BY` an alias or a position);
 - **A6:** trailing zeros counted as precision by the money reader. A stopgap

@@ -200,12 +200,12 @@ tenant-rooted layout.
 - publish carrying draft data across (G11-11);
 - dataset sharing;
 - relaxing the scale-conflict refusal (G20-9, a ruling owed);
-- any workaround for A1. The units' `PrivateTmp` stays, and so does the stall,
-  until the platform's socket-in-the-database lands.
+- any workaround for A1. None was needed: gbasic `d2e310e` fixed it, and the
+  systemd suite asserts it (361 ms under real systemd; see G20-2).
 
 **Owed to the maintainer:**
 
 - the design edits, written out as G20-a to G20-g in
   `gdash_design_edits_owed.md`. The CLAUDE.md invariants are among them;
 - the G20-9 ruling;
-- relaying A5 and A6 to gbasic (A1 to A4 are already there).
+- nothing to relay: A5 and A6 reached gbasic, and A6 is next on their side.
