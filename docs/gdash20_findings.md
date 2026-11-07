@@ -130,14 +130,26 @@ go:
 The model is now told each money column's currency. `units_told` keeps its
 shape and means "the currency notes reached the model".
 
-## G20-9 — the scale-conflict refusal (G13-2) now guards only places shown — *ruling owed*
+## G20-9 — the scale-conflict refusal (G13-2) now guards only places shown — *ruled 2026-11-07: fall back, do not refuse*
 
 With minor units, two datasets declaring `amount` at different scales made a
 wrong number possible, so the renderer refused. With exact money, the amount
 is right whichever scale is chosen, and only the number of places shown is
-ambiguous. The refusal is kept, because relaxing it is a behaviour change
-nobody has ruled on. The simpler rule would be: fall back to the currency's
-own places, and refuse nothing.
+ambiguous.
+
+**Ruled by the maintainer (2026-11-07):** an unresolved scale falls back to
+the currency's own minor places (USD two, JPY none), and nothing is refused.
+
+- `gdash_render.places_for` decides the places per value, from the value's
+  own currency.
+- The promotion caveat, which existed only to explain the refusal, is gone.
+- A promoted draft now states its value's currency, not the first one in
+  reach. Before, a yen aggregate on a dashboard whose first money column was
+  dollars would have been stamped USD and refused at render.
+- Building the change also found that the cut removing the caveat had taken
+  `_dialect` and `_carries_money` with it. Every question then failed with
+  "could not be planned", and that message hid the reason, which was an
+  undefined function. The refusal now carries the library's own reason.
 
 ## G20-10 — a NULL money cell is stored as NULL — *noted*, behaviour change
 
