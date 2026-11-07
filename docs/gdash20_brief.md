@@ -157,8 +157,8 @@ tenant-rooted layout.
 
 - **Layout:** one database per (dashboard, stage), at
   `<cache>/<dashboard>/<stage>/data.gsql`. Every dataset is a table in it.
-- **Refresh:** writes `<dataset>__staging`, ten rows a statement and a
-  thousand rows a transaction. The parent swaps it in one transaction (drop
+- **Refresh:** writes `<dataset>__staging` through `db.insert`, a thousand
+  rows a call and a transaction (ten rows a statement until A3 landed). The parent swaps it in one transaction (drop
   the live table, rename the staging one, move its `_gdash_meta` rows). The
   version bump comes after.
 - **Reads:** every read runs in `begin("read")`, so a write is refused at the

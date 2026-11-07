@@ -40,7 +40,6 @@ NOTES = [
 # placeholder or keyword that makes a note necessary.
 STORE_NOTES = {
     "<defs>": "<defs> is '\"<column>\" money(<currency>)|integer|number|string' per column (store_column_types).",
-    "_insert_sql": "_insert_sql builds a multi-row insert into the table, ten rows a statement as ($1, ..., $n), ($n+1, ...), a thousand rows a transaction.",
     "<sql>": "<sql> is ask or visual SQL, run inside begin(\"read\") so the engine refuses any write.",
     "alter table": "The swap: drop the live table and rename the staging one, with its _gdash_meta rows, in one transaction.",
 }

@@ -219,61 +219,11 @@ library gdash_store
         return raw
     end function
 
-    ' Rows per INSERT statement. Ten halves a 10^5-row load against one
-    ' (GDASH-20 S0-7); the platform's bulk verb (ask A3) replaces this.
-    function _rows_per_statement()
-        return 10
-    end function
-
-    function _rows_per_commit()
+    ' Rows per `gsql.insert` call, and so per transaction: big enough that a
+    ' commit's sync is shared by a thousand rows, small enough that a refresh
+    ' never builds all of its records at once.
+    function _rows_per_call()
         return 1000
-    end function
-
-    function _insert_sql(table, width, n)
-        groups = []
-        r = 0
-        while r < n
-            marks = []
-            c = 0
-            while c < width
-                marks = append(marks, "$" + string(r * width + c + 1))
-                c += 1
-            end while
-            groups = append(groups, "(" + join(marks, ", ") + ")")
-            r += 1
-        end while
-        return "insert into " + _quote_ident(table) + " values " + join(groups, ", ")
-    end function
-
-    ' The refused row, found again one row at a time. A batched statement
-    ' refuses as a whole, and "somewhere in rows 40-49" is not something a
-    ' person can act on.
-    function _locate(db, table, plan, rows, first, last)
-        r = first
-        stmt = _insert_sql(table, count(plan), 1)
-        while r <= last
-            vals = []
-            c = 0
-            while c < count(plan)
-                vals = append(vals, _cell(plan[c], rows[r][c]))
-                c += 1
-            end while
-            on error goto next
-            gsql.begin(db)
-            gsql.exec(db, stmt, vals)
-            e = error
-            _rollback(db)
-            on error stop
-            if e then
-                col = ""
-                if has(e.details, "column") then
-                    col = ", column '" + string(e.details.column) + "'"
-                end if
-                return "row " + string(r) + col + ": " + e.message
-            end if
-            r += 1
-        end while
-        return "rows " + string(first) + "-" + string(last) + " were refused"
     end function
 
     ' Materialize fetched rows into `<table>__staging`. Per-column kind,
@@ -315,58 +265,56 @@ library gdash_store
             return { ok: false, message: "cannot record the staging table's columns: " + e.message, rejected: 0 }
         end if
 
+        ' MANY ROWS A CALL (gsql.insert, GDASH-20 ask A3). Each call converts
+        ' and checks every value exactly as INSERT does, and is all or nothing;
+        ' a refused row is named by its index in the call, which is turned back
+        ' into the row's index in the dataset.
+        names = []
+        for each entry in plan
+            names = append(names, entry.name)
+        next
         width = count(plan)
-        per = _rows_per_statement()
-        full = _insert_sql(staging, width, per)
-        r = 0
         n = count(rows)
-        since = 0
-        gsql.begin(db)
+        r = 0
         while r < n
-            take = per
-            stmt = full
-            if n - r < per then
+            take = _rows_per_call()
+            if n - r < take then
                 take = n - r
-                stmt = _insert_sql(staging, width, take)
             end if
-            vals = []
+            batch = []
             k = 0
             while k < take
+                rec = {}
                 c = 0
                 while c < width
-                    vals = append(vals, _cell(plan[c], rows[r + k][c]))
+                    rec[names[c]] = _cell(plan[c], rows[r + k][c])
                     c += 1
                 end while
+                batch = append(batch, rec)
                 k += 1
             end while
-            gsql.exec(db, stmt, vals)
+            gsql.insert(db, staging, batch)
             e = error
             if e then
-                _rollback(db)
                 ' A refusal, not a rounding: the whole refresh fails, and the
                 ' live table is untouched.
-                where = _locate(db, staging, plan, rows, r, r + take - 1)
+                where = "rows " + string(r) + "-" + string(r + take - 1)
+                if has(e.details, "index") then
+                    where = "row " + string(r + e.details.index)
+                end if
+                if has(e.details, "column") then
+                    where = where + ", column '" + string(e.details.column) + "'"
+                end if
                 gsql.exec(db, "drop table if exists " + _quote_ident(staging))
                 gsql.exec(db, "delete from _gdash_meta where dataset = $1", [staging])
                 if error then
                 end if
                 _close(db)
-                return { ok: false, message: where, rejected: 1 }
+                return { ok: false, message: where + ": " + e.message, rejected: 1 }
             end if
             r += take
-            since += take
-            if since >= _rows_per_commit() then
-                gsql.commit(db)
-                gsql.begin(db)
-                since = 0
-            end if
         end while
-        gsql.commit(db)
-        e = error
         _close(db)
-        if e then
-            return { ok: false, message: "commit failed: " + e.message, rejected: 0 }
-        end if
         return { ok: true, message: "", rejected: 0 }
     end function
 

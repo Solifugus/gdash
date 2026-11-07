@@ -75,7 +75,7 @@ to the new engine:
 - **`describe_datasets` without gdash's own meta table** for the columns and
   their kinds. gdash keeps the meta table for the display scale either way.
 
-## A3. Many rows in one round trip. *Low to medium.*
+## A3. Many rows in one round trip. **Done: gbasic `f02455a`** (`db.insert(table, rows)`), adopted by gdash's `materialize`. *Was: low to medium.*
 
 The refresh child inserts a whole dataset through the owner. Measured, at 1 000
 rows a transaction:

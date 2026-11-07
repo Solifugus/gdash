@@ -165,6 +165,26 @@ was given for the parameter $1". `test_store` caught it.
   staging by hunk, which this environment cannot do interactively. The commit
   message lists the parts.
 
+## G20-14 — the bulk insert (A3) is adopted, and the rest of a refresh is gdash's own cost — *noted*
+
+gbasic `f02455a` added `db.insert(table, rows)`. `materialize` now hands it a
+thousand records a call, one transaction each. A refused row is named by
+`error.details.index`, which replaced both the hand-built multi-row `INSERT`
+and the row-by-row retry used to find the bad row.
+
+Measured on that build, with the time to build the source rows subtracted:
+
+| rows | 10 rows a statement | `db.insert` |
+|---|---|---|
+| 10⁵ | 3.6 s | 2.8 s |
+| 10⁶ | 38.9 s | 29.5 s |
+
+About 25% faster. gbasic measured the insert itself at 5.2 s per million
+rows, so most of what remains is gdash building one record per row in
+interpreted gBASIC: about 6 µs a cell. At the volumes the answer to the G-SQL
+volumes ask expects (10²–10⁴ rows typical, 10⁶ the largest), that is seconds
+at most, and not worth restructuring for now.
+
 ## The platform moved under the phase — *noted*
 
 Step 0 ran on `0.10.0+cac666c`. During the build the installed interpreter
@@ -177,9 +197,9 @@ platform stamp did not fire, because no run straddled the change.
 - **Hermetic suite:** 37 of 37 green on `0.10.0+db72b76`, scratch-clean
   including G-SQL owners.
 - **Opt-in runners:** ODBC 12 of 12 and live Postgres 10 of 10.
-- **Step 0's refresh timings** (S0-7) stand: 10⁶ rows in about 48 s at one
-  row a statement, with the client's memory flat. The child batches 10 rows
-  a statement.
+- **Refresh timings:** step 0 measured 10⁶ rows in about 48 s at one row a
+  statement, with the client's memory flat. Since A3 it is about 30 s through
+  `db.insert`; see G20-14.
 - **systemd (real units, podman):** 39/39 on `db72b76`, with the probe
   measuring the stall, and 40/40 on `d2e310e` with it fixed (361 ms).
 - **Not run:** `run_fhs.sh` and `run_ldap.sh`. Neither touches the store's
