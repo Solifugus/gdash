@@ -181,11 +181,26 @@ reproduce in six further runs, three with `GDASH_GSQL_LINGER=0` and three
 with 5. Whether it existed on SQLite is unknown: the suite's runs before the
 migration did not show it, but they were too few to say.
 
-One plausible mechanism, not shown: eight pages each make several store
-calls, each with its own connection, so owner start and stop under
-concurrency could exhaust a request's time. The next step is to log each
-store call's connect time in the workers suite and catch a failure with it.
-Until then, a red workers run is worth one re-run before it is believed.
+**The likely mechanism, from the gbasic session (2026-11-07). It has not
+been measured as this failure's cause.** An owner stopping at its last close
+removes its socket first and releases the store's lock last, after its final
+write; that order is deliberate. A connect arriving in between finds no
+socket, so its client starts a new owner. That owner waits up to 10 s for the
+lock, and the client waits up to 10 s per attempt, for up to five attempts.
+With a slow final write a request can therefore stall past `curl`'s 20 s.
+gbasic once measured that shape at 100 s on `db72b76`. Eight renders that
+each open and close several connections at linger 0 are exactly the pattern
+that keeps owners stopping and starting.
+
+**It is not only a test problem.** In production, with a 30 s linger, the
+same window opens whenever a request arrives as an owner is stopping after a
+quiet period. That is rarer, but the request stalls 10 s or more. So the
+workers suite keeps linger 0 rather than taking the workaround (a linger
+above 0 there would hide the race in the one test that catches it). The
+gbasic session is reproducing it with concurrent connects. The tell, if
+gdash's per-call connect timing catches it, is a connect of about 10 s, or a
+multiple of it. Until it is fixed, a red workers run is worth one re-run
+before it is believed.
 
 ## G20-14 — the bulk insert (A3) is adopted, and the rest of a refresh is gdash's own cost — *noted*
 
