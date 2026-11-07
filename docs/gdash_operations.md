@@ -11,8 +11,14 @@ The gBASIC interpreter, and the libraries it links. On a Debian or Ubuntu host:
 
 ```
 libpq5 libsqlite3-0 libodbc2 libldap-2.5-0 libcurl3-gnutls
-libssl3 libxml2 libcrypt1 libgirepository-2.0-0
+libssl3 libxml2 libcrypt1 libgirepository-2.0-0 libpcre2-8-0
 ```
+
+gdash stages its data in G-SQL, which is part of the interpreter, so there is
+no database to install. It needs a gBASIC build at or after `e902acf`
+(`gbasic --version` prints `0.10.0+<rev>`), and builds since then link PCRE2.
+`libsqlite3` is still linked by the interpreter; gdash itself no longer uses
+it.
 
 Three of those deserve an explanation rather than a silent install:
 
@@ -75,7 +81,7 @@ runuser -u gdash -- gdash validate sales
 |---|---|---|
 | `/etc/gdash` | connections, accounts, auth, theme, CSRF secret | yes — it is configuration |
 | `/var/lib/gdash` | dashboards, snapshots, `current` pointers | **yes — this is the backup set** |
-| `/var/cache/gdash` | staged data, per dashboard and mode | no — it refetches |
+| `/var/cache/gdash` | staged data: one G-SQL database per dashboard and mode, `<dashboard>/<mode>/data.gsql` | no — it refetches |
 | `/var/log/gdash` | the audit log | as your policy requires |
 | `/run/gdash` | sessions, sign-in counters | no — cleared on reboot, correctly |
 
@@ -107,6 +113,19 @@ gdash refresh <dashboard>          # or wait for the timer
 `/var/lib/gdash`, destroys both data directories, restores only the backup, and
 requires the dashboard, its published history and a working refresh to come
 back. `/var/cache/gdash` is not in the backup and does not need to be.
+
+**The staged data is served by G-SQL owner processes.** Each dashboard's
+database is a directory, served by one `gbasic --gsql-owner` process that the
+first worker or refresh to touch it starts, and that stops by itself once
+nothing has used it for its linger: 30 seconds by default, set with
+`GDASH_GSQL_LINGER` (seconds) in `/etc/gdash/environment`. A dashboard nobody
+is looking at has no process. `systemctl stop gdash` stops the owners with the
+rest of the service, each cleanly. Delete `/var/cache/gdash` only while the
+service is stopped, as before. One limit is known and asked of the platform
+(`gdash20_platform_ask_gsql.md` A1): an owner's socket lives in a per-user
+directory that `PrivateTmp` separates between the server and the scheduler
+units, so the units must not be relied on to refresh a dashboard someone has
+open until that lands.
 
 ## 5. Sizing
 
@@ -238,7 +257,7 @@ function and never returned.
 **`provider: "offline"` checks an install without a model.** It uses the
 platform's fixture transport: the reply is whatever
 `<offline_dir>/anthropic_response.json` contains, so the whole path — catalog,
-prompt, SQL check, unit notes, requalification, promotion — runs with no key,
+prompt, SQL check, requalification, promotion — runs with no key,
 no network and nothing spent. It is what gdash's own suite uses.
 
 What comes back is a **draft**, not an answer:
@@ -247,22 +266,20 @@ What comes back is a **draft**, not an answer:
 $ gdash ask sales "how many orders were over 1000 dollars?"
 question: how many orders were over 1000 dollars?
 
-select count(*) as n from orders.orders where amount > 1000
+select count(*) as n from orders where amount > 1000
 
   orders: data as of 2026-09-14 09:12
   regions: data as of 2026-09-14 09:12
 
-  check the numbers in that query:
-    orders.amount 1000 means $10.00
-
-  n: 6
+  n: 2
 ```
 
-That query is valid, every name in it is real, and the number is wrong by a
-factor of a hundred: gdash stages money as integer minor units, so the model
-compared cents to a number of dollars. **gdash does not refuse it** — someone
-may genuinely mean ten dollars — it says what the number means and leaves the
-judgement to a person. Read the note before you trust the figure.
+Money is stored as money, so `amount > 1000` against a USD column means USD
+1000, which is what the question asked. Until GDASH-20 gdash stored minor
+units and the same query meant ten dollars; the draft then carried a note
+restating the literal, which is no longer needed. The model is told which
+currency each money column holds. Read the query before you trust the figure:
+a draft is a proposal.
 
 `--promote <name>` writes the query into the draft record as a visual, on the
 first tab. It edits the draft only; a published dashboard is unchanged until

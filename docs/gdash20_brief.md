@@ -1,8 +1,10 @@
 # GDASH-20 — The staging store on G-SQL
 
-**Status:** brief written, step 0 complete. **One step-0 check failed: the
-G-SQL owner's socket under the systemd units (S0-6).** It needs a platform
-change, asked for in `gdash20_platform_ask_gsql.md`. Nothing has been built.
+**Status:** **built, at the review boundary** (2026-11-06). Step 0 stopped on
+S0-6, the owner's socket under the systemd units. The maintainer's
+instruction, through the gbasic session, was to build without waiting for the
+fix, which gbasic has taken as A1. The DONE note is at the end of this brief,
+and the findings are in `gdash20_findings.md`.
 **Authority:** `gdash_design.md` outranks this brief. Where this phase changes
 the design, the edits are listed in §6 of the plan and are made as rulings,
 not silently.
@@ -148,3 +150,62 @@ The order in plan §5, steps 1–9. Two additions came out of step 0:
 These are listed in plan §5: bounded-memory refresh, carrying draft data over
 on publish (G11-11), dataset sharing, and tenancy work beyond the
 tenant-rooted layout.
+
+## DONE note (2026-11-06)
+
+**Built.** The staging store is G-SQL:
+
+- **Layout:** one database per (dashboard, stage), at
+  `<cache>/<dashboard>/<stage>/data.gsql`. Every dataset is a table in it.
+- **Refresh:** writes `<dataset>__staging`, ten rows a statement and a
+  thousand rows a transaction. The parent swaps it in one transaction (drop
+  the live table, rename the staging one, move its `_gdash_meta` rows). The
+  version bump comes after.
+- **Reads:** every read runs in `begin("read")`, so a write is refused at the
+  engine.
+- **Money:** stored as `money(<currency>)`, exactly. `scale` is the display
+  scale, rendered half-even by `money.text` (D4a). A money value renders in
+  its own currency, and a stated currency that disagrees is refused.
+- **Params:** may declare a `type` and are converted on arrival. One that does
+  not convert is a 400 naming it (D3).
+- **Ask:** the catalog names tables bare. The model is told each money
+  column's currency. The minor-unit notes and the literal-restating guard are
+  gone, because `amount > 1000` now means USD 1000.
+- **Deleted:**
+  - `to_minor`'s conversion and its excess-decimal check;
+  - every attach, `_ro_uri`, `_connect_across` and `attach_limit`;
+  - the 11-dataset rule;
+  - the `__text` casts and `exact_columns`;
+  - the schema-qualified meta reads;
+  - `load sqlite`.
+- **Kept, as a stopgap:** the rule that trailing zeros are not precision
+  (G20-3, ask A6).
+- **Suite infrastructure:** the suite runs with `GDASH_GSQL_LINGER=0`.
+  Scratch-clean waits, by path, for owners serving the scratch root
+  (`tests/gsql_owners.sh`). `tests/stage_query.bas` and
+  `tests/staging_probe.bas` let the shell runners read the store.
+
+**Measured green, on `0.10.0+db72b76`:**
+
+- the hermetic suite, 37 of 37;
+- the ODBC runner, 12 of 12;
+- live Postgres, 10 of 10;
+- the systemd suite under podman, including a new probe that reproduces A1.
+  It measures a 28.5 s refresh stall, where step 0 had predicted an outright
+  failure (G20-2).
+
+**Deliberately not built:**
+
+- bounded-memory refresh;
+- publish carrying draft data across (G11-11);
+- dataset sharing;
+- relaxing the scale-conflict refusal (G20-9, a ruling owed);
+- any workaround for A1. The units' `PrivateTmp` stays, and so does the stall,
+  until the platform's socket-in-the-database lands.
+
+**Owed to the maintainer:**
+
+- the design edits, written out as G20-a to G20-g in
+  `gdash_design_edits_owed.md`. The CLAUDE.md invariants are among them;
+- the G20-9 ruling;
+- relaying A5 and A6 to gbasic (A1 to A4 are already there).

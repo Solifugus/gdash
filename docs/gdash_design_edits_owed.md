@@ -229,3 +229,111 @@ refresh-concurrency limit, once it has a shape).
 TLS, routes tenants by subdomain, and holds the wildcard certificate. Worth a
 sentence saying so, so the next reader does not treat "gdash refuses to serve
 TLS" as a gap to be closed.
+
+# Arriving with GDASH-20: the staging store on G-SQL
+
+Every ruling behind these is in `gsql_migration_plan.md` §3 (D1–D5, D4a). The
+code follows them, so the design document is now the thing that is out of
+date. Each entry below quotes the current text and gives its replacement.
+
+## G20-a. §3 — the two tiers, and the staging store
+
+> **Datasets** materialize source query results into local SQLite files
+
+becomes
+
+> **Datasets** materialize source query results into tables in a local G-SQL
+> database, one per dashboard and stage
+
+The sentence "*Two dialects* (source SQL + SQLite SQL) is the accepted honest
+cost; … a visual query ATTACHes and joins" keeps its point and changes its
+mechanism: "two datasets from different sources land in the same database as
+two tables; a visual query joins them by name."
+
+The section *Staging store: SQLite, and why not Postgres* is replaced, not
+amended. Its reasoning survives: no service to run, an install in an
+afternoon, a hermetic suite. The ruling changes. Proposed text:
+
+> **Staging store: G-SQL.** gBASIC's own database, part of the interpreter, so
+> there is still nothing to install and the suite stays hermetic. Its values
+> are gBASIC values, so money and integers past 2^53 cross no boundary (§4).
+> One database per (dashboard, stage), each dataset a table in it. A
+> dashboard's SQL can therefore name its own datasets and nothing else: the
+> wall between dashboards is the directory, as the wall between tenants is.
+> All staging access still goes through `gdash_store`. It went from SQLite to
+> G-SQL as one module's rewrite, as this paragraph promised.
+
+## G20-b. §3 Refresh — the swap
+
+> writes `<dataset>__staging.db`, exits. Parent polls, and on success
+> POSIX-renames over `<dataset>.db`, bumps the version file, notifies. … One
+> SQLite file per dataset makes the swap a single `rename()`. Open handles keep
+> the old inode; readers reconnect on version notice.
+
+becomes
+
+> writes the `<dataset>__staging` table, exits. Parent polls, and on success
+> drops the live table and renames the staging one over it **in one
+> transaction**, bumps the version file, notifies. A reader inside a read
+> transaction keeps the snapshot it began with until it finishes; the next
+> read sees the new table.
+
+## G20-c. §4 — money
+
+This replaces the stored-form bullets, and overtakes edits 5 and 6 above:
+
+> - A dataset column declared `{ "type": "money", "scale": s, "currency": c }`
+>   materializes as `money(c)`: gBASIC's money, exact, with its currency.
+> - `s` is the **display** scale. Values are stored exactly as the source gave
+>   them and rounded half-even only when a person is shown them. Only a value
+>   the currency cannot hold (more places than its minor unit plus four guard
+>   digits) is refused, and it fails the refresh.
+> - Aggregation is exact as money, up to the currency's range (about USD 9.2
+>   trillion); a sum past it raises warning 2112 and fails its visual.
+> - Display scale and currency per column live in `_gdash_meta`.
+
+The `decimal_sum` escape hatch goes, because nothing is TEXT any more.
+"Undeclared columns map: integer-looking → INTEGER, numeric → REAL, else
+TEXT" becomes "→ `integer`, `number`, `string` (gBASIC kinds)".
+
+## G20-d. §6 — storage layout
+
+> /var/cache/gdash/  <name>/{published,draft}/<dataset>.db + version
+
+becomes
+
+> /var/cache/gdash/  <name>/{published,draft}/data.gsql + version + state
+
+## G20-e. §9 — platform asks
+
+`sqlite.columns(db, sql)` becomes describe-without-execute on G-SQL
+(`gdash20_platform_ask_gsql.md` A2). Two more join the list: the owner socket
+under `PrivateTmp` (A1, which blocks deployment) and the dialect gaps (A5).
+
+## G20-f. §2 — params
+
+> **Params** declare name + default.
+
+becomes
+
+> **Params** declare name + default, and optionally a `type` (`string`,
+> `integer`, `number`, `date`, `money`). A value is converted to its type when
+> the request arrives and refused by name if it does not convert.
+
+## G20-g. CLAUDE.md, *Design invariants worth restating*
+
+That file is the maintainer's to edit, so the change is written here.
+
+> - Refresh is stale-but-coherent: a failed refresh leaves the old dataset file
+>   untouched. Swap is a single POSIX rename; version file bumps after.
+> - Money columns materialize as INTEGER minor units with per-column scale in
+>   `_gdash_meta`; excess decimals are rejected, not rounded.
+
+becomes
+
+> - Refresh is stale-but-coherent: a failed refresh leaves the old dataset
+>   table untouched. Swap is one transaction (drop live, rename staging);
+>   version file bumps after.
+> - Money columns are `money(<currency>)`, stored exactly; `scale` is the
+>   display scale, rounded half-even only for a person. A value the currency
+>   cannot hold is rejected, not rounded.

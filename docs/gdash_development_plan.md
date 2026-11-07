@@ -351,7 +351,7 @@ implement is currently dropped in silence**, where an unknown control `kind` is
 refused by name. Bounds live in a sibling `_gdash_bounds` table, so a dataset
 from an older build reports coverage *unknown* instead of a guess.
 
-## GDASH-20 — The staging store on G-SQL  *(brief: gdash20_brief.md; step 0 complete, S0-6 blocks)*
+## GDASH-20 — The staging store on G-SQL  *(brief: gdash20_brief.md; built, at review; findings: gdash20_findings.md)*
 
 The plan is `gsql_migration_plan.md`, and every decision in it is ruled:
 
@@ -379,6 +379,18 @@ What step 0 found:
   directory, and under the units' `PrivateTmp` the server and the scheduler
   would not find each other's owner. Asked of the platform
   (`gdash20_platform_ask_gsql.md`, A1). Not designed around.
+
+**Built on the maintainer's instruction not to wait for A1** (2026-11-06).
+All suites are green on `0.10.0+db72b76`: hermetic, ODBC, live Postgres and
+systemd. A1, measured, is a refresh stall of up to the owner's linger, longer
+under steady viewing; gbasic has it in progress. Building found two more
+platform asks:
+
+- **A5:** the dialect gaps (`substr`, `GROUP BY` an alias or a position);
+- **A6:** trailing zeros counted as precision by the money reader. A stopgap
+  is in the store.
+
+Design edits G20-a to G20-g are owed.
 
 ---
 
