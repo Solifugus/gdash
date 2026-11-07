@@ -201,46 +201,20 @@ library gdash_store
         gsql.exec(db, "create table if not exists _gdash_meta (dataset string, column_name string, kind string, currency string, scale integer, position integer)")
     end function
 
-    ' TRAILING ZEROS ARE NOT EXCESS PRECISION (finding G9-6, again). A source
-    ' renders numeric(19,8) as `1100.00000000`, and gBASIC's money text reader
-    ' counts the CHARACTERS after the point, so it refuses an exact whole amount
-    ' as "more decimal places than the currency can store" -- every refresh of
-    ' such a column would fail. `to_minor` knew this rule and was deleted with
-    ' the minor units (GDASH-20), so it is restored here, as the one thing the
-    ' store still does to a money value, until the platform reads significant
-    ' digits (gdash20_platform_ask_gsql.md A6). `1250.7512345` is still refused:
-    ' only zeros are dropped.
-    function _money_text(raw)
-        if type(raw) != "string" then
-            return raw
-        end if
-        t = raw
-        ' `find` answers `nothing` when there is no match, not -1.
-        dot = find(t, ".")
-        if is_nothing(dot) or is_unknown(dot) then
-            return t
-        end if
-        while ends_with(t, "0") and len(t) - 1 > dot
-            t = mid(t, 0, len(t) - 1)
-        end while
-        if ends_with(t, ".") then
-            t = mid(t, 0, len(t) - 1)
-        end if
-        return t
-    end function
-
     ' A cell as the column takes it. Money, integer and real cells go in as the
     ' source gave them and the column reads them; a text cell goes in as text,
     ' because a string column refuses a number rather than spelling it.
+    '
+    ' Including money padded past its currency's places: a numeric(19,8) source
+    ' sends `1100.00000000`, and since gbasic 8633507 (GDASH-20 ask A6) the
+    ' money reader counts significant digits, so the stopgap that stripped the
+    ' zeros here is gone. A non-zero digit past the storage scale is refused.
     function _cell(entry, raw)
         if is_unknown(raw) or is_nothing(raw) then
             return unknown
         end if
         if entry.kind = "text" then
             return string(raw)
-        end if
-        if entry.kind = "money" then
-            return _money_text(raw)
         end if
         return raw
     end function

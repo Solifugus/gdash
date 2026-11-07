@@ -15,7 +15,7 @@ libssl3 libxml2 libcrypt1 libgirepository-2.0-0 libpcre2-8-0
 ```
 
 gdash stages its data in G-SQL, which is part of the interpreter, so there is
-no database to install. It needs a gBASIC build at or after `d2e310e`
+no database to install. It needs a gBASIC build at or after `8633507`
 (`gbasic --version` prints `0.10.0+<rev>`), and builds since then link PCRE2.
 `libsqlite3` is still linked by the interpreter; gdash itself no longer uses
 it.

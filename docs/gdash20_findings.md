@@ -47,7 +47,7 @@ gdash's connect code did not change. The one new constraint is that a
 database directory other users can write is refused, and `gdash_operations.md`
 §4 says so.
 
-## G20-3 — trailing zeros fail a money column again — *asked* (A6), stopgap in place
+## G20-3 — trailing zeros fail a money column again — *fixed by the platform* (A6, gbasic `8633507`); the stopgap is gone
 
 gBASIC's money reader counts characters after the point, not significant
 digits. So `1100.00000000`, which is how a `numeric(19,8)` source renders an
@@ -58,9 +58,18 @@ The unit suites could not have caught it, because fixtures do not pad.
 Postgres does. The live Postgres runner caught it: a `numeric(20,8)` column
 failed its refresh.
 
-`gdash_store` now strips trailing zeros from money text before binding it.
-That is the one piece of `to_minor` left, and it goes when A6 lands. A
-non-zero digit past the currency's storage scale is still refused.
+For a while `gdash_store` stripped trailing zeros from money text before
+binding it, as a stopgap. gbasic `8633507` made the money reader count
+significant digits, and the stopgap was deleted, so nothing of `to_minor`
+remains.
+
+Measured on a clean build of `8633507`:
+
+- `test_store` is green, and pins the padded values through the store. The
+  same suite on `db72b76` fails, naming the refusal.
+- Live Postgres (`numeric(20,8)`) 10/10, ODBC 12/12, hermetic 37/37.
+
+A non-zero digit past the currency's storage scale is still refused.
 
 ## G20-4 — dollars added to yen is refused by the engine — *noted*, a correctness gain
 

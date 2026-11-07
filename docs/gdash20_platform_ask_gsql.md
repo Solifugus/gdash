@@ -137,7 +137,7 @@ model a refused draft. They are listed so the PG∩SQLite measurement
 (`gsql_design.md` §4.0) has them, with the corpus showing where each comes
 from.
 
-## A6. Trailing zeros are not excess precision. *High: without gdash's stopgap, live sources fail.* (Added during the build, 2026-11-06.)
+## A6. Trailing zeros are not excess precision. **Done: gbasic `8633507`.** gdash's stopgap is deleted; measured green against live Postgres. (Added during the build, 2026-11-06.)
 
 gBASIC's money text reader counts the characters after the point, not the
 significant digits:

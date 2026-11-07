@@ -178,8 +178,8 @@ tenant-rooted layout.
   - the `__text` casts and `exact_columns`;
   - the schema-qualified meta reads;
   - `load sqlite`.
-- **Kept, as a stopgap:** the rule that trailing zeros are not precision
-  (G20-3, ask A6).
+- **Removed after A6 landed (gbasic `8633507`):** the trailing-zero stopgap
+  (G20-3). Nothing of `to_minor` remains.
 - **Suite infrastructure:** the suite runs with `GDASH_GSQL_LINGER=0`.
   Scratch-clean waits, by path, for owners serving the scratch root
   (`tests/gsql_owners.sh`). `tests/stage_query.bas` and

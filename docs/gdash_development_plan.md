@@ -388,8 +388,8 @@ systemd suite measures 361 ms on that build. Building found two more platform
 asks:
 
 - **A5:** the dialect gaps (`substr`, `GROUP BY` an alias or a position);
-- **A6:** trailing zeros counted as precision by the money reader. A stopgap
-  is in the store.
+- **A6:** trailing zeros counted as precision by the money reader. Fixed in
+  gbasic `8633507`, and gdash's stopgap is gone.
 
 Design edits G20-a to G20-g are owed.
 

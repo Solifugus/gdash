@@ -78,12 +78,19 @@ program main(args)
     s = gdash_test.eq(s, still.rows[0].n, 2, "the live table is untouched: stale-but-coherent")
     ' Trailing zeros are not excess precision (G9-6): a numeric(19,8) source
     ' sends `1100.00000000`, an exact whole amount, and it must not fail the
-    ' refresh because it spells eight places.
+    ' refresh because it spells eight places. The platform reads it so since
+    ' gbasic 8633507 (ask A6); this pins that through the store.
     padded = gdash_store.materialize(exact_db, "padded", xplan, [["1100.00000000"], ["12.34560000"], ["-0.50000000"]])
     s = gdash_test.ok(s, padded.ok, "zeros past the currency's places are not precision -- " + padded.message)
     psw = gdash_store.swap(exact_db, "padded")
     pr = gdash_store.select_rows(exact_db, "select sum(amount) as s from padded", {})
-    s = gdash_test.eq(s, money.text(pr.rows[0].s), "1111.845600", "and the values are exactly what they said")
+    ' Read only when there is a row: on a build without A6 the materialize above
+    ' fails, and this must report that, not die indexing an empty result.
+    padded_sum = "(no rows)"
+    if pr.ok and count(pr.rows) > 0 then
+        padded_sum = money.text(pr.rows[0].s)
+    end if
+    s = gdash_test.eq(s, padded_sum, "1111.845600", "and the values are exactly what they said")
     nonzero = gdash_store.materialize(exact_db, "padded", xplan, [["1.00000001"]])
     s = gdash_test.ok(s, not nonzero.ok, "but a non-zero eighth place is still refused")
     empty = gdash_store.materialize(exact_db, "ledger", xplan, [[""]])
