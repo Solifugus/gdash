@@ -35,6 +35,7 @@ program main(args)
     load gdash_record from "gdash_record.bas"
     load gdash_refresh from "gdash_refresh.bas"
     load gdash_store from "gdash_store.bas"
+    load gdash_channels from "gdash_channels.bas"
     load gdash_publish from "gdash_publish.bas"
     load gdash_diff from "gdash_diff.bas"
     load gdash_users from "gdash_users.bas"
@@ -513,9 +514,15 @@ program main(args)
                 print to error "error: " + r.errors[j]
                 j += 1
             end while
+            for each nt in default(r.notes, [])
+                print to error "note: " + nt
+            next
             exit(1)
         end if
         print("published " + name + " as " + r.snapshot)
+        for each nt in default(r.notes, [])
+            print("note: " + nt)
+        next
 
         ' PUBLISHED AND EMPTY IS A REAL STATE, AND IT USED TO BE A SILENT ONE.
         '
@@ -641,6 +648,21 @@ program main(args)
 
     if verb = "validate" then
         if loaded.ok then
+            ' The record is sound; now its visuals against the draft's staged
+            ' data (GDASH-21), which is what publish will check too.
+            chk = gdash_channels.check_channels(loaded.record, gdash_paths.stage_db(p, name, "draft"))
+            for each w in chk.warnings
+                print("warning: " + w)
+            next
+            for each u in chk.unchecked
+                print("not checked: " + u)
+            next
+            if count(chk.errors) > 0 then
+                for each er in chk.errors
+                    print to error "error: " + er
+                next
+                exit(1)
+            end if
             print("ok: " + name + " validates")
             exit(0)
         end if

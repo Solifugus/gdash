@@ -193,12 +193,26 @@ done
 # waits on the SERVER too, and naming the pids there reports them as "not a
 # child of this shell" and spins; the results come back through the filesystem
 # instead.
-rm -f "$SCRATCH"/render*.code
+rm -f "$SCRATCH"/render*.code "$SCRATCH"/render*.time
 pids=(); for i in $(seq 1 8); do
-    curl -s -o /dev/null -w '%{http_code}' -b "$jar" --max-time 20 "http://127.0.0.1:$PORT/d/sales" > "$SCRATCH/render$i.code" 2>/dev/null & pids+=($!)
+    ( curl -s -o /dev/null -w '%{http_code} %{time_total}' -b "$jar" --max-time 20 "http://127.0.0.1:$PORT/d/sales" 2>/dev/null > "$SCRATCH/render$i.out"
+      cut -d' ' -f1 "$SCRATCH/render$i.out" | tr -d '\n' > "$SCRATCH/render$i.code" ) & pids+=($!)
 done
 wait "${pids[@]}" 2>/dev/null
-ok "eight concurrent renders all succeed" "$(cat "$SCRATCH"/render*.code | tr -d '\n')" "200200200200200200200200"
+renders="$(cat "$SCRATCH"/render*.code | tr -d '\n')"
+ok "eight concurrent renders all succeed" "$renders" "200200200200200200200200"
+# G20-15: an intermittent stall here, with nothing in the server log. When it
+# happens, say what was going on rather than only that it happened.
+if [[ "$renders" != "200200200200200200200200" ]]; then
+    echo "  --- G20-15 capture ---"
+    echo "  each render: $(for f in "$SCRATCH"/render*.out; do printf '%s; ' "$(cat "$f")"; done)"
+    echo "  owners now:"; ps -eo pid,etimes,stat,args 2>/dev/null | grep -- '--gsql-owner' | grep -F "$SCRATCH" | sed 's/^/    /'
+    echo "  server processes now:"; ps -eo pid,etimes,stat,pcpu,args 2>/dev/null | grep -F "$SERVER" | grep -v grep | sed 's/^/    /'
+    if [[ -n "${GDASH_STORE_TRACE:-}" && -s "$GDASH_STORE_TRACE" ]]; then
+        echo "  slowest store calls (GDASH_STORE_TRACE):"
+        sort -t' ' -k3 -g -r <(sed 's/ms / /' "$GDASH_STORE_TRACE") 2>/dev/null | head -12 | sed 's/^/    /'
+    fi
+fi
 
 # --- a global event observed through the filesystem ----------------------
 #

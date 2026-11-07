@@ -441,24 +441,34 @@ disagree with the record.
 All tabs render server-side in one response and switch on the client, because
 workers share no in-memory state (design §5). Params are shared across tabs.
 
-## 6. What load-time validation cannot check
+## 6. What validation checks against the staged data
 
-A dashboard validates completely before any source database is contacted —
-with one documented gap.
+A dashboard validates completely before any source database is contacted.
+Since GDASH-21 there is a second pass, against the **draft's staged data**,
+which `gdash validate` runs and `gdash publish` enforces:
 
-**Encoding channel names are not checked at load time.** Doing so needs
-prepare-without-execute, which G-SQL does not offer yet (asked as
-`gdash20_platform_ask_gsql.md` A2).
-Until it does, a channel naming a column the query does not return is caught
-**when the visual first renders**, and shows as an error in that visual's cell
-rather than refusing the record. This is design §2's stated fallback, and it is
-the one respect in which load-time red/green is partial.
+- every visual's query is **described from its plan, with nothing run** (G-SQL's
+  `db.columns`). A query that does not compile is an error;
+- every channel (`x`, `y`, `series`, `value`, `label`) and every key of a
+  `table`'s `formats` must name a column the query returns. One that does not
+  is an error, naming the column and listing what the query does return;
+- every control's options query must compile;
+- a `currency` format over a column that is plainly not an amount (text, a
+  date, a boolean) is a **warning**.
 
-**A cross-dataset query is not checked at load time either**, for the same
-reason and one more: whether a sibling dataset's table exists depends on
-whether that dataset has ever refreshed, which is a fact about the cache and
-not about the record. A join against a dataset that has never refreshed fails
-in that visual's cell and nowhere else.
+`publish` refuses on any error, and nothing is published.
+
+**Two limits.**
+
+- **The staged data must exist.** A column list comes from the query's plan,
+  and a dataset that has never refreshed has no table to plan against. Such a
+  visual is reported as **not checked**, never as passing. A first publish
+  before any refresh, the documented first-run order, is not refused. Those
+  visuals are checked at first render, as before, and an error shows in that
+  visual's cell.
+- **The kind warning reaches plain columns only.** G-SQL types a column read
+  straight from a table and `count(*)`. Most computed columns (`sum(amount)`,
+  `amt * 2`) are described as `any`, and get no kind check.
 
 ## 7. What a viewer is told about the data
 

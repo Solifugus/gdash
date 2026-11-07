@@ -393,6 +393,16 @@ asks:
 
 Design edits G20-a to G20-g are owed.
 
+## GDASH-21 — Channels checked against what a query returns  *(brief: gdash21_brief.md; built, at review)*
+
+Taken before GDASH-19, at the maintainer's go-ahead. G-SQL's `db.columns`
+describes a query from its plan with nothing run. `validate` and `publish` now
+check every visual's channels and `formats`, and every control's options
+query, against the draft's staged data. Publish refuses on an error. A
+dataset that has never refreshed is reported as not checked, and its visuals
+fall back to the first-render check. That closes design §2's load-time
+red/green gap wherever data exists.
+
 ---
 
 ## Still open, carried forward

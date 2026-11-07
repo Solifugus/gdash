@@ -45,6 +45,33 @@ library gdash_store
         return n
     end function
 
+    ' --- the trace (G20-15) -------------------------------------------------
+    '
+    ' Off unless GDASH_STORE_TRACE names a file. Each connect, read and close
+    ' appends one line -- epoch seconds, the operation, how long it took, and
+    ' the database -- so an intermittent stall can be caught in the act rather
+    ' than argued about. Several worker processes append to one file; each line
+    ' is one short write.
+    function _trace_file()
+        got = env("GDASH_STORE_TRACE")
+        if is_unknown(got) then
+            return ""
+        end if
+        return trim(string(got))
+    end function
+
+    function _trace(op, path, t0, outcome)
+        tf = _trace_file()
+        if tf != "" then
+            ms = round((monotonic() - t0) * 1000, 1)
+            on error goto next
+            f {file} = tf
+            append(f, string(epoch()) + " " + op + " " + string(ms) + "ms " + outcome + " " + string(path) + chr(10))
+            if error then
+            end if
+        end if
+    end function
+
     ' THE ONE CONNECT. Every process that reaches a dashboard's data -- a
     ' worker, the refresh child, the refresh parent, the CLI -- comes through
     ' here, so where the owner's socket lives is one function's business
@@ -56,19 +83,25 @@ library gdash_store
         if not create and not gdash_paths.path_exists(path) then
             return unknown
         end if
+        t0 = monotonic()
         on error goto next
         db = gsql.connect(path, { create: create, linger: linger() })
-        if error then
+        e = error
+        if e then
+            _trace("connect", path, t0, "failed:" + string(default(e.details.code, "?")))
             return unknown
         end if
+        _trace("connect", path, t0, "ok")
         return db
     end function
 
     function _close(db)
+        t0 = monotonic()
         on error goto next
         gsql.close(db)
         if error then
         end if
+        _trace("close", "", t0, "ok")
     end function
 
     function _rollback(db)
@@ -527,11 +560,17 @@ library gdash_store
         if is_unknown(db) then
             return { ok: false, rows: [], message: "dataset not available" }
         end if
+        t0 = monotonic()
         on error goto next
         gsql.begin(db, "read")
         rows = gsql.query(db, sql, args)
         e = error
         _rollback(db)
+        if e then
+            _trace("read", db_path, t0, "failed")
+        else
+            _trace("read", db_path, t0, "ok")
+        end if
         _close(db)
         if e then
             return { ok: false, rows: [], message: e.message }
@@ -559,6 +598,30 @@ library gdash_store
         scanned = gdash_sql.scan(sql)
         args = gdash_sql.args_for(scanned, values)
         return _read(db_path, scanned.sql, args)
+    end function
+
+    ' A visual query's result columns, described from its plan with NOTHING
+    ' RUN (gsql.columns, GDASH-20 ask A2): `[{ name, kind }]` in order. `kind`
+    ' is G-SQL's word -- `number`, `string`, `money(USD)`, `date` -- or `any`
+    ' for an expression the planner cannot type, which today is most computed
+    ' ones. A query that does not compile is a value, not a raise: that is
+    ' exactly what a caller checking a record before serving it wants to say.
+    function columns(db_path, sql)
+        db = connect(db_path, false)
+        if is_unknown(db) then
+            return { ok: false, columns: [], message: "the dashboard's data is not there" }
+        end if
+        scanned = gdash_sql.scan(sql)
+        on error goto next
+        gsql.begin(db, "read")
+        cols = gsql.columns(db, scanned.sql)
+        e = error
+        _rollback(db)
+        _close(db)
+        if e then
+            return { ok: false, columns: [], message: e.message }
+        end if
+        return { ok: true, columns: cols, message: "" }
     end function
 
     ' A dataset's content, as one string, hashed. Used to decide whether a

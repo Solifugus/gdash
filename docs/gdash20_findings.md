@@ -183,7 +183,7 @@ was given for the parameter $1". `test_store` caught it.
   staging by hunk, which this environment cannot do interactively. The commit
   message lists the parts.
 
-## G20-15 — a concurrent-render request that is never answered, intermittently — *open*
+## G20-15 — a concurrent-render request that is never answered, intermittently — *captured; with gbasic*
 
 `run_workers.sh` "eight concurrent renders all succeed" failed twice in about
 a dozen runs. Four of the eight `curl`s got no response within 20 s (`000`),
@@ -206,12 +206,31 @@ that window explains a 20 s stall only if something makes an owner's stop
 take over 10 s. gbasic keeps the experiment as a regression tier
 (`run_gsql_owner.sh` "window").
 
-**Cause: unknown.** The workers suite stays at linger 0, so it keeps exposing
-whatever this is. The next step is per-call connect timing in the store under
-a trace switch, run in a loop until a failure is caught. If a slow call
-appears, capture the owner's own stop time as well: the owner's pid from the
-connection, and when it exits. Until then, a red workers run is worth one
-re-run before it is believed.
+**Captured (2026-11-07).** The store gained an opt-in trace
+(`GDASH_STORE_TRACE=<file>`), and `run_workers.sh` gained a capture that
+prints each render's time, the live owner and server processes, and the
+slowest traced calls. Four full-suite runs looped with the trace on, on the
+installed `0a58561c`. The failure came in the third:
+
+- 4 of 8 renders timed out at 20 s;
+- **eight connects took 9.2–10.2 s**, which is the 10-second lock wait
+  gbasic named as the tell;
+- **for those 10 seconds nothing completed from any worker**: 128 calls in
+  the 2 s before, all under 81 ms, then none, then the slow connects returned
+  together;
+- the other two runs had no slow connect at all.
+
+So the stall is real, bursty, and in the platform's owner hand-off. By
+gbasic's own measurement it should be served in milliseconds on data this
+small. The evidence and a reproduction went to the gbasic session. The
+owner side (its pid, and when it stopped) is the missing half: connections do
+not expose the owner's pid, and the owners had exited by capture time.
+
+The same traces also measured the single-threaded owner. Concurrent
+deliberately slow queries in the drain test, about 4 s each alone, took
+12–19 s together: they queue behind one another. That is G-SQL's documented
+design (one owner thread, with slicing for sorts, groupings and aggregates),
+not a defect. Multi-threaded reads are not built.
 
 ## G20-14 — the bulk insert (A3) is adopted, and the rest of a refresh is gdash's own cost — *noted*
 

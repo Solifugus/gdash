@@ -18,6 +18,7 @@ library gdash_publish
     load gdash_paths from "gdash_paths.bas"
     load gdash_record from "gdash_record.bas"
     load gdash_audit from "gdash_audit.bas"
+    load gdash_channels from "gdash_channels.bas"
 
     function _pad4(n)
         s = string(n)
@@ -107,7 +108,19 @@ library gdash_publish
             ' matters most: when a record starts being served to people who
             ' did not write it.
             logged = gdash_audit.event(p, "publish.refused", { dashboard: name, reason: join(loaded.errors, "; ") })
-            return { ok: false, snapshot: "", message: "draft does not validate; nothing was published", errors: loaded.errors }
+            return { ok: false, snapshot: "", message: "draft does not validate; nothing was published", errors: loaded.errors, notes: [] }
+        end if
+
+        ' AND ITS VISUALS MUST MATCH THEIR QUERIES (GDASH-21). Checked against
+        ' the DRAFT's staged data, which is what the author has been looking
+        ' at. A visual whose dataset has not refreshed cannot be checked; that
+        ' is said, not refused, because a first publish before any refresh is
+        ' the documented first-run sequence.
+        chk = gdash_channels.check_channels(loaded.record, gdash_paths.stage_db(p, name, "draft"))
+        notes = concat(chk.warnings, chk.unchecked)
+        if count(chk.errors) > 0 then
+            logged = gdash_audit.event(p, "publish.refused", { dashboard: name, reason: join(chk.errors, "; ") })
+            return { ok: false, snapshot: "", message: "a visual names a column its query does not return; nothing was published", errors: chk.errors, notes: notes }
         end if
 
         made = gdash_paths.ensure_dir(gdash_paths.snapshot_dir(p, name))
@@ -118,7 +131,7 @@ library gdash_publish
         df {file} = draft
         text = read(df)
         if error then
-            return { ok: false, snapshot: "", message: "cannot read the draft", errors: [] }
+            return { ok: false, snapshot: "", message: "cannot read the draft", errors: [], notes: notes }
         end if
         ' Byte-for-byte, not re-encoded from the parsed record: a snapshot is
         ' the text that was reviewed, and the diff between two snapshots is
@@ -126,14 +139,14 @@ library gdash_publish
         sf {file} = dest
         write(sf, text)
         if error then
-            return { ok: false, snapshot: "", message: "cannot write snapshot " + leaf, errors: [] }
+            return { ok: false, snapshot: "", message: "cannot write snapshot " + leaf, errors: [], notes: notes }
         end if
 
         if not _repoint(p, name, leaf) then
-            return { ok: false, snapshot: "", message: "snapshot " + leaf + " was written but `current` could not be repointed", errors: [] }
+            return { ok: false, snapshot: "", message: "snapshot " + leaf + " was written but `current` could not be repointed", errors: [], notes: notes }
         end if
         logged = gdash_audit.event(p, "publish", { dashboard: name, snapshot: leaf })
-        return { ok: true, snapshot: leaf, message: "", errors: [] }
+        return { ok: true, snapshot: leaf, message: "", errors: [], notes: notes }
     end function
 
     ' Rollback rewrites `current` alone: the snapshot being rolled back TO is
