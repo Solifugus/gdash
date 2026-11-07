@@ -181,26 +181,25 @@ reproduce in six further runs, three with `GDASH_GSQL_LINGER=0` and three
 with 5. Whether it existed on SQLite is unknown: the suite's runs before the
 migration did not show it, but they were too few to say.
 
-**The likely mechanism, from the gbasic session (2026-11-07). It has not
-been measured as this failure's cause.** An owner stopping at its last close
-removes its socket first and releases the store's lock last, after its final
-write; that order is deliberate. A connect arriving in between finds no
-socket, so its client starts a new owner. That owner waits up to 10 s for the
-lock, and the client waits up to 10 s per attempt, for up to five attempts.
-With a slow final write a request can therefore stall past `curl`'s 20 s.
-gbasic once measured that shape at 100 s on `db72b76`. Eight renders that
-each open and close several connections at linger 0 are exactly the pattern
-that keeps owners stopping and starting.
+**A suspected mechanism, then measured by gbasic and largely ruled out
+(2026-11-07).** An owner stopping at its last close removes its socket first
+and releases the store's lock last, and a connect arriving in between starts a
+second owner that waits for the lock. gbasic built that window on purpose by
+slowing the stopping owner's syncs. The waiting client was served as soon as
+the old owner finished: at 6.0 s for a 6 s stop. The client's 10 s retry
+steps cost extra only when a stop takes longer than 10 s (a 72 s stop was
+served at 80 s). On local disk with small data a stop takes milliseconds:
+16 workers × 100 connect/close rounds at linger 0 never exceeded 0.6 s. So
+that window explains a 20 s stall only if something makes an owner's stop
+take over 10 s. gbasic keeps the experiment as a regression tier
+(`run_gsql_owner.sh` "window").
 
-**It is not only a test problem.** In production, with a 30 s linger, the
-same window opens whenever a request arrives as an owner is stopping after a
-quiet period. That is rarer, but the request stalls 10 s or more. So the
-workers suite keeps linger 0 rather than taking the workaround (a linger
-above 0 there would hide the race in the one test that catches it). The
-gbasic session is reproducing it with concurrent connects. The tell, if
-gdash's per-call connect timing catches it, is a connect of about 10 s, or a
-multiple of it. Until it is fixed, a red workers run is worth one re-run
-before it is believed.
+**Cause: unknown.** The workers suite stays at linger 0, so it keeps exposing
+whatever this is. The next step is per-call connect timing in the store under
+a trace switch, run in a loop until a failure is caught. If a slow call
+appears, capture the owner's own stop time as well: the owner's pid from the
+connection, and when it exits. Until then, a red workers run is worth one
+re-run before it is believed.
 
 ## G20-14 — the bulk insert (A3) is adopted, and the rest of a refresh is gdash's own cost — *noted*
 
