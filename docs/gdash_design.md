@@ -38,7 +38,9 @@ alongside this doc; the shape rulings:
   thing, the server MAY dedupe refresh work internally by content-hashing
   (source, query) — invisible to the format. First-class dataset sharing is
   deferred until it earns its complexity.
-- **Params** declare name + default. The reserved `user_*` namespace
+- **Params** declare name + default, and optionally a `type` (`string`,
+  `integer`, `number`, `date`, `money`). A value is converted to its type when
+  the request arrives and refused by name if it does not convert. The reserved `user_*` namespace
   (`user_email`, `user_name`, `user_groups`) is injected by the server from
   the authenticated identity — personalization is parameter binding, not a
   feature.
@@ -79,16 +81,18 @@ Enforced at validation.
 
 Before touching any database: every binding resolves; every layout leaf names
 a defined visual/control; dataset names are legal identifiers; params absent
-from dataset queries; dead `space` warned. With `sqlite.columns` (planned
-platform item): every encoding channel names a real result column, via
-prepare-without-execute. Until then channel checks happen at first refresh.
+from dataset queries; dead `space` warned. With G-SQL's `db.columns` (prepare-without-execute,
+GDASH-21): every encoding channel names a real result column, once the
+dashboard's data exists. Before a first refresh, channel checks happen at first
+render.
 
 ## 3. Execution model
 
 Two tiers:
 
-- **Datasets** materialize source query results into local SQLite files — the
-  expensive fetch, governed by refresh policy.
+- **Datasets** materialize source query results into tables in a local G-SQL
+  database, one per dashboard and stage — the expensive fetch, governed by
+  refresh policy.
 - **Visual queries** are plain SELECTs against those files — milliseconds,
   which is what decouples interaction cost from source cost. The source is
   touched only at refresh.
@@ -98,61 +102,65 @@ deferred execution policy on the same record shape, not a competing design.
 V1 has none, which keeps the renderer, wiring, and format ignorant of source
 dialects.
 
-**Two dialects** (source SQL + SQLite SQL) is the accepted honest cost; still
+**Two dialects** (source SQL + G-SQL) is the accepted honest cost; still
 strictly better than SQL+M+DAX. Cross-source joins fall out free: two
-datasets from different sources land in the same local store; a visual query
-ATTACHes and joins. Non-SQL sources (CSV, xlsx) unify by loading rows into a
+datasets from different sources land in the same database as two tables; a
+visual query joins them by name. Non-SQL sources (CSV, xlsx) unify by loading rows into a
 dataset file — connects to the spreadsheet-engine work.
 
-### Staging store: SQLite, and why not Postgres
+### Staging store: G-SQL
 
-Considered seriously; ruled for SQLite. Postgres would buy exact `numeric`
-aggregation, transactional DDL swap, and one consolidated store — at the cost
-of every deployment, dev checkout, and CI run needing a database service. For
-a product whose pitch is install-in-minutes, the dependency-free deployment is
-close to the whole pitch, and the gbasic repo's own opt-in Postgres test
-gating shows what a required live server does to a hermetic suite. Exact money
-is achieved without Postgres (§4). Containment: all staging access goes
-through one `gdash_store` module (create/insert/swap/select), so a future
-backend swap is one module's rewrite — this is discipline, not a pluggable
-abstraction layer.
+gBASIC's own database, part of the interpreter, so there is still nothing to
+install and the suite stays hermetic — the reason Postgres was ruled out as a
+staging store (it would put a database service under every deployment, dev
+checkout and CI run) stands. Its values are gBASIC values, so money and
+integers past 2^53 cross no boundary (§4). One database per (dashboard, stage),
+each dataset a table in it. A dashboard's SQL can therefore name its own
+datasets and nothing else: the wall between dashboards is the directory, as the
+wall between tenants is. All staging access still goes through `gdash_store`.
+It went from SQLite to G-SQL as one module's rewrite (GDASH-20), as this
+paragraph promised when it ruled for SQLite.
 
 ### Refresh
 
 Refresh runs as a child process (`process.start`): profile + SQL + staging
 path in; child fetches via the source module (synchronous `pg` is fine — the
-child's whole job is to block), writes `<dataset>__staging.db`, exits. Parent
-polls, and on success POSIX-renames over `<dataset>.db`, bumps the version
-file, notifies. On failure or hang (`process.stop` + `force_after`) the old
-file is untouched: **stale-but-coherent beats broken**; the UI shows
-"data as of HH:MM". Credentials reach the child via 0600 temp file, never
-argv. One SQLite file per dataset makes the swap a single `rename()`. Open
-handles keep the old inode; readers reconnect on version notice.
+child's whole job is to block), writes the `<dataset>__staging` table, exits.
+Parent polls, and on success drops the live table and renames the staging one
+over it **in one transaction**, bumps the version file, notifies. On failure or
+hang (`process.stop` + `force_after`) the old table is untouched:
+**stale-but-coherent beats broken**; the UI shows "data as of HH:MM".
+Credentials reach the child via 0600 temp file, never argv. A reader inside a
+read transaction keeps the snapshot it began with until it finishes; the next
+read sees the new table.
 
 Draft datasets refresh manually only. Published datasets follow their policy.
 
 ## 4. Money — exact by construction
 
 gdash works with business finance; money accuracy is critical. Ruling:
-**integer minor units**, the standard mechanism of exact financial computing.
+**exact money values** — gBASIC's money type, stored as itself in G-SQL.
+(Until GDASH-20 the ruling was integer minor units, which SQLite could hold
+exactly and nothing else could.)
 
-- A dataset column declared `{ "type": "money", "scale": s }` materializes as
-  INTEGER scaled by 10^s. Source strings with more decimals than `s` are
-  rejected, not rounded.
-- Per-column scale lives in a `_gdash_meta` table inside the dataset file.
-- SUM/COUNT/MIN/MAX/GROUP BY over 64-bit integers are exact (~$92 quadrillion
-  headroom at scale 2).
-- Rendering divides through gBASIC's exact money type at the format layer
-  (`"format": "currency"`).
+- A dataset column declared `{ "type": "money", "scale": s, "currency": c }`
+  materializes as `money(c)`: gBASIC's money, exact, with its currency.
+- `s` is the **display** scale. Values are stored exactly as the source gave
+  them and rounded half-even only when a person is shown them. Only a value
+  the currency cannot hold (more places than its minor unit plus four guard
+  digits) is refused, and it fails the refresh.
+- Aggregation is exact as money, up to the currency's range (about USD 9.2
+  trillion); a sum past it raises warning 2112 and fails its visual.
+- Display scale and currency per column live in `_gdash_meta`.
+- Rendering goes through gBASIC's money type at the format layer
+  (`"format": "currency"`), at the column's display scale.
 - Division (averages, percentages) happens after exact sums; error is bounded
   to display rounding, or the division is done in gBASIC money.
 - `pg` returns `numeric`/`bigint` as strings precisely to avoid float loss —
   the mapping consumes that directly.
-- Named escape hatch if arbitrary-precision aggregation is ever required:
-  SQLite's `decimal_sum` extension over TEXT decimals; shared future concern
-  with the spreadsheet engine.
 
-Undeclared columns map: integer-looking → INTEGER, numeric → REAL, else TEXT.
+Undeclared columns map: integer-looking → `integer`, numeric → `number`, else
+`string` (gBASIC kinds).
 
 ## 5. Server architecture
 
@@ -171,7 +179,7 @@ Consequences, embraced:
   per-viewer session state for rendering.
 - **SSE carries only global events** (`refresh`, `publish`), fanned out via
   the filesystem: each stream body polls the per-dashboard version file and
-  emits on change. Any worker can observe independently; rename-swap
+  emits on change. Any worker can observe independently; the swap transaction
   guarantees a notified reader sees complete data.
 
 **Known ceiling, named escape hatch:** every live SSE connection pins a
@@ -195,7 +203,7 @@ query.
 ```
 /etc/gdash/        server.json, connections.json (0600), users.json (0600)
 /var/lib/gdash/    dashboards/<name>/{draft.json, current, snapshots/NNNN.json}
-/var/cache/gdash/  <name>/{published,draft}/<dataset>.db + version
+/var/cache/gdash/  <name>/{published,draft}/data.gsql + version + state
 /var/log/gdash/    audit.log
 /run/gdash/        pid, control socket
 ```
@@ -266,12 +274,12 @@ Audit log: logins, publishes, preview-as, access denials.
 
 ## 9. Platform asks (tracked, not assumed)
 
-- `sqlite.columns(db, sql)` — prepare-without-execute for channel validation.
-  Small, in-module-style; completes the load-time red/green story.
+- Prepare-without-execute for channel validation: shipped as G-SQL's
+  `db.columns(sql)` (GDASH-20 ask A2), adopted in GDASH-21.
 - Session/auth stdlib extraction (§8) — a ruling for the gbasic repo, driven
   by two consumers.
 - Everything else gdash needs shipped already: `server` block + `stream` +
-  workers + TLS + drain/reload, `sqlite`, `pg`, `process.*`, `try_decode`,
+  workers + TLS + drain/reload, `gsql`, `pg`, `process.*`, `try_decode`,
   crypto KDFs, SVG-capable charts.
 
 ## 10. Deferred, by name
@@ -279,5 +287,5 @@ Audit log: logins, publishes, preview-as, access denials.
 Pass-through visual queries; dataset sharing across dashboards; OIDC/SAML;
 web-based designer GUI (v1 authoring is the record file itself); per-series
 color overrides and theme editing; event-driven stream subsystem (platform);
-exact decimal aggregation beyond minor units; Windows; additional source
+arbitrary-precision aggregation beyond the money type's range; Windows; additional source
 connectors beyond Postgres (behind the same profile abstraction).

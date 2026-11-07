@@ -232,6 +232,11 @@ TLS" as a gap to be closed.
 
 # Arriving with GDASH-20: the staging store on G-SQL
 
+**Applied 2026-11-07** on the maintainer's approval, G20-a to G20-g, with
+three more stale phrases the list had missed: §4's opening ruling, "rename-swap"
+in §5, and §10's deferred "exact decimal aggregation beyond minor units". Edits
+5 and 6 above are superseded by G20-c.
+
 Every ruling behind these is in `gsql_migration_plan.md` §3 (D1–D5, D4a). The
 code follows them, so the design document is now the thing that is out of
 date. Each entry below quotes the current text and gives its replacement.

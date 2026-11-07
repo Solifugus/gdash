@@ -40,10 +40,12 @@ gdash is a dashboarding web application written in gBASIC. Read, in order:
 - Params appear only in visual queries, never dataset queries.
 - The dependency graph is derived from `:name` bindings in SQL text, never
   declared.
-- Refresh is stale-but-coherent: a failed refresh leaves the old dataset file
-  untouched. Swap is a single POSIX rename; version file bumps after.
-- Money columns materialize as INTEGER minor units with per-column scale in
-  `_gdash_meta`; excess decimals are rejected, not rounded.
+- Refresh is stale-but-coherent: a failed refresh leaves the old dataset
+  table untouched. Swap is one transaction (drop live, rename staging);
+  version file bumps after.
+- Money columns are `money(<currency>)`, stored exactly; `scale` is the
+  display scale, rounded half-even only for a person. A value the currency
+  cannot hold is rejected, not rounded.
 - Workers share no in-memory state: per-viewer interactivity rides
   request/response; SSE carries only global events observed via the
   filesystem.
