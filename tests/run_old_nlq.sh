@@ -27,6 +27,7 @@
 
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$HERE/gsql_owners.sh"
 cd "$HERE/.."
 GBASIC="${GDASH_GBASIC:-$HOME/development/gbasic/gbasic}"
 export GDASH_GBASIC="$GBASIC"
@@ -60,7 +61,7 @@ mkdir -p "$OLDLIB"
 sed 's/"collapse_siblings", "notes"/"collapse_siblings"/' "$STDLIB/nlq.bas" > "$OLDLIB/nlq.bas"
 if ! grep -q '"collapse_siblings" \]' "$OLDLIB/nlq.bas"; then
     echo "  FAIL could not build the older library; the option list has moved" >&2
-    rm -rf "$SCRATCH"; exit 1
+    wait_for_gsql_owners "$SCRATCH"; rm -rf "$SCRATCH"; exit 1
 fi
 export GBASIC_PATH="$OLDLIB"
 
@@ -81,18 +82,20 @@ program main(args)
     made = gdash_paths.ensure_dir(gdash_paths.data_dir(p, "sales", "draft"))
     rows = [["west", "2026-01", "1250.75"], ["east", "2026-02", "1100.00"]]
     plan = gdash_store.plan_columns(["region", "month", "amount"], rows, { amount: { type: "money", scale: 2 } })
-    m = gdash_store.materialize(gdash_paths.dataset_db(p, "sales", "draft", "orders"), "orders", plan, rows)
+    db = gdash_paths.stage_db(p, "sales", "draft")
+    m = gdash_store.materialize(db, "orders", plan, rows)
+    msw = gdash_store.swap(db, "orders")
 
     logp = root + "/prompt.log"
     d = gdash_ask.ask(p, "sales", "draft", rec, "how many orders are there?",
-                      model_double.saying_into("select count(*) as n from orders.orders", logp), {})
+                      model_double.saying_into("select count(*) as n from orders", logp), {})
     print("ok:" + string(d.ok))
     print("stage:" + d.stage)
     print("units_told:" + string(d.units_told))
     print("value:" + string(d.answer.value))
     said = model_double.prompted(logp)
     print("prompted:" + string(len(said) > 0))
-    print("mentions_minor_units:" + string(contains(said, "MINOR UNITS")))
+    print("mentions_currency_note:" + string(contains(said, "money in USD")))
 end program
 EOF
 
@@ -109,7 +112,7 @@ ok "the model was still prompted" "$(field prompted)" "true"
 # AND IT IS NOT SILENT. A silent fallback would hide exactly the hazard the
 # notes exist to close: a confident wrong number about money.
 ok "but the draft records that the units were NOT sent" "$(field units_told)" "false"
-ok "and the prompt genuinely lacks them" "$(field mentions_minor_units)" "false"
+ok "and the prompt genuinely lacks them" "$(field mentions_currency_note)" "false"
 
 # The CLI says so in words, because a flag nobody prints is a flag nobody sees.
 mkdir -p "$ROOT/etc" "$ROOT/lib/dashboards/sales"
@@ -118,7 +121,7 @@ cat > "$ROOT/etc/models.json" <<JSON
 JSON
 mkdir -p "$SCRATCH/model"
 cat > "$SCRATCH/model/anthropic_response.json" <<'JSON'
-{"id":"m","type":"message","role":"assistant","model":"f","content":[{"type":"text","text":"select count(*) as n from orders.orders"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}
+{"id":"m","type":"message","role":"assistant","model":"f","content":[{"type":"text","text":"select count(*) as n from orders"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}
 JSON
 cat > "$ROOT/lib/dashboards/sales/draft.json" <<'JSON'
 {"format":1,"name":"sales",
@@ -143,7 +146,7 @@ else
     echo "  ok   an older library on GBASIC_PATH is not treated as a shadow"; pass=$((pass+1))
 fi
 
-rm -rf "$SCRATCH"
+wait_for_gsql_owners "$SCRATCH"; rm -rf "$SCRATCH"
 if [[ -e "$SCRATCH" ]]; then
     echo "SCRATCH NOT CLEAN: $SCRATCH survived removal" >&2
     exit 1

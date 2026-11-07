@@ -223,12 +223,12 @@ library gdash_paths
         return _join(_join(p.cache_dir, name), mode)
     end function
 
-    function dataset_db(p, name, mode, ds)
-        return _join(data_dir(p, name, mode), ds + ".db")
-    end function
-
-    function dataset_staging(p, name, mode, ds)
-        return _join(data_dir(p, name, mode), ds + "__staging.db")
+    ' ONE DATABASE PER (DASHBOARD, STAGE), every dataset a table in it
+    ' (GDASH-20; gsql_migration_plan.md D1). Inside the data directory, so the
+    ' version file and each dataset's state stay beside the data they describe,
+    ' and deleting the directory forgets all of it together.
+    function stage_db(p, name, mode)
+        return _join(data_dir(p, name, mode), "data.gsql")
     end function
 
     ' Last attempt, last success, last error, row count, content hash and any

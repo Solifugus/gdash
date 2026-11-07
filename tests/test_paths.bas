@@ -31,17 +31,16 @@ program main(args)
 
     ' Role gdash_paths.
     s = gdash_test.eq(s, gdash_paths.record_file(p, "sales"), root + "/lib/dashboards/sales/draft.json", "record_file")
-    s = gdash_test.eq(s, gdash_paths.dataset_db(p, "sales", "draft", "orders"), root + "/cache/sales/draft/orders.db", "dataset_db")
-    s = gdash_test.eq(s, gdash_paths.dataset_staging(p, "sales", "draft", "orders"), root + "/cache/sales/draft/orders__staging.db", "dataset_staging")
+    ' One database per (dashboard, stage), every dataset a table in it
+    ' (GDASH-20). Its staging tables live in the same database.
+    s = gdash_test.eq(s, gdash_paths.stage_db(p, "sales", "draft"), root + "/cache/sales/draft/data.gsql", "stage_db")
     s = gdash_test.eq(s, gdash_paths.version_file(p, "sales", "draft"), root + "/cache/sales/draft/version", "version_file")
 
-    ' The staging file sits beside its live file, so the swap is a same-
-    ' filesystem rename (atomic_replace refuses to cross devices).
-    s = gdash_test.eq(s, gdash_paths.data_dir(p, "sales", "draft"), root + "/cache/sales/draft", "staging shares live dir")
+    s = gdash_test.eq(s, gdash_paths.data_dir(p, "sales", "draft"), root + "/cache/sales/draft", "draft data_dir")
 
     ' Draft and published data never share a directory (design §7).
     s = gdash_test.eq(s, gdash_paths.data_dir(p, "sales", "published"), root + "/cache/sales/published", "published data_dir")
-    s = gdash_test.ok(s, gdash_paths.dataset_db(p, "sales", "draft", "orders") != gdash_paths.dataset_db(p, "sales", "published", "orders"), "draft and published datasets are different files")
+    s = gdash_test.ok(s, gdash_paths.stage_db(p, "sales", "draft") != gdash_paths.stage_db(p, "sales", "published"), "draft and published data are different databases")
     s = gdash_test.eq(s, gdash_paths.dataset_state(p, "sales", "published", "orders"), root + "/cache/sales/published/orders.state.json", "dataset_state")
     s = gdash_test.eq(s, gdash_paths.dataset_lock(p, "sales", "draft", "orders"), root + "/cache/sales/draft/orders.lock", "dataset_lock")
 

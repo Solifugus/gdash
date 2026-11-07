@@ -1,14 +1,15 @@
 ' Reads a staged dataset directly, for the concurrency runner.
 '
-' The invariant design §2 states is that a swap is a single POSIX rename and
-' the version bumps after, so a reader sees one whole version or another --
-' never a half-written one. This is the reader.
+' The invariant design §3 states is that a swap is atomic and the version
+' bumps after, so a reader sees one whole version or another -- never a
+' half-written one. Since GDASH-20 the swap is one G-SQL transaction rather
+' than a rename. This is the reader.
 
 ' Bound out so the guard cannot outlive the read it is guarding.
 function read_count(dbpath, dataset)
     load gdash_store from "../src/gdash_store.bas"
     on error goto next
-    got = gdash_store.select_rows(dbpath, "select count(*) as n from " + dataset, {}, [], {})
+    got = gdash_store.select_rows(dbpath, "select count(*) as n from " + dataset, {})
     if error then
         return -1
     end if
@@ -25,7 +26,7 @@ program main(args)
     p = gdash_paths.roles(args[0])
     dashboard = args[1]
     dataset = args[2]
-    dbpath = gdash_paths.dataset_db(p, dashboard, "draft", dataset)
+    dbpath = gdash_paths.stage_db(p, dashboard, "draft")
     vfile = gdash_paths.version_file(p, dashboard, "draft")
 
     ' The guard covers the READ and nothing else. `on error goto next` is

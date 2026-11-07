@@ -122,18 +122,14 @@ program main(args)
     lines = concat(lines, [emit_case("min_age without on_open", ds_case("d1", { profile: "p", sql: "select 1", refresh: "manual", min_age: 60 }))])
     lines = concat(lines, [emit_case("min_age not a whole number", ds_case("d1", { profile: "p", sql: "select 1", refresh: "on_open", min_age: -1 }))])
 
-    ' Twelve datasets: one more than SQLite will attach beside the one being
-    ' queried, refused at load rather than at render.
-    crowd = skeleton()
-    crowd["datasets"] = {}
-    crowd["visuals"] = {}
-    crowd["tabs"] = [{ name: "T", layout: { vert: [] } }]
-    ci = 0
-    while ci < 12
-        crowd["datasets"]["d" + string(ci)] = { profile: "p", sql: "select 1" }
-        ci += 1
-    end while
-    lines = concat(lines, [emit_case("too many datasets", crowd)])
+    ' The store's own table names are not dataset names (GDASH-20). This case
+    ' replaced "too many datasets": every dataset is a table in one G-SQL
+    ' database, and SQLite's attach cap is gone with the attach.
+    taken = skeleton()
+    taken["datasets"] = { orders__staging: { profile: "p", sql: "select 1" } }
+    taken["visuals"] = {}
+    taken["tabs"] = [{ name: "T", layout: { vert: [] } }]
+    lines = concat(lines, [emit_case("reserved dataset name", taken)])
 
     ' The reserved namespace: a record may bind user_* but may not declare it.
     reserved = skeleton()

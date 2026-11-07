@@ -2,7 +2,8 @@
 '
 ' The child's whole job is to block, so synchronous pg is right (design §3).
 ' Values come back as strings: pg returns numeric/bigint as strings to avoid
-' float loss, and gdash keeps them that way all the way into minor units.
+' float loss, and gdash keeps them that way until G-SQL reads each into its
+' column's kind -- money exactly (GDASH-20).
 
 library gdash_source_pg
 

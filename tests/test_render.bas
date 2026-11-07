@@ -13,28 +13,26 @@ program main(args)
     rec = gdash_record.load_file("dashboards/sales/draft.json").record
     r = gdash_refresh.run(p, "sales", "draft", rec, "orders", { kind: "fixture", path: "fixtures/orders.json" }, "manual")
     s = gdash_test.ok(s, r.ok, "dataset refreshed for rendering -- " + r.message)
-    live = gdash_paths.dataset_db(p, "sales", "draft", "orders")
+    live = gdash_paths.stage_db(p, "sales", "draft")
 
     ' Currency formatting itself is pinned in test_format; what matters
     ' here is that a visual renders THROUGH it.
-    s = gdash_test.eq(s, gdash_render.money_scale(live, {}), 2, "scale read from the dataset")
+    s = gdash_test.eq(s, gdash_render.money_scale(live), 2, "scale read from the dataset")
 
     ' --- the value mark ---
     gt = rec["visuals"]["grand_total"]
-    s = gdash_test.eq(s, string(gdash_render.exact_columns(gt)), string(["total"]), "currency channel crosses exactly")
-    res = gdash_store.select_rows(live, gt["sql"], {}, gdash_render.exact_columns(gt), {})
+    res = gdash_store.select_rows(live, gt["sql"], {})
     s = gdash_test.ok(s, res.ok, "value query runs")
-    frag = gdash_render.render_visual("grand_total", gt, res.rows, live, {}, {})
+    frag = gdash_render.render_visual("grand_total", gt, res.rows, live, {})
     s = gdash_test.contains_text(s, frag, "gdash-value", "value mark renders a value fragment")
     ' 1250.75+900.25+1100.00+640.10+725.90+310.05 = 4927.05
     s = gdash_test.contains_text(s, frag, "$4,927.05", "value mark shows the exact total")
 
     ' --- the bar mark, a DIFFERENT render path off the same record shape ---
     bm = rec["visuals"]["by_month"]
-    s = gdash_test.eq(s, string(gdash_render.exact_columns(bm)), string(["total"]), "bar's y channel crosses exactly")
-    bres = gdash_store.select_rows(live, bm["sql"], { region: "west" }, gdash_render.exact_columns(bm), {})
+    bres = gdash_store.select_rows(live, bm["sql"], { region: "west" })
     s = gdash_test.ok(s, bres.ok, "bar query runs")
-    bfrag = gdash_render.render_visual("by_month", bm, bres.rows, live, {}, {})
+    bfrag = gdash_render.render_visual("by_month", bm, bres.rows, live, {})
     s = gdash_test.contains_text(s, bfrag, "<svg", "bar mark renders SVG")
     s = gdash_test.ok(s, not contains(bfrag, "gdash-error"), "bar mark rendered without error")
     ' Two marks, two fragment kinds, from one record shape: the dispatch is real.
@@ -43,21 +41,21 @@ program main(args)
     ' The param actually filtered: west has 3 months, and a different region
     ' gives a different chart.
     s = gdash_test.eq(s, count(bres.rows), 3, "west has three months")
-    nres = gdash_store.select_rows(live, bm["sql"], { region: "north" }, gdash_render.exact_columns(bm), {})
+    nres = gdash_store.select_rows(live, bm["sql"], { region: "north" })
     s = gdash_test.eq(s, count(nres.rows), 1, "north has one month")
-    nfrag = gdash_render.render_visual("by_month", bm, nres.rows, live, {}, {})
+    nfrag = gdash_render.render_visual("by_month", bm, nres.rows, live, {})
     s = gdash_test.ok(s, nfrag != bfrag, "a different param value renders a different chart")
 
     ' --- channel validation at query time, the F4 fallback ---
     broken = { dataset: "orders", sql: "select month as month, sum(amount) as total from orders group by month", encoding: { mark: "bar", x: "month", y: "ghost", format: "currency" } }
-    bres2 = gdash_store.select_rows(live, broken["sql"], {}, [], {})
-    bad = gdash_render.render_visual("broken", broken, bres2.rows, live, {}, {})
+    bres2 = gdash_store.select_rows(live, broken["sql"], {})
+    bad = gdash_render.render_visual("broken", broken, bres2.rows, live, {})
     s = gdash_test.contains_text(s, bad, "gdash-error", "a channel naming no column is refused")
     s = gdash_test.contains_text(s, bad, "which the query does not return", "and says what is wrong")
 
     ' --- empty result is not an error ---
-    eres = gdash_store.select_rows(live, bm["sql"], { region: "nowhere" }, gdash_render.exact_columns(bm), {})
-    s = gdash_test.contains_text(s, gdash_render.render_visual("by_month", bm, eres.rows, live, {}, {}), "No data", "empty result renders as empty, not broken")
+    eres = gdash_store.select_rows(live, bm["sql"], { region: "nowhere" })
+    s = gdash_test.contains_text(s, gdash_render.render_visual("by_month", bm, eres.rows, live, {}), "No data", "empty result renders as empty, not broken")
 
     ' --- markup is escaped, not interpolated ---
     ctl = rec["controls"]["region_picker"]
@@ -73,18 +71,23 @@ program main(args)
     ' here for thirteen phases. A multi-currency position report -- USD at
     ' scale 2 and JPY at scale 0, in ONE dataset, which is what a position
     ' report is -- is the shape that finds them.
-    posp = root + "/positions.db"
+    posp = root + "/positions.gsql"
     pcols = ["account", "usd_value", "jpy_value"]
     prows = [["ACC-1", "1250750.25", "430000"], ["ACC-2", "-90425.10", "12"]]
     pplan = gdash_store.plan_columns(pcols, prows, { usd_value: { type: "money", scale: 2 },
-                                                    jpy_value: { type: "money", scale: 0 } })
+                                                    jpy_value: { type: "money", scale: 0, currency: "JPY" } })
     pm = gdash_store.materialize(posp, "positions", pplan, prows)
-    s = gdash_test.ok(s, pm.ok, "a two-currency dataset materializes")
+    pms = gdash_store.swap(posp, "positions")
+    s = gdash_test.ok(s, pm.ok and pms.ok, "a two-currency dataset materializes")
+    ' Dollars added to yen is not an amount: G-SQL refuses the arithmetic,
+    ' where integer minor units would have added them without a word.
+    mixedsum = gdash_store.select_rows(posp, "select usd_value + jpy_value as total from positions", {})
+    s = gdash_test.ok(s, not mixedsum.ok, "adding dollars to yen is refused by the engine")
 
-    scales = gdash_render.money_scales(posp, {})
+    scales = gdash_render.money_scales(posp)
     s = gdash_test.eq(s, scales["usd_value"], 2, "the dollar column keeps its own scale")
     s = gdash_test.eq(s, scales["jpy_value"], 0, "and the yen column keeps its own, which is zero")
-    s = gdash_test.eq(s, gdash_render.money_scale(posp, {}), -2, "there is no single scale for this dataset, and saying so is the point")
+    s = gdash_test.eq(s, gdash_render.money_scale(posp), -2, "there is no single scale for this dataset, and saying so is the point")
 
     ' scale_of is the function the renderer actually consults.
     s = gdash_test.eq(s, gdash_render.scale_of(scales, "jpy_value"), 0, "a money column resolves to its own scale")
@@ -97,9 +100,9 @@ program main(args)
                encoding: { mark: "table", title: "Positions",
                            formats: { usd_value: { name: "currency", currency: "USD" },
                                       jpy_value: { name: "currency", currency: "JPY" } } } }
-    pres = gdash_store.select_rows(posp, postab["sql"], {}, gdash_render.exact_columns(postab), {})
+    pres = gdash_store.select_rows(posp, postab["sql"], {})
     s = gdash_test.ok(s, pres.ok, "the positions query runs")
-    ptab = gdash_render.render_visual("positions_table", postab, pres.rows, posp, {}, {})
+    ptab = gdash_render.render_visual("positions_table", postab, pres.rows, posp, {})
 
     ' THE DEFECT, AS IT APPEARED: every yen figure was rendered at scale 2 --
     ' a hundred times small -- in a table that looked entirely normal. A real
@@ -118,28 +121,31 @@ program main(args)
     ' refused outright before: `money_scale` read the money columns of the
     ' primary AND every attachment, so one yen column anywhere in a dashboard
     ' disabled currency formatting everywhere in it.
-    ledgerp = root + "/ledger13.db"
+    ledgerp = root + "/ledger13.gsql"
     lrows = [["2026-07", "1250.75"], ["2026-08", "-430.00"]]
     lplan = gdash_store.plan_columns(["month", "amount"], lrows, { amount: { type: "money", scale: 2 } })
     lm = gdash_store.materialize(ledgerp, "ledger", lplan, lrows)
-    s = gdash_test.ok(s, lm.ok, "a single-currency dataset materializes beside it")
+    lms = gdash_store.swap(ledgerp, "ledger")
+    s = gdash_test.ok(s, lm.ok and lms.ok, "a single-currency dataset materializes beside it")
 
     monthly = { dataset: "ledger",
                 sql: "select month, sum(amount) as amount from ledger group by month order by month",
                 encoding: { mark: "bar", x: "month", y: "amount", format: "currency", currency: "USD" } }
-    mres = gdash_store.select_rows(ledgerp, monthly["sql"], {}, gdash_render.exact_columns(monthly), { positions: posp })
-    s = gdash_test.ok(s, mres.ok, "the monthly query runs with positions attached")
-    mfrag = gdash_render.render_visual("monthly", monthly, mres.rows, ledgerp, { positions: posp }, {})
+    mres = gdash_store.select_rows(ledgerp, monthly["sql"], {})
+    s = gdash_test.ok(s, mres.ok, "the monthly query runs")
+    mfrag = gdash_render.render_visual("monthly", monthly, mres.rows, ledgerp, {})
     s = gdash_test.ok(s, not contains(mfrag, "gdash-error"), "a visual over one dataset is not disabled by another's scale")
     s = gdash_test.contains_text(s, mfrag, "<svg", "it draws")
 
     ' And what is still genuinely ambiguous REFUSES, naming the column, rather
     ' than formatting at a guess. This is the case that used to be silent.
+    ' (An alias over ONE currency: `usd_value + jpy_value` is now refused by
+    ' G-SQL itself, as dollars added to yen.)
     aliased = { dataset: "positions",
-                sql: "select account, usd_value + jpy_value as total from positions",
+                sql: "select account, usd_value * 1 as total from positions",
                 encoding: { mark: "bar", x: "account", y: "total", format: "currency", currency: "USD" } }
-    ares = gdash_store.select_rows(posp, aliased["sql"], {}, gdash_render.exact_columns(aliased), {})
-    afrag = gdash_render.render_visual("aliased", aliased, ares.rows, posp, {}, {})
+    ares = gdash_store.select_rows(posp, aliased["sql"], {})
+    afrag = gdash_render.render_visual("aliased", aliased, ares.rows, posp, {})
     s = gdash_test.contains_text(s, afrag, "gdash-error", "an alias with no resolvable scale is refused")
     s = gdash_test.contains_text(s, afrag, "total", "and the refusal names the column")
     s = gdash_test.contains_text(s, afrag, "Alias it", "and says what to do about it")
@@ -150,11 +156,11 @@ program main(args)
     ' it shipped -- passes every other assertion in this file. Found by
     ' mutation, which is the only thing that could have found it.
     aliastab = { dataset: "positions",
-                 sql: "select account, usd_value + jpy_value as total from positions",
+                 sql: "select account, usd_value * 1 as total from positions",
                  encoding: { mark: "table",
                              formats: { total: { name: "currency", currency: "USD" } } } }
-    tres = gdash_store.select_rows(posp, aliastab["sql"], {}, gdash_render.exact_columns(aliastab), {})
-    tfrag = gdash_render.render_visual("aliastab", aliastab, tres.rows, posp, {}, {})
+    tres = gdash_store.select_rows(posp, aliastab["sql"], {})
+    tfrag = gdash_render.render_visual("aliastab", aliastab, tres.rows, posp, {})
     s = gdash_test.contains_text(s, tfrag, "gdash-error", "a table cell with no resolvable scale is refused, not formatted at 2")
     s = gdash_test.contains_text(s, tfrag, "total", "naming the column")
 
@@ -165,8 +171,8 @@ program main(args)
                  encoding: { mark: "table",
                              formats: { usd_value: { name: "currency", currency: "USD" },
                                         jpy_value: { name: "number", decimals: 0 } } } }
-    xres = gdash_store.select_rows(posp, mixedfmt["sql"], {}, gdash_render.exact_columns(mixedfmt), {})
-    xfrag = gdash_render.render_visual("mixedfmt", mixedfmt, xres.rows, posp, {}, {})
+    xres = gdash_store.select_rows(posp, mixedfmt["sql"], {})
+    xfrag = gdash_render.render_visual("mixedfmt", mixedfmt, xres.rows, posp, {})
     s = gdash_test.ok(s, not contains(xfrag, "gdash-error"), "a non-money format is not refused over a money ambiguity")
 
     exit(gdash_test.report(s))

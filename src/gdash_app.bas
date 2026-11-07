@@ -340,47 +340,28 @@ library gdash_app
         return { ok: true, rec: loaded.record, p: p, mode: pub.mode, snapshot: pub.snapshot, pin_was: pin, viewer: v, response: {} }
     end function
 
-    ' Every OTHER dataset of this dashboard that exists on disk, so a visual
-    ' query may name it. Unqualified table names resolve across attached
-    ' schemas (finding G2-2), which is why a cross-dataset join needs no
-    ' syntax in the record and no prefix in the SQL.
-    function _attach_for(p, name, mode, rec, primary)
-        out = {}
-        names = keys(rec["datasets"])
-        i = 0
-        while i < count(names)
-            if names[i] != primary then
-                path = gdash_paths.dataset_db(p, name, mode, names[i])
-                if gdash_paths.path_exists(path) then
-                    out[names[i]] = path
-                end if
-            end if
-            i += 1
-        end while
-        return out
-    end function
-
     function _visual_fragment(p, name, mode, rec, vis_name, values, theme)
         v = rec["visuals"][vis_name]
-        db = gdash_paths.dataset_db(p, name, mode, v["dataset"])
-        if not gdash_paths.path_exists(db) then
+        db = gdash_paths.stage_db(p, name, mode)
+        if not gdash_store.has_dataset(db, v["dataset"]) then
             return "<div class=" + chr(34) + "gdash-empty" + chr(34) + ">No data yet -- this dataset has never refreshed.</div>"
         end if
-        attach = _attach_for(p, name, mode, rec, v["dataset"])
-        res = gdash_store.select_rows(db, v["sql"], values, gdash_render.exact_columns(v), attach)
+        ' Every sibling dataset is a table in the same database, so a visual
+        ' query joins one by naming it -- no attach, and no prefix (design §3).
+        res = gdash_store.select_rows(db, v["sql"], values)
         if not res.ok then
             return "<div class=" + chr(34) + "gdash-error" + chr(34) + ">query failed: " + res.message + "</div>"
         end if
-        return gdash_render.render_visual(vis_name, v, res.rows, db, attach, theme)
+        return gdash_render.render_visual(vis_name, v, res.rows, db, theme)
     end function
 
     function _control_fragment(p, name, mode, rec, ctl_name, values)
         c = rec["controls"][ctl_name]
         opts = []
         if not is_unknown(c["sql"]) then
-            db = gdash_paths.dataset_db(p, name, mode, c["dataset"])
-            if gdash_paths.path_exists(db) then
-                res = gdash_store.select_rows(db, c["sql"], values, [], _attach_for(p, name, mode, rec, c["dataset"]))
+            db = gdash_paths.stage_db(p, name, mode)
+            if gdash_store.has_dataset(db, c["dataset"]) then
+                res = gdash_store.select_rows(db, c["sql"], values)
                 if res.ok then
                     i = 0
                     while i < count(res.rows)
@@ -634,7 +615,7 @@ library gdash_app
         s = s + ".gdash-ask input{padding:6px;font-size:14px}"
         s = s + ".gdash-ask button{padding:6px 12px;font-size:14px;cursor:pointer}"
         s = s + ".gdash-sql{background:#f6f6f6;border:1px solid #ddd;border-radius:6px;padding:10px;font-size:13px;overflow-x:auto;white-space:pre-wrap}"
-        ' The unit notes are the reason this page exists, so they are not
+        ' Notes about the query are the reason this page exists, so they are not
         ' styled like the other grey furniture around them.
         s = s + ".gdash-notes{border:1px solid #c90;background:#fffbe6;border-radius:6px;padding:8px 12px;margin:12px 0;font-size:13px}"
         s = s + ".gdash-notes ul{margin:6px 0 0 0;padding-left:20px}"
@@ -997,7 +978,7 @@ library gdash_app
         h = h + "<pre class=" + q + "gdash-sql" + q + ">" + gdash_render.html_escape(draft.sql) + "</pre>"
 
         if not draft.units_told then
-            h = h + "<div class=" + q + "gdash-error" + q + ">The installed nlq library is too old to be told what the money columns mean, so the model wrote this query without knowing the integers are minor units. Check the numbers with care.</div>"
+            h = h + "<div class=" + q + "gdash-error" + q + ">The installed nlq library is too old to be told what the money columns hold, so the model wrote this query without knowing their currencies. Check the numbers with care.</div>"
         end if
 
         ' THE UNIT NOTES COME BEFORE THE ANSWER, deliberately. A number read
@@ -1039,19 +1020,18 @@ library gdash_app
     end function
 
     ' The suggested visual, drawn the way a promoted one is drawn. Same query
-    ' path, same attach set, same renderer -- so a preview that draws is a
+    ' path, same database, same renderer -- so a preview that draws is a
     ' promise that the promoted visual draws.
     function _draft_fragment(p, name, mode, rec, vis, theme)
-        db = gdash_paths.dataset_db(p, name, mode, vis.dataset)
-        if not gdash_paths.path_exists(db) then
+        db = gdash_paths.stage_db(p, name, mode)
+        if not gdash_store.has_dataset(db, vis.dataset) then
             return "<div class=" + chr(34) + "gdash-empty" + chr(34) + ">No data yet -- this dataset has never refreshed.</div>"
         end if
-        attach = _attach_for(p, name, mode, rec, vis.dataset)
-        res = gdash_store.select_rows(db, vis.sql, {}, gdash_render.exact_columns(vis), attach)
+        res = gdash_store.select_rows(db, vis.sql, {})
         if not res.ok then
             return "<div class=" + chr(34) + "gdash-error" + chr(34) + ">the promoted query would fail: " + gdash_render.html_escape(res.message) + "</div>"
         end if
-        return gdash_render.render_visual("draft", vis, res.rows, db, attach, theme)
+        return gdash_render.render_visual("draft", vis, res.rows, db, theme)
     end function
 
     ' Editors get a way in. A feature nobody can find is a feature nobody has,
@@ -1081,6 +1061,13 @@ library gdash_app
         theme = themed.theme
         if not themed.ok then
             logged = gdash_audit.event(p, "theme.invalid", { reason: join(themed.errors, "; ") })
+        end if
+        ' A typed param that does not convert is refused before any query
+        ' runs, naming the param (plan D3), rather than rendered from its
+        ' default as if the viewer had not asked.
+        bad = gdash_record.param_errors(rec, req.query)
+        if count(bad) > 0 then
+            return _refuse(400, join(bad, "; "))
         end if
         values = gdash_record.resolve_params(rec, req.query, _effective_identity(got, name))
 
@@ -1151,6 +1138,10 @@ library gdash_app
         supplied = req["json"]
         if is_unknown(supplied) then
             supplied = {}
+        end if
+        bad = gdash_record.param_errors(rec, supplied)
+        if count(bad) > 0 then
+            return _refuse(400, join(bad, "; "))
         end if
         values = gdash_record.resolve_params(rec, supplied, _effective_identity(got, name))
         themed = gdash_theme.load_theme(p)

@@ -16,6 +16,7 @@
 
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$HERE/gsql_owners.sh"
 cd "$HERE/.."
 GBASIC="${GDASH_GBASIC:-$HOME/development/gbasic/gbasic}"
 export GDASH_GBASIC="$GBASIC"
@@ -63,7 +64,8 @@ cat > "$ROOT/etc/connections.json" <<JSON
 JSON
 
 # One dataset so the staged database exists, and one visual whose query takes
-# seconds. The marker in the title is what proves the WHOLE response came
+# seconds: a filtered cross join, since G-SQL refuses a WITH RECURSIVE past a
+# million rounds and SQLite's forty-million-row count is not available. The marker in the title is what proves the WHOLE response came
 # back rather than a truncated prefix.
 python3 - "$ROOT" <<'PYEOF'
 import json,sys
@@ -73,7 +75,7 @@ rec = {
                            "sql": "select region, month, amount from sales.orders" } },
  "visuals": { "slowcount": {
      "dataset": "orders",
-     "sql": "with recursive c(x) as (select 1 union all select x+1 from c where x < 40000000) select count(*) as n from c",
+     "sql": "with recursive c(x) as (select 1 union all select x + 1 from c where x < 1600) select count(*) as n from c a cross join c b where mod(a.x + b.x, 7) = 3",
      "encoding": { "mark": "value", "value": "n", "title": "Counted" } } },
  "tabs": [ { "name": "T", "layout": { "vert": [ { "visual": "slowcount" } ] } } ]
 }
@@ -151,7 +153,7 @@ drain_test 1
 echo "--- draining at four ---"
 drain_test 4
 
-rm -rf "$SCRATCH"
+wait_for_gsql_owners "$SCRATCH"; rm -rf "$SCRATCH"
 if [[ -e "$SCRATCH" ]]; then
     echo "SCRATCH NOT CLEAN: $SCRATCH survived removal" >&2
     fail=$((fail+1))

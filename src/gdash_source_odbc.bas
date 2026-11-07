@@ -1,6 +1,6 @@
 ' gdash — the ODBC source.
 '
-' One more ORIGIN, not a second store. gdash stages every dataset into SQLite
+' One more ORIGIN, not a second store. gdash stages every dataset into G-SQL
 ' and runs every visual query there (design §3); ODBC joins `postgres` behind
 ' the same seam, and neither the staging store nor the record format changes.
 '
@@ -8,8 +8,8 @@
 ' module returns DECIMAL, NUMERIC and BIGINT as text on purpose, because a
 ' gBASIC number is a double and DECIMAL(19,4) does not fit in fifteen
 ' significant digits. `pg` answers numeric and bigint the same way, so gdash's
-' money path -- text all the way into INTEGER minor units (design §4) -- needs
-' no special case here (finding G9-2).
+' money path -- text all the way into a money column, read exactly (design
+' §4) -- needs no special case here (finding G9-2).
 '
 ' THE CONNECTION STRING IS A CREDENTIAL. It carries PWD= and it must not reach
 ' an error message, a log line, a record or a viewer. The driver's own message

@@ -54,9 +54,9 @@ columns is not an object
 formats is not an object
   ERROR visual 'v1' has a 'formats' that is not an object
 dataset writes a bare placeholder
-  ERROR dataset 'd1' writes a bare '?'; gdash produces placeholders itself from ':name' and supplies no argument for a hand-written one
+  ERROR dataset 'd1' writes a positional placeholder ('?' or '$1'); gdash produces placeholders itself from ':name' and supplies no argument for a hand-written one
 visual writes a bare placeholder
-  ERROR visual 'v1' writes a bare '?'; gdash produces placeholders itself from ':name' and supplies no argument for a hand-written one
+  ERROR visual 'v1' writes a positional placeholder ('?' or '$1'); gdash produces placeholders itself from ':name' and supplies no argument for a hand-written one
 dataset binds a param
   ERROR dataset 'd1' binds param ':region'; params may appear only in visual queries
 dataset refresh policy
@@ -71,8 +71,8 @@ min_age without on_open
   ERROR dataset 'd1' sets 'min_age' but its refresh policy is 'manual'; 'min_age' belongs only to 'on_open'
 min_age not a whole number
   ERROR dataset 'd1' has 'min_age' of '-1'; it must be a whole number of seconds, zero or more
-too many datasets
-  ERROR dashboard has 12 datasets; SQLite attaches at most 10 beside the one being queried, so 11 is the limit
+reserved dataset name
+  ERROR dataset name 'orders__staging' is reserved: names starting '_gdash' or ending '__staging' are the store's own tables
 reserved param declared
   ERROR param 'user_email' is reserved; the server supplies it from the authenticated identity
 access not open

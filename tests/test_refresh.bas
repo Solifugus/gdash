@@ -17,52 +17,52 @@ program main(args)
     rec = ref.record
 
     good = { kind: "fixture", path: "fixtures/orders.json" }
-    live = gdash_paths.dataset_db(p, "sales", "draft", "orders")
+    live = gdash_paths.stage_db(p, "sales", "draft")
     vfile = gdash_paths.version_file(p, "sales", "draft")
 
     ' --- a first refresh materializes the dataset ---
     r1 = gdash_refresh.run(p, "sales", "draft", rec, "orders", good, "manual")
     s = gdash_test.ok(s, r1.ok, "first refresh succeeds -- " + r1.message)
-    s = gdash_test.ok(s, gdash_paths.path_exists(live), "live dataset file exists")
+    s = gdash_test.ok(s, gdash_store.has_dataset(live, "orders"), "the dataset is a live table")
     s = gdash_test.eq(s, r1.version, 1, "version bumped to 1")
 
-    ' Money materialized as INTEGER minor units, exact.
-    tot = gdash_store.select_rows(live, "select sum(amount) as total from orders where region = :region", { region: "west" }, ["total"], {})
-    s = gdash_test.ok(s, tot.ok, "visual query runs against the refreshed file")
-    s = gdash_test.eq(s, tot.rows[0]["total__text"], "325100", "1250.75 + 900.25 + 1100.00 in minor units")
-    s = gdash_test.eq(s, gdash_format.minor_to_decimal(tot.rows[0]["total__text"], 2), "3251.00", "renders exactly")
+    ' Money materialized as money, exact, in its currency.
+    tot = gdash_store.select_rows(live, "select sum(amount) as total from orders where region = :region", { region: "west" })
+    s = gdash_test.ok(s, tot.ok, "visual query runs against the refreshed data")
+    s = gdash_test.eq(s, money.text(tot.rows[0].total, 2), "3251.00", "1250.75 + 900.25 + 1100.00, exactly")
+    s = gdash_test.eq(s, gdash_format.currency(tot.rows[0].total, 2, "").text, "$3,251.00", "renders exactly")
 
-    ' Per-column scale travelled with the data.
-    s = gdash_test.eq(s, gdash_store.money_columns(live, {})["amount"], 2, "scale recorded in _gdash_meta")
+    ' The display scale travelled with the data.
+    s = gdash_test.eq(s, gdash_store.money_columns(live)["amount"], 2, "scale recorded in _gdash_meta")
 
-    ' --- a refresh that FAILS must leave the old file untouched ---
-    ' (design §3: stale-but-coherent beats broken)
-    before_bytes = ""
-    lf {file} = live
-    before_bytes = read(lf)
+    ' --- a refresh that FAILS must leave the old data untouched ---
+    ' (design §3: stale-but-coherent beats broken). The data is a table now,
+    ' so "untouched" is asserted on its rows, read the way a viewer reads them.
+    snapshot = "select region, month, amount from orders order by region, month"
+    before_rows = string(gdash_store.select_rows(live, snapshot, {}).rows)
     before_version = gdash_store.read_version(vfile)
 
     down = { kind: "fixture", path: "fixtures/orders_unavailable.json" }
     r2 = gdash_refresh.run(p, "sales", "draft", rec, "orders", down, "manual")
     s = gdash_test.ok(s, not r2.ok, "refresh against an unavailable source fails")
-    after_bytes = read(lf)
-    s = gdash_test.eq(s, after_bytes, before_bytes, "failed refresh left the dataset file byte-identical")
+    s = gdash_test.eq(s, string(gdash_store.select_rows(live, snapshot, {}).rows), before_rows, "failed refresh left the dataset's rows exactly as they were")
     s = gdash_test.eq(s, gdash_store.read_version(vfile), before_version, "and did not bump the version")
 
     ' The old data is still queryable -- the dashboard keeps working.
-    still = gdash_store.select_rows(live, "select sum(amount) as total from orders where region = :region", { region: "west" }, ["total"], {})
-    s = gdash_test.eq(s, still.rows[0]["total__text"], "325100", "old data still readable after a failed refresh")
+    still = gdash_store.select_rows(live, "select sum(amount) as total from orders where region = :region", { region: "west" })
+    s = gdash_test.eq(s, money.text(still.rows[0].total, 2), "3251.00", "old data still readable after a failed refresh")
 
-    ' --- a money value with too many decimals fails the whole refresh ---
-    fat = { kind: "fixture", path: "fixtures/orders_excess_decimals.json" }
-    r3 = gdash_refresh.run(p, "sales", "draft", rec, "orders", fat, "manual")
-    s = gdash_test.ok(s, not r3.ok, "excess decimals fail the refresh")
-    s = gdash_test.contains_text(s, r3.message, "rejected, not rounded", "and say why, from the child")
-    s = gdash_test.eq(s, read(lf), before_bytes, "rejected refresh left the dataset untouched")
+    ' --- a money value the currency cannot hold fails the whole refresh ---
+    ' A seventh decimal of USD is beyond what money stores, so it is refused,
+    ' naming the column, and the live table is untouched.
+    huge = { kind: "fixture", path: "fixtures/orders_beyond_currency.json" }
+    r3 = gdash_refresh.run(p, "sales", "draft", rec, "orders", huge, "manual")
+    s = gdash_test.ok(s, not r3.ok, "a value USD cannot store fails the refresh")
+    s = gdash_test.contains_text(s, r3.message, "amount", "and names the column, from the child")
+    s = gdash_test.eq(s, string(gdash_store.select_rows(live, snapshot, {}).rows), before_rows, "rejected refresh left the dataset untouched")
 
     ' --- no staging residue is left behind by any of the above ---
-    staging = gdash_paths.dataset_staging(p, "sales", "draft", "orders")
-    s = gdash_test.ok(s, not gdash_paths.path_exists(staging), "no staging file survives a run")
+    s = gdash_test.ok(s, not gdash_store.has_staging(live, "orders"), "no staging table survives a run")
 
     ' --- the job file carrying credentials does not outlive the fetch ---
     jobf = gdash_paths.job_file(p, "sales-draft-orders")
@@ -75,7 +75,20 @@ program main(args)
     s = gdash_test.ok(s, r4.ok, "later refresh succeeds again")
     s = gdash_test.ok(s, r4.unchanged, "refetching identical data reports unchanged")
     s = gdash_test.eq(s, r4.version, before_version, "and does not bump the version")
-    s = gdash_test.ok(s, not gdash_paths.path_exists(staging), "the unchanged staging file is discarded, not swapped")
+    s = gdash_test.ok(s, not gdash_store.has_staging(live, "orders"), "the unchanged staging table is discarded, not swapped")
+
+    ' --- D4a: more decimals than the display scale are STORED, not refused ---
+    ' `12.3456` against a declared scale of 2 used to fail the refresh, because
+    ' integer minor units had nowhere to put the third digit. Money stores six
+    ' places of USD, so the value is kept exactly and rounded only when shown.
+    fat = { kind: "fixture", path: "fixtures/orders_excess_decimals.json" }
+    r3b = gdash_refresh.run(p, "sales", "draft", rec, "orders", fat, "manual")
+    s = gdash_test.ok(s, r3b.ok, "a value finer than the display scale refreshes -- " + r3b.message)
+    fine = gdash_store.select_rows(live, "select amount from orders where month = '2026-02'", {})
+    s = gdash_test.eq(s, money.text(fine.rows[0].amount), "12.345600", "and is stored exactly as the source gave it")
+    s = gdash_test.eq(s, gdash_format.currency(fine.rows[0].amount, 2, "").text, "$12.35", "and rounded half-even only when shown")
+    back = gdash_refresh.run(p, "sales", "draft", rec, "orders", good, "manual")
+    before_version = back.version
 
     ' --- changed data does bump it ---
     moved = { kind: "fixture", path: "fixtures/orders_moved.json" }
@@ -108,11 +121,13 @@ program main(args)
     s = gdash_test.contains_text(s, denied.message, "draft datasets refresh manually only", "and says why")
 
     ' --- crash residue is swept, not trusted ---
-    resid {file} = staging
-    write(resid, "not a database")
+    ' A child that died after writing its staging table and before the parent
+    ' swapped it leaves exactly this behind.
+    resid = gdash_store.materialize(live, "orders", gdash_store.plan_columns(["region"], [["x"]], {}), [["half-written"]])
+    s = gdash_test.ok(s, gdash_store.has_staging(live, "orders"), "a crashed child's staging table is there to sweep")
     swept = gdash_refresh.sweep_staging(p, "sales", "draft", rec)
     s = gdash_test.eq(s, count(swept), 1, "the sweep found the crash residue")
-    s = gdash_test.ok(s, not gdash_paths.path_exists(staging), "and removed it")
+    s = gdash_test.ok(s, not gdash_store.has_staging(live, "orders"), "and removed it")
     s = gdash_test.eq(s, count(gdash_refresh.sweep_staging(p, "sales", "draft", rec)), 0, "a second sweep finds nothing")
 
     ' The sweep says so in the log: silently deleting files is how a sweep

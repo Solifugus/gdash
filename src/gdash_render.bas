@@ -5,13 +5,11 @@
 ' call on gBASIC's chart library; per the Studio rule the drawing belongs to
 ' the library, and gdash couples to it only through mark and channel names.
 '
-' Money is formatted from exact decimal TEXT, not through the money type.
-' Design §4 says rendering divides through gBASIC's exact money type, but that
-' type is double-backed: it refuses a string and renders
-' 90071992547409.93 as 90071992547409.94 (finding F5). String surgery on
-' minor units is exact at every magnitude, so that is what the format layer
-' uses. Chart GEOMETRY still goes through doubles -- a bar's height is
-' pixels -- but every value a human reads comes from the text.
+' Money arrives as money (GDASH-20): G-SQL stores gBASIC values, so a money
+' column is an exact value with its currency, and the format layer renders it
+' at the column's display scale. Chart GEOMETRY still goes through doubles --
+' a bar's height is pixels -- but every value a human reads comes from the
+' money value itself.
 
 library gdash_render
 
@@ -90,12 +88,12 @@ library gdash_render
     ' still needs one -- and because "every money column in reach agrees" is
     ' exactly what it has always meant. It is no longer what a FORMATTED COLUMN
     ' consults.
-    function money_scale(db_path, attach)
-        return _agreed_scale(gdash_store.money_columns(db_path, attach))
+    function money_scale(db_path)
+        return _agreed_scale(gdash_store.money_columns(db_path))
     end function
 
-    function money_scales(db_path, attach)
-        return gdash_store.money_columns(db_path, attach)
+    function money_scales(db_path)
+        return gdash_store.money_columns(db_path)
     end function
 
     ' The message a refusal carries. One place, because a person who meets it
@@ -107,11 +105,13 @@ library gdash_render
         return "visual '" + name + "' cannot tell what scale '" + column + "' is in: it is not a money column of any dataset here, and the money columns in reach disagree. Alias it to the money column it comes from, or give the datasets one scale."
     end function
 
-    ' The currency a money channel renders in. Declared on the encoding so a
-    ' JPY column does not render as dollars; USD when unstated.
+    ' The currency the record STATES for a money channel, or "" when it states
+    ' none. A money value carries its own currency and renders in it; a stated
+    ' one that disagrees is refused by the format layer, and a plain number is
+    ' rendered in the stated currency, USD when there is none.
     function currency_of(visual)
         enc = visual["encoding"]
-        return default(enc["currency"], "USD")
+        return string(default(enc["currency"], ""))
     end function
 
     function _err(message)
@@ -119,7 +119,8 @@ library gdash_render
     end function
 
     ' Channel validation happens here, against a real result set, because
-    ' sqlite.columns has not shipped (finding F4). Design §2 names this
+    ' G-SQL cannot yet describe a query without running it (finding F4;
+    ' GDASH-20 ask A2). Design §2 names this
     ' fallback: until prepare-without-execute exists, channel checks happen at
     ' first refresh rather than at load time.
     function _has_column(row, name)
@@ -174,7 +175,7 @@ library gdash_render
                 end if
                 if mine then
                     if is_money then
-                        col = append(col, number(gdash_format.minor_to_decimal(rows[i][ych + "__text"], scale)))
+                        col = append(col, gdash_format.chart_number(rows[i][ych]))
                     else
                         col = append(col, rows[i][ych])
                     end if
@@ -294,7 +295,7 @@ library gdash_render
                 if key = nm then
                     slot = seen[string(rows[i][xch])]
                     if is_money then
-                        col[slot] = number(gdash_format.minor_to_decimal(rows[i][ych + "__text"], scale))
+                        col[slot] = gdash_format.chart_number(rows[i][ych])
                     else
                         col[slot] = rows[i][ych]
                     end if
@@ -410,7 +411,7 @@ library gdash_render
         return opts
     end function
 
-    function render_visual(name, visual, rows, db_path, attach, theme)
+    function render_visual(name, visual, rows, db_path, theme)
         enc = visual["encoding"]
         mark = enc["mark"]
 
@@ -421,10 +422,9 @@ library gdash_render
 
         is_money = default(enc["format"], "") = "currency"
 
-        ' Read once per visual, not once per cell: this opens the dataset and
-        ' every attached sibling, and a hundred-row table would otherwise open
-        ' them a hundred times.
-        scales = money_scales(db_path, attach)
+        ' Read once per visual, not once per cell: a hundred-row table would
+        ' otherwise read the dashboard's metadata a hundred times.
+        scales = money_scales(db_path)
 
         ' A chart's money scale is THE SCALE OF ITS VALUE CHANNEL, looked up by
         ' that column's own name, rather than one number asserted over the
@@ -449,11 +449,7 @@ library gdash_render
                 return _err("visual '" + name + "': channel 'value' names column '" + string(ch) + "', which the query does not return")
             end if
             if is_money then
-                exact = row0[ch + "__text"]
-                if is_unknown(exact) then
-                    return _err("visual '" + name + "': money channel was not fetched exactly")
-                end if
-                got = gdash_format.currency(exact, scale, currency_of(visual))
+                got = gdash_format.currency(row0[ch], scale, currency_of(visual))
                 if not got.ok then
                     return _err("visual '" + name + "': " + got.message)
                 end if
@@ -552,17 +548,7 @@ library gdash_render
             if is_unknown(fmts) then
                 fmts = {}
             end if
-            cols = []
-            all_cols = keys(row0)
-            i = 0
-            while i < count(all_cols)
-                cn = all_cols[i]
-                ' the __text siblings are the exactness mechanism, not data
-                if not ends_with(cn, "__text") then
-                    cols = concat(cols, [cn])
-                end if
-                i += 1
-            end while
+            cols = keys(row0)
 
             head = []
             i = 0
@@ -598,7 +584,7 @@ library gdash_render
                             end if
                         end if
                         spec = format_spec(entry, cell_scale, currency_of(visual))
-                        shown = gdash_format.apply(spec, rows[r][cn], rows[r][cn + "__text"])
+                        shown = gdash_format.apply(spec, rows[r][cn])
                     end if
                     cells = concat(cells, ["<td>" + html_escape(shown) + "</td>"])
                     c += 1
@@ -612,39 +598,6 @@ library gdash_render
         end if
 
         return _err("visual '" + name + "' uses mark '" + string(mark) + "', which this build does not render")
-    end function
-
-    ' Which result columns of a visual query must cross exactly (the F1 text
-    ' boundary): every channel this encoding formats as currency.
-    function exact_columns(visual)
-        enc = visual["encoding"]
-        mark = enc["mark"]
-        if mark = "table" then
-            out = []
-            fmts = enc["formats"]
-            if is_unknown(fmts) then
-                return out
-            end if
-            cols = keys(fmts)
-            i = 0
-            while i < count(cols)
-                if format_name(fmts[cols[i]]) = "currency" then
-                    out = concat(out, [cols[i]])
-                end if
-                i += 1
-            end while
-            return out
-        end if
-        if default(enc["format"], "") != "currency" then
-            return []
-        end if
-        if mark = "value" then
-            return [enc["value"]]
-        end if
-        if mark = "bar" or mark = "line" then
-            return [enc["y"]]
-        end if
-        return []
     end function
 
     ' A formats entry is either a bare name ("currency") or a record carrying

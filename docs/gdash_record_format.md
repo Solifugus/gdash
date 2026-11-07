@@ -25,8 +25,10 @@ server-level and live in `/etc/gdash/connections.json` (0600).
 
 ## 2. Datasets
 
-A dataset materializes a source query into a local SQLite file. Its name
-becomes a table name, so it must be a legal SQL identifier.
+A dataset materializes a source query into a table in the dashboard's local
+G-SQL database. Its name becomes the table's name, so it must be a legal SQL
+identifier, and it may not start with `_gdash` or end in `__staging`: those
+are the store's own tables.
 
 | key | required | meaning |
 |---|---|---|
@@ -41,15 +43,14 @@ becomes a table name, so it must be a legal SQL identifier.
 change re-fetch from the source, silently reintroducing pass-through cost
 (design §2). This is enforced at load time.
 
-**A dashboard may name at most eleven datasets.** A visual query attaches every
-sibling dataset so it can be named unqualified (§4), and SQLite attaches at most
-ten databases beside the one being queried. The twelfth is refused at load
-rather than at render.
+**There is no limit on how many datasets a dashboard names.** Every dataset is
+a table in the same database, so a visual query reaches each sibling by name
+(§4). Until GDASH-20 SQLite's attach limit capped a dashboard at eleven.
 
 ### Where a dataset comes from
 
 `profile` names an entry in `/etc/gdash/connections.json`. gdash **imports**
-from a source on a schedule and stages the result in SQLite; it never queries a
+from a source on a schedule and stages the result in G-SQL; it never queries a
 source to answer a page. So a profile is an origin, not a database gdash
 speaks:
 
@@ -105,24 +106,46 @@ Two things bound what a policy can do:
   `manual`: the dashboard serves the data it has and says how old it is.
 
 **An unchanged refresh does not bump the version.** The fetched content is
-hashed; when it matches what is already stored, the staging file is discarded
+hashed; when it matches what is already stored, the staging table is discarded
 and no reload is broadcast. Otherwise a five-minute interval over static data
 would reload every open tab twelve times an hour to show the same numbers.
 
 ### Money columns
 
-`{ "type": "money", "scale": s, "currency": "USD" }` materializes as an
-INTEGER scaled by 10^s, with per-column scale recorded in `_gdash_meta` inside
-the dataset file. **Source values with more decimals than `s` are rejected, not
-rounded.** `currency` defaults to `USD` and must be a code ISO 4217 defines —
-all 178 of them. A code it does not define is refused rather than rendered as
-dollars.
+`{ "type": "money", "scale": s, "currency": "USD" }` materializes as a
+`money(USD)` column: gBASIC's own money, stored **exactly as the source gave
+it**, with its currency. `s` is the **display** scale: a person is shown `s`
+places, rounded half-even, and nothing else is ever rounded. A source value of
+`1250.7512` in a column at scale 2 is stored as `1250.7512`, summed at that
+value, and shown as `$1,250.75`. So a table's rounded rows may not add up
+exactly to its rounded total; that is the honest result, where rounding at
+import would make the stored figures wrong.
 
-Undeclared columns map: integer-looking → INTEGER, numeric → REAL, else TEXT.
+What is still refused: a value the currency cannot hold. Money keeps the
+currency's minor unit plus four guard digits (USD six places, JPY four), so a
+seventh decimal of USD fails the refresh, naming the row and column, and the
+old data stays. A `scale` larger than the currency stores is refused at load.
+`currency` defaults to `USD` and must be a code ISO 4217 defines — all 178 of
+them. A code it does not define is refused rather than rendered as dollars.
+
+Undeclared columns are inferred from the fetched rows: integer-looking →
+`integer` (exact past 2^53), numeric → `number`, else `string`.
 
 ## 3. Params and controls
 
-A param declares a default. Controls publish a param:
+A param declares a default, and may declare a `type`: `string`, `integer`,
+`number`, `date` or `money` (with an optional `currency`, `USD` by default). A
+value arriving from the page is converted to its type before any query runs,
+and one that does not convert is **refused by name** (HTTP 400), not coerced
+and not replaced by the default. A param with no `type` is bound exactly as it
+arrives, as it always was.
+
+```json
+"params": { "since": { "default": "2026-01-01", "type": "date" },
+            "region": { "default": "west" } }
+```
+
+Controls publish a param:
 
 ```json
 "region_picker": {
@@ -134,12 +157,11 @@ A param declares a default. Controls publish a param:
 `kind` is `select` in this build. A control's `sql` runs against its dataset;
 the **first result column** supplies the option values.
 
-**A query may not write its own `?`.** gdash rewrites every `:name` into a
-positional placeholder itself, so a hand-written `?` adds a placeholder that no
-argument accounts for — the query would fail at refresh time with a message
-about argument counts rather than at load time with one about the record. It is
-refused by validation. A `?` inside a string literal or a comment is text, not
-a placeholder, and is left alone.
+**A query may not write its own positional placeholder.** gdash rewrites every
+`:name` into `$1`, `$2`, … itself, so a hand-written `$1` would silently take
+the value of gdash's first binding, and a `?` is a placeholder no argument
+accounts for. Both are refused by validation. Inside a string literal or a
+comment they are text, and left alone.
 
 ### The dependency graph is derived, never declared
 
@@ -153,8 +175,20 @@ binding, and `::` is a cast.
 
 ## 4. Visuals
 
-A visual is a dataset + a SQL query (in **SQLite** dialect, against the
-materialized dataset) + an encoding.
+A visual is a dataset + a SQL query (in **G-SQL**, gBASIC's own SQL, against
+the materialized data) + an encoding.
+
+**G-SQL in brief, for an author coming from SQLite or PostgreSQL.** Values keep
+their gBASIC kinds: money is money, and an integer is exact. A plain number or
+a text literal compared with a typed column is read as that column's kind, so
+`amount > 1000` means USD 1000 and `day >= '2026-10-01'` compares dates; kinds
+that do not compare (a date and a number, dollars and yen) are refused, and so
+is arithmetic across currencies. Text joins with `||`. As of GDASH-20 the
+function list is short — `coalesce`, `nullif`, `lower`, `upper`, `length`,
+`char_length`, `abs`, `round`, `trim`, `mod` — so there is no `substr`, and
+`GROUP BY` names a column or repeats an expression, not an output alias or a
+position. A derived table is the portable way round both (asked of the
+platform, `gdash20_platform_ask_gsql.md` A5).
 
 | key | required | meaning |
 |---|---|---|
@@ -162,12 +196,13 @@ materialized dataset) + an encoding.
 | `sql` | yes | The visual query. May bind `:params`. |
 | `encoding` | yes | Mark plus channel mapping. |
 
-**A visual query may name any dataset of its dashboard, unqualified.** The
-named `dataset` is opened directly and every sibling is attached under its own
-name, so `from orders join regions on ...` works with no prefix and no wiring —
-the cross-source join of design §3, arriving as ordinary SQL. A sibling that has
-never refreshed is not attached, and a query naming it fails with SQLite's own
-message, shown in place of that one visual.
+**A visual query may name any dataset of its dashboard, unqualified.** Every
+dataset is a table in the dashboard's one database, so `from orders join
+regions on ...` works with no prefix and no wiring — the cross-source join of
+design §3, arriving as ordinary SQL. It cannot name another dashboard's data:
+that is a different database. A sibling that has never refreshed has no table,
+and a query naming it fails with G-SQL's own message, shown in place of that
+one visual. Every visual query runs read-only at the engine.
 
 ### Marks and their channels
 
@@ -359,7 +394,7 @@ options:
 
 | format | options | notes |
 |---|---|---|
-| `currency` | — | Uses the column's scale and the encoding's `currency`. |
+| `currency` | — | Shows the column's display scale, half-even. A money value renders in its own currency; a stated `currency` that disagrees with it is refused. A plain number renders in the stated currency, USD when none is stated. |
 | `number` | `decimals` | Thousands-grouped. |
 | `percent` | `decimals` | Renders a ratio as a percentage. |
 | `text` | — | Default. |
@@ -368,10 +403,10 @@ options:
 int64 at the currency's storage scale (its minor-unit exponent plus four guard
 digits). The ceiling therefore **moves with the currency**: USD stops at
 `9,223,372,036,854.77`, KWD at `922,337,203,685.477`, and JPY — which has no
-minor unit — at `922,337,203,685,477`. gdash's own storage is unaffected;
-SQLite holds the exact integer either way. A value above the ceiling
-**refuses to render**, naming that currency's own limit, rather than falling
-back to a second formatting path with different rounding.
+minor unit — at `922,337,203,685,477`. Since GDASH-20 the store holds the
+same money type, so a source value above the ceiling fails its refresh, and a
+`sum` that overflows it fails its visual (warning 2112). A plain number above
+the ceiling **refuses to render**, naming that currency's own limit.
 
 Symbols are given for USD, EUR, GBP and JPY; every other currency renders as
 its code and the amount (`NGN 1,234.56`), because ISO 4217 defines codes and
@@ -407,7 +442,8 @@ A dashboard validates completely before any source database is contacted —
 with one documented gap.
 
 **Encoding channel names are not checked at load time.** Doing so needs
-prepare-without-execute (`sqlite.columns`), which has not shipped in gBASIC.
+prepare-without-execute, which G-SQL does not offer yet (asked as
+`gdash20_platform_ask_gsql.md` A2).
 Until it does, a channel naming a column the query does not return is caught
 **when the visual first renders**, and shows as an error in that visual's cell
 rather than refusing the record. This is design §2's stated fallback, and it is
@@ -701,9 +737,9 @@ columns is not an object
 formats is not an object
   ERROR visual 'v1' has a 'formats' that is not an object
 dataset writes a bare placeholder
-  ERROR dataset 'd1' writes a bare '?'; gdash produces placeholders itself from ':name' and supplies no argument for a hand-written one
+  ERROR dataset 'd1' writes a positional placeholder ('?' or '$1'); gdash produces placeholders itself from ':name' and supplies no argument for a hand-written one
 visual writes a bare placeholder
-  ERROR visual 'v1' writes a bare '?'; gdash produces placeholders itself from ':name' and supplies no argument for a hand-written one
+  ERROR visual 'v1' writes a positional placeholder ('?' or '$1'); gdash produces placeholders itself from ':name' and supplies no argument for a hand-written one
 dataset binds a param
   ERROR dataset 'd1' binds param ':region'; params may appear only in visual queries
 dataset refresh policy
@@ -718,8 +754,8 @@ min_age without on_open
   ERROR dataset 'd1' sets 'min_age' but its refresh policy is 'manual'; 'min_age' belongs only to 'on_open'
 min_age not a whole number
   ERROR dataset 'd1' has 'min_age' of '-1'; it must be a whole number of seconds, zero or more
-too many datasets
-  ERROR dashboard has 12 datasets; SQLite attaches at most 10 beside the one being queried, so 11 is the limit
+reserved dataset name
+  ERROR dataset name 'orders__staging' is reserved: names starting '_gdash' or ending '__staging' are the store's own tables
 reserved param declared
   ERROR param 'user_email' is reserved; the server supplies it from the authenticated identity
 access not open

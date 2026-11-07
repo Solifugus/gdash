@@ -93,15 +93,15 @@ program main(args)
     rows = [ { m: 1, r: "north", amt: 10.0 }, { m: 1, r: "south", amt: 5.0 },
              { m: 2, r: "north", amt: 40.0 }, { m: 2, r: "south", amt: 20.0 } ]
     v = { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt", series: "r" } }
-    plain = gdash_render.render_visual("v", v, rows, "", {}, gdash_theme.default_theme())
-    themed = gdash_render.render_visual("v", v, rows, "", {}, loaded.theme)
+    plain = gdash_render.render_visual("v", v, rows, "", gdash_theme.default_theme())
+    themed = gdash_render.render_visual("v", v, rows, "", loaded.theme)
     s = gdash_test.contains_text(s, themed, "#111111", "the theme's first colour is drawn with")
     s = gdash_test.ok(s, not contains(plain, "#111111"), "and is absent without the theme")
 
     red = {}
     red["south"] = "#ff0000"
     vc = { dataset: "d", sql: "x", encoding: { mark: "line", x: "m", y: "amt", series: "r", colors: red } }
-    overridden = gdash_render.render_visual("v", vc, rows, "", {}, loaded.theme)
+    overridden = gdash_render.render_visual("v", vc, rows, "", loaded.theme)
     s = gdash_test.contains_text(s, overridden, "#ff0000", "a record's override reaches the markup")
     s = gdash_test.ok(s, not contains(themed, "#ff0000"), "and is absent without it")
 

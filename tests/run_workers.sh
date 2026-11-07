@@ -16,6 +16,7 @@
 
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$HERE/gsql_owners.sh"
 cd "$HERE/.."
 GBASIC="${GDASH_GBASIC:-$HOME/development/gbasic/gbasic}"
 export GDASH_GBASIC="$GBASIC"
@@ -79,7 +80,7 @@ cleanup(){
         tail -20 "$SCRATCH/server.log"
     fi
     [[ "${GDASH_KEEP:-0}" == "1" ]] && { echo "kept: $SCRATCH"; return; }
-    rm -rf "$SCRATCH"
+    wait_for_gsql_owners "$SCRATCH"; rm -rf "$SCRATCH"
 }
 trap cleanup EXIT
 

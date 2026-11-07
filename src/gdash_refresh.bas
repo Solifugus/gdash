@@ -1,13 +1,13 @@
 ' gdash — refresh supervision.
 '
 ' Parent side of design §3. Writes a 0600 job file, starts the child, and on
-' success renames the staging file over the live one and bumps the version.
+' success swaps the staging table in for the live one and bumps the version.
 '
 ' Stale-but-coherent beats broken: on any failure -- bad credentials, a source
-' that is down, a hung child, a money value with too many decimals -- the old
-' dataset file is left exactly as it was and the UI keeps showing "data as
-' of". Nothing half-written is ever visible, because the only thing that makes
-' new data visible is a single rename.
+' that is down, a hung child, a money value its column cannot hold -- the old
+' dataset is left exactly as it was and the UI keeps showing "data as of".
+' Nothing half-written is ever visible, because the only thing that makes new
+' data visible is one transaction (gdash_store.swap).
 '
 ' Two callers reach this: a person (the CLI, or the refresh button) and the
 ' scheduler. They differ in one word -- `trigger` -- and that word decides
@@ -57,31 +57,18 @@ library gdash_refresh
         return gdash_paths.dir_of(process.self().script) + "/gdash_refresh_child.bas"
     end function
 
-    function _discard_staging(staging)
-        if not gdash_paths.path_exists(staging) then
-            return true
-        end if
-        on error goto next
-        sf {file} = staging
-        delete(sf)
-        if error then
-            return false
-        end if
-        return true
-    end function
-
-    ' A crashed child leaves its staging file behind. Residue is swept rather
-    ' than trusted -- a half-written file is not data -- and the sweep says so
-    ' in the audit log, because a sweep that deletes files silently is
+    ' A crashed child leaves its staging table behind. Residue is swept rather
+    ' than trusted -- a half-written table is not data -- and the sweep says so
+    ' in the audit log, because a sweep that deletes data silently is
     ' indistinguishable from data loss when someone comes looking.
     function sweep_staging(p, dashboard, mode, rec)
         removed = []
+        db = gdash_paths.stage_db(p, dashboard, mode)
         names = keys(rec["datasets"])
         i = 0
         while i < count(names)
-            staging = gdash_paths.dataset_staging(p, dashboard, mode, names[i])
-            if gdash_paths.path_exists(staging) then
-                if _discard_staging(staging) then
+            if gdash_store.has_staging(db, names[i]) then
+                if gdash_store.discard_staging(db, names[i]) then
                     removed = concat(removed, [names[i]])
                     logged = gdash_audit.event(p, "sweep.staging", { dashboard: dashboard, mode: mode, dataset: names[i] })
                 end if
@@ -117,18 +104,17 @@ library gdash_refresh
     ' The lock is held around this. Everything it touches is one dataset's.
     function _fetch_and_swap(p, dashboard, mode, rec, dataset, profile, st, now)
         ds = rec["datasets"][dataset]
-        staging = gdash_paths.dataset_staging(p, dashboard, mode, dataset)
-        live = gdash_paths.dataset_db(p, dashboard, mode, dataset)
+        db = gdash_paths.stage_db(p, dashboard, mode)
         vfile = gdash_paths.version_file(p, dashboard, mode)
         statepath = gdash_paths.dataset_state(p, dashboard, mode, dataset)
 
-        ' A stale staging file from an earlier crash must not be mistaken for
+        ' A stale staging table from an earlier crash must not be mistaken for
         ' this run's output.
-        if not _discard_staging(staging) then
-            return _fail(p, dashboard, mode, dataset, st, now, "cannot clear stale staging file", vfile, statepath)
+        if not gdash_store.discard_staging(db, dataset) then
+            return _fail(p, dashboard, mode, dataset, st, now, "cannot clear a stale staging table", vfile, statepath)
         end if
 
-        job = { sql: ds["sql"], table: dataset, staging: staging, profile: profile, columns: ds["columns"] }
+        job = { sql: ds["sql"], table: dataset, db: db, profile: profile, columns: ds["columns"] }
         token = dashboard + "-" + mode + "-" + dataset
         jobpath = gdash_paths.job_file(p, token)
 
@@ -168,13 +154,13 @@ library gdash_refresh
             if not is_unknown(out) then
                 detail = trim(string(out.stderr))
             end if
-            ' The old dataset file is untouched: stale-but-coherent.
-            cleared = _discard_staging(staging)
+            ' The live table is untouched: stale-but-coherent.
+            cleared = gdash_store.discard_staging(db, dataset)
             return _fail(p, dashboard, mode, dataset, st, now, "refresh failed: " + detail, vfile, statepath)
         end if
 
-        if not gdash_paths.path_exists(staging) then
-            return _fail(p, dashboard, mode, dataset, st, now, "refresh child wrote no staging file", vfile, statepath)
+        if not gdash_store.has_staging(db, dataset) then
+            return _fail(p, dashboard, mode, dataset, st, now, "refresh child wrote no staging table", vfile, statepath)
         end if
 
         said = { rows: 0, hash: "" }
@@ -186,19 +172,19 @@ library gdash_refresh
         ' reloads on a bump, so a five-minute interval over data that has not
         ' moved would otherwise reload every viewer twelve times an hour to
         ' show them the same numbers.
-        if said.hash != "" and said.hash = st.hash and gdash_paths.path_exists(live) then
-            cleared = _discard_staging(staging)
+        if said.hash != "" and said.hash = st.hash and gdash_store.has_dataset(db, dataset) then
+            cleared = gdash_store.discard_staging(db, dataset)
             after = gdash_sched.after_attempt(st, now, true, "", said.rows, said.hash, gdash_sched.definition_of(ds))
             wrote = gdash_sched.write_state(statepath, after)
             logged = gdash_audit.event(p, "refresh.unchanged", { dashboard: dashboard, mode: mode, dataset: dataset, rows: said.rows })
             return { ok: true, message: "", version: gdash_store.read_version(vfile), rows: said.rows, unchanged: true, skipped: false }
         end if
 
-        ' Swap is a single POSIX rename; the version file bumps AFTER, so a
+        ' The swap is one transaction; the version file bumps AFTER, so a
         ' reader woken by the version change always finds complete data.
-        sw = gdash_store.swap(staging, live)
+        sw = gdash_store.swap(db, dataset)
         if not sw.ok then
-            cleared = _discard_staging(staging)
+            cleared = gdash_store.discard_staging(db, dataset)
             return _fail(p, dashboard, mode, dataset, st, now, "swap failed: " + sw.message, vfile, statepath)
         end if
         v = gdash_store.bump_version(vfile, vfile + ".tmp")

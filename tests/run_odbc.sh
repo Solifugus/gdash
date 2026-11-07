@@ -19,6 +19,7 @@ if [[ "${GDASH_ODBC_TEST:-0}" != "1" ]]; then
 fi
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$HERE/gsql_owners.sh"
 cd "$HERE/.."
 GBASIC="${GDASH_GBASIC:-$HOME/development/gbasic/gbasic}"
 export GDASH_GBASIC="$GBASIC"
@@ -29,7 +30,7 @@ command -v sqlite3 >/dev/null 2>&1 || { echo "sqlite3 is needed to build the sou
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/gdash-odbc-XXXXXX")"
 ROOT="$SCRATCH/root"
 mkdir -p "$ROOT/etc" "$ROOT/lib/dashboards/sales" "$ROOT/lib/dashboards/viafix" "$ROOT/cache" "$ROOT/log" "$ROOT/run"
-trap 'rm -rf "$SCRATCH"' EXIT
+trap 'wait_for_gsql_owners "$SCRATCH"; rm -rf "$SCRATCH"' EXIT
 
 pass=0; fail=0
 ok(){ if [[ "$2" == "$3" ]]; then echo "  ok   $1"; pass=$((pass+1)); else echo "  FAIL $1: expected <$3> got <$2>"; fail=$((fail+1)); fi; }
@@ -81,18 +82,20 @@ has "$chk" "arrive as: string" "and values arrive as text, which is what money r
 echo "--- a refresh through ODBC ---"
 out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh sales 2>&1)"
 has "$out" "version 1" "a dataset refreshes from an ODBC source"
-money="$(sqlite3 "$ROOT/cache/sales/draft/orders.db" "select group_concat(amount) from (select amount from orders order by region, month)")"
-ok "money lands as exact integer minor units" "$money" "110000,125075,90025"
-meta="$(sqlite3 "$ROOT/cache/sales/draft/orders.db" "select kind || ':' || scale from _gdash_meta where column_name='amount'")"
-ok "with its scale recorded" "$meta" "money:2"
+# The staged data is G-SQL now (GDASH-20). The source's decimal(19,4) arrives
+# as text and is stored as money, exactly, at USD's six places.
+money="$("$GBASIC" tests/stage_query.bas "$ROOT/cache/sales/draft/data.gsql" "select amount from orders order by region, month")"
+ok "money lands as exact money" "$money" "1100.000000,1250.750000,900.250000"
+meta="$("$GBASIC" tests/stage_query.bas "$ROOT/cache/sales/draft/data.gsql" "select kind || ':' || currency || ':' || cast(scale as text) from _gdash_meta where dataset = 'orders' and column_name = 'amount'")"
+ok "with its currency and display scale recorded" "$meta" "money:USD:2"
 
 echo "--- parity: the same rows through a different origin ---"
 # The seam's whole claim. If two origins disagree, one of them is lying about
 # what the source said, and the money path is where that would show first.
 "$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh viafix >/dev/null 2>&1
-fixmoney="$(sqlite3 "$ROOT/cache/viafix/draft/orders.db" "select group_concat(amount) from (select amount from orders order by region, month)")"
+fixmoney="$("$GBASIC" tests/stage_query.bas "$ROOT/cache/viafix/draft/data.gsql" "select amount from orders order by region, month")"
 ok "ODBC and the fixture source stage identical values" "$money" "$fixmoney"
-fixmeta="$(sqlite3 "$ROOT/cache/viafix/draft/orders.db" "select kind || ':' || scale from _gdash_meta where column_name='amount'")"
+fixmeta="$("$GBASIC" tests/stage_query.bas "$ROOT/cache/viafix/draft/data.gsql" "select kind || ':' || currency || ':' || cast(scale as text) from _gdash_meta where dataset = 'orders' and column_name = 'amount'")"
 ok "and identical column metadata" "$meta" "$fixmeta"
 
 echo "--- credentials ---"
@@ -122,8 +125,8 @@ empty="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh sales 2>&1)"
 has "$empty" "neither 'connection' nor 'dsn'" "an odbc profile with no target says so"
 
 echo "--- and the previous data is untouched by a failed refresh ---"
-still="$(sqlite3 "$ROOT/cache/sales/draft/orders.db" "select group_concat(amount) from (select amount from orders order by region, month)")"
-ok "stale but coherent, as design §3 requires" "$still" "110000,125075,90025"
+still="$("$GBASIC" tests/stage_query.bas "$ROOT/cache/sales/draft/data.gsql" "select amount from orders order by region, month")"
+ok "stale but coherent, as design §3 requires" "$still" "1100.000000,1250.750000,900.250000"
 
 echo "---"
 echo "odbc: $pass passed, $fail failed"

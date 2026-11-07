@@ -4,19 +4,14 @@ program main(args)
 
     s = gdash_test.suite("format")
 
-    ' --- minor units -> decimal text, exact at every magnitude (F1) ---
-    s = gdash_test.eq(s, gdash_format.minor_to_decimal("325100", 2), "3251.00", "scale 2")
-    s = gdash_test.eq(s, gdash_format.minor_to_decimal("1", 2), "0.01", "one cent")
-    s = gdash_test.eq(s, gdash_format.minor_to_decimal("-125075", 2), "-1250.75", "negative")
-    s = gdash_test.eq(s, gdash_format.minor_to_decimal("9007199254740993", 2), "90071992547409.93", "past 2^53")
-    s = gdash_test.eq(s, gdash_format.minor_to_decimal("1234", 0), "1234", "scale 0")
-
     ' --- currency, delegated to the platform money type ---
-    c = gdash_format.currency("325100", 2, "USD")
+    ' An AMOUNT, not minor units (GDASH-20): money arrives as money, and a
+    ' plain number or decimal text is an amount in the stated currency.
+    c = gdash_format.currency("3251.00", 2, "USD")
     s = gdash_test.ok(s, c.ok, "currency renders")
     s = gdash_test.eq(s, c.text, "$3,251.00", "grouped USD")
-    s = gdash_test.eq(s, gdash_format.currency("1", 2, "USD").text, "$0.01", "one cent")
-    s = gdash_test.eq(s, gdash_format.currency("-125075", 2, "USD").text, "-$1,250.75", "negative USD")
+    s = gdash_test.eq(s, gdash_format.currency("0.01", 2, "USD").text, "$0.01", "one cent")
+    s = gdash_test.eq(s, gdash_format.currency("-1250.75", 2, "USD").text, "-$1,250.75", "negative USD")
 
     ' JPY has no minor unit: it must not render two decimals.
     '
@@ -35,32 +30,30 @@ program main(args)
     ' that says so.
     s = gdash_test.eq(s, gdash_format.currency("1234", 0, "JPY").text, "¥1,234", "JPY at exponent 0")
     s = gdash_test.eq(s, len(gdash_format.symbol_for("JPY")), 1, "the yen sign is ONE character, not its two UTF-8 bytes")
-    s = gdash_test.eq(s, gdash_format.currency("125075", 2, "GBP").text, "£1,250.75", "GBP")
+    s = gdash_test.eq(s, gdash_format.currency("1250.75", 2, "GBP").text, "£1,250.75", "GBP")
     s = gdash_test.eq(s, len(gdash_format.symbol_for("GBP")), 1, "and the pound sign is one character")
-    s = gdash_test.eq(s, gdash_format.currency("125075", 2, "EUR").text, "€1,250.75", "EUR")
+    s = gdash_test.eq(s, gdash_format.currency("1250.75", 2, "EUR").text, "€1,250.75", "EUR")
     s = gdash_test.eq(s, len(gdash_format.symbol_for("EUR")), 1, "and the euro sign is one character")
     s = gdash_test.eq(s, gdash_format.currency("-430000", 0, "JPY").text, "-¥430,000", "a negative zero-decimal currency")
     s = gdash_test.eq(s, gdash_format.symbol_for("USD"), "$", "USD is ASCII, which is why nothing caught the others")
     ' KWD carries three.
-    s = gdash_test.eq(s, gdash_format.currency("1234567", 3, "KWD").text, "KWD 1,234.567", "KWD at exponent 3")
+    s = gdash_test.eq(s, gdash_format.currency("1234.567", 3, "KWD").text, "KWD 1,234.567", "KWD at exponent 3")
 
-    ' Exact well past 2^53 -- the money type is int64 at storage scale, and
-    ' the text boundary means no double appears on the path. 2^53 minor units
-    ' is ~$90tn, which is ABOVE what USD can now represent, so the exactness
-    ' assertion sits just under the ceiling instead.
-    s = gdash_test.eq(s, gdash_format.currency("92233720368", 2, "USD").text, "$922,337,203.68", "exact well past 2^53 units")
-    s = gdash_test.eq(s, gdash_format.currency("922337203685477", 2, "USD").text, "$9,223,372,036,854.77", "exact at the USD ceiling")
+    ' Exact at magnitude -- the money type is int64 at storage scale, and no
+    ' double appears on the path.
+    s = gdash_test.eq(s, gdash_format.currency("922337203.68", 2, "USD").text, "$922,337,203.68", "exact at magnitude")
+    s = gdash_test.eq(s, gdash_format.currency("9223372036854.77", 2, "USD").text, "$9,223,372,036,854.77", "exact at the USD ceiling")
 
     ' Above the ceiling gdash REFUSES rather than falling back to a second
     ' formatting path. Guard digits cost 10,000x of range: an int64 at
     ' storage scale (exponent+4) tops out near $9.2tn, not $92 quadrillion.
     ' The stored data is untouched; only rendering declines.
-    over_range = gdash_format.currency("922337203685478", 2, "USD")
+    over_range = gdash_format.currency("9223372036854.78", 2, "USD")
     s = gdash_test.ok(s, not over_range.ok, "beyond the currency range is refused")
     s = gdash_test.contains_text(s, over_range.message, "data is intact", "refusal distinguishes rendering from storage")
 
     ' An unknown currency is refused, not silently rendered as dollars.
-    bad = gdash_format.currency("100", 2, "XYZ")
+    bad = gdash_format.currency("1.00", 2, "XYZ")
     s = gdash_test.ok(s, not bad.ok, "unknown currency refused")
     s = gdash_test.contains_text(s, bad.message, "unsupported currency", "and says so")
 
@@ -92,9 +85,34 @@ program main(args)
     ' --- the dispatcher ---
     s = gdash_test.ok(s, gdash_format.known("currency"), "currency is a known format")
     s = gdash_test.ok(s, not gdash_format.known("sparkline"), "unknown format is not known")
-    s = gdash_test.eq(s, gdash_format.apply({ name: "currency", scale: 2, currency: "USD" }, 0, "325100"), "$3,251.00", "apply currency uses the exact text")
-    s = gdash_test.eq(s, gdash_format.apply({ name: "number", decimals: 1 }, 12.34, unknown), "12.3", "apply number")
-    s = gdash_test.eq(s, gdash_format.apply({ name: "text" }, "west", unknown), "west", "apply text")
+    usd {USD}= "3251.00"
+    s = gdash_test.eq(s, gdash_format.apply({ name: "currency", scale: 2, currency: "USD" }, usd), "$3,251.00", "apply currency renders a money value")
+    s = gdash_test.eq(s, gdash_format.apply({ name: "number", decimals: 1 }, 12.34), "12.3", "apply number")
+    s = gdash_test.eq(s, gdash_format.apply({ name: "text" }, "west"), "west", "apply text")
+    s = gdash_test.eq(s, gdash_format.apply({ name: "currency", scale: 2 }, unknown), "", "an absent amount renders as nothing, not as an error")
+
+    ' --- a money value renders in ITS OWN currency (GDASH-20) ---
+    yen {JPY}= "430000"
+    s = gdash_test.eq(s, gdash_format.currency(yen, 0, "").text, "¥430,000", "money with no stated currency renders in its own")
+    s = gdash_test.eq(s, gdash_format.currency(yen, 0, "JPY").text, "¥430,000", "and a stated currency that agrees is fine")
+    clash = gdash_format.currency(yen, 0, "USD")
+    s = gdash_test.ok(s, not clash.ok, "a stated currency that DISAGREES is refused, not relabelled")
+    s = gdash_test.contains_text(s, clash.message, "the value is JPY", "and says what the value is")
+    s = gdash_test.eq(s, gdash_format.currency(12, 2, "").text, "$12.00", "a plain number with no currency is dollars")
+
+    ' --- D4a: rounded half-even, only when shown, at the display scale ---
+    tie1 {USD}= "1250.745"
+    tie2 {USD}= "1250.735"
+    s = gdash_test.eq(s, gdash_format.currency(tie1, 2, "").text, "$1,250.74", "a tie goes to the even digit")
+    s = gdash_test.eq(s, gdash_format.currency(tie2, 2, "").text, "$1,250.74", "from either side")
+    rate {USD}= "0.104320"
+    s = gdash_test.eq(s, gdash_format.currency(rate, 4, "").text, "$0.1043", "a scale-4 column shows four places")
+    tiny {USD}= "-0.004"
+    s = gdash_test.eq(s, gdash_format.currency(tiny, 2, "").text, "$0.00", "a value that rounds to zero carries no minus sign")
+    s = gdash_test.eq(s, gdash_format.storage_places("USD"), 6, "USD stores six places")
+    s = gdash_test.eq(s, gdash_format.storage_places("JPY"), 4, "JPY stores four")
+    s = gdash_test.eq(s, gdash_format.chart_number(rate), 0.10432, "chart geometry reads money at its full scale")
+    s = gdash_test.ok(s, is_unknown(gdash_format.chart_number(unknown)), "and an absent value is a gap, not zero")
 
     ' --- every ISO 4217 currency, not the eight that could be branches ---
     ' GDASH-1 supported eight because {USD}= needs a literal code. money.of
@@ -109,13 +127,13 @@ program main(args)
     s = gdash_test.eq(s, gdash_format.minor_places("KWD"), 3, "KWD shows three")
     s = gdash_test.eq(s, gdash_format.minor_places("BHD"), 3, "and so does BHD, which was never enumerated here")
 
-    ngn = gdash_format.currency("123456", 2, "NGN")
+    ngn = gdash_format.currency("1234.56", 2, "NGN")
     s = gdash_test.ok(s, ngn.ok, "a previously unsupported currency renders -- " + ngn.message)
     s = gdash_test.eq(s, ngn.text, "NGN 1,234.56", "with grouping and its code, since ISO gives no symbol")
 
     ' A code ISO 4217 does not define is still a refusal, not a fallback to
     ' dollars: rendering one currency as another is worse than saying no.
-    bogus = gdash_format.currency("100", 2, "XYZ")
+    bogus = gdash_format.currency("1.00", 2, "XYZ")
     s = gdash_test.ok(s, not bogus.ok, "an invented currency is refused")
     s = gdash_test.contains_text(s, bogus.message, "unsupported currency", "and says so in gdash's own words")
 
@@ -127,14 +145,14 @@ program main(args)
     s = gdash_test.eq(s, gdash_format.range_ceiling("KWD"), "922,337,203,685.477", "and KWD, with three, stops sooner")
 
     ' Ten trillion: past USD's ceiling, inside JPY's.
-    over = gdash_format.currency("1000000000000000", 2, "USD")
+    over = gdash_format.currency("10000000000000", 2, "USD")
     s = gdash_test.ok(s, not over.ok, "a value past the ceiling is refused")
     s = gdash_test.contains_text(s, over.message, "9,223,372,036,854.77", "naming the limit it passed")
     s = gdash_test.contains_text(s, over.message, "the data is intact", "and saying the data is not the problem")
 
     ' The same magnitude is fine in JPY, which is the point of naming the
     ' currency rather than quoting one number for all of them.
-    s = gdash_test.ok(s, gdash_format.currency("1000000000000000", 2, "JPY").ok, "the same magnitude renders in a currency with room for it")
+    s = gdash_test.ok(s, gdash_format.currency("10000000000000", 0, "JPY").ok, "the same magnitude renders in a currency with room for it")
 
     exit(gdash_test.report(s))
 end program

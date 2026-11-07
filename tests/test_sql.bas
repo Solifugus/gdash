@@ -9,7 +9,7 @@ program main(args)
     r = gdash_sql.scan("select a from t where x = :region and y = :region and z = :cut")
     s = gdash_test.eq(s, string(r.names), string(["region", "cut"]), "unique names in first-appearance order")
     s = gdash_test.eq(s, string(r.order), string(["region", "region", "cut"]), "one entry per ? left to right")
-    s = gdash_test.eq(s, r.sql, "select a from t where x = ? and y = ? and z = ?", "rewritten to positional")
+    s = gdash_test.eq(s, r.sql, "select a from t where x = $1 and y = $2 and z = $3", "rewritten to G-SQL positional parameters")
 
     ' A repeated binding must expand to one ? per occurrence, or the argument
     ' array silently misaligns with the placeholders.
@@ -20,7 +20,7 @@ program main(args)
     lit = "select ':region' as a, x from t where y = :real"
     r2 = gdash_sql.scan(lit)
     s = gdash_test.eq(s, string(r2.names), string(["real"]), "no binding inside a single-quoted literal")
-    s = gdash_test.eq(s, r2.sql, "select ':region' as a, x from t where y = ?", "literal text preserved verbatim")
+    s = gdash_test.eq(s, r2.sql, "select ':region' as a, x from t where y = $1", "literal text preserved verbatim")
 
     qi = "select " + q + ":notabinding" + q + " from t where y = :real"
     r3 = gdash_sql.scan(qi)
@@ -95,7 +95,7 @@ program main(args)
     ' A binding at the very end, with nothing after it to stop the scan.
     tail_bind = gdash_sql.scan("select a from t where b = :region")
     s = gdash_test.eq(s, join(tail_bind.names, ","), "region", "a binding at end of text is found")
-    s = gdash_test.eq(s, tail_bind.sql, "select a from t where b = ?", "and rewritten")
+    s = gdash_test.eq(s, tail_bind.sql, "select a from t where b = $1", "and rewritten")
 
     ' Adjacent and repeated bindings: `names` is unique in first-appearance
     ' order, `order` is one entry per '?', and the two must not be confused --
@@ -117,7 +117,7 @@ program main(args)
     ' length is a number somebody has to get right by hand, and I got it wrong
     ' the first time in a way that looked like a defect in the scanner.
     s = gdash_test.eq(s, code(mid(nul_sql.sql, 8, 1)), 0, "and the NUL itself survives the rewrite")
-    s = gdash_test.contains_text(s, nul_sql.sql, "b from t where c = ?", "with everything after it intact")
+    s = gdash_test.contains_text(s, nul_sql.sql, "b from t where c = $1", "with everything after it intact")
 
     ' A long identifier: bounded by the scanner, not by a buffer.
     long_name = "a234567890123456789012345678901234567890123456789012345678901234"
@@ -135,7 +135,7 @@ program main(args)
     ' about even though sqlite is the one that would bind wrongly.
     mixed = gdash_sql.scan("select a from t where b = ? and c = :region")
     s = gdash_test.eq(s, join(mixed.order, ","), "region", "a hand-written ? contributes nothing to the order")
-    s = gdash_test.eq(s, mixed.sql, "select a from t where b = ? and c = ?", "yet survives into the rewritten sql")
+    s = gdash_test.eq(s, mixed.sql, "select a from t where b = ? and c = $1", "yet survives into the rewritten sql")
     ' ...so args_for supplies ONE argument for TWO placeholders. Recorded as a
     ' known edge rather than papered over: a record's SQL is written by an
     ' author, and this is what happens if they write a placeholder themselves.
@@ -150,6 +150,12 @@ program main(args)
     s = gdash_test.eq(s, gdash_sql.placeholders("select '?' from t"), 0, "nor is one inside a string literal")
     s = gdash_test.eq(s, gdash_sql.placeholders("select a from t -- ?"), 0, "nor one in a comment")
     s = gdash_test.eq(s, gdash_sql.placeholders("select a from t where b = ? or c = ?"), 2, "and two are two")
+    ' A hand-written $1 is the worse case under G-SQL: it would silently take
+    ' the value of gdash's own first binding. So it is counted too, and the
+    ' validator refuses it -- but a dollar sign that is not a parameter is not.
+    s = gdash_test.eq(s, gdash_sql.placeholders("select a from t where b = $1 and c = :region"), 1, "a hand-written $1 is counted as a placeholder")
+    s = gdash_test.eq(s, gdash_sql.placeholders("select '$1' from t"), 0, "but not inside a string literal")
+    s = gdash_test.eq(s, gdash_sql.placeholders("select a$b from t"), 0, "and a dollar sign not followed by a digit is not one")
 
     ' A parameter with no supplied value yields `unknown` rather than a hole,
     ' so the array length still matches the placeholder count.

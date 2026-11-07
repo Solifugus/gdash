@@ -6,7 +6,7 @@
 ' so the model is the seam and this suite scripts it.
 '
 ' The assertion this file exists for is the money one, under "the failure that
-' started this phase". Everything else is the machinery around it.
+' started GDASH-12": since GDASH-20 the natural query is the right one.
 
 program main(args)
     load gdash_test from "gdash_test.bas"
@@ -43,14 +43,17 @@ program main(args)
     ocols = ["region", "month", "amount"]
     orows = [["west", "2026-01", "1250.75"], ["east", "2026-02", "1100.00"], ["west", "2026-03", "900.25"]]
     oplan = gdash_store.plan_columns(ocols, orows, { amount: { type: "money", scale: 2 } })
-    m = gdash_store.materialize(gdash_paths.dataset_db(p, "sales", "draft", "orders"), "orders", oplan, orows)
-    s = gdash_test.ok(s, m.ok, "the orders dataset materializes")
+    sdb = gdash_paths.stage_db(p, "sales", "draft")
+    m = gdash_store.materialize(sdb, "orders", oplan, orows)
+    msw = gdash_store.swap(sdb, "orders")
+    s = gdash_test.ok(s, m.ok and msw.ok, "the orders dataset materializes")
 
     rcols = ["region", "manager"]
     rrows = [["west", "Ada"], ["east", "Grace"]]
     rplan = gdash_store.plan_columns(rcols, rrows, {})
-    m2 = gdash_store.materialize(gdash_paths.dataset_db(p, "sales", "draft", "regions"), "regions", rplan, rrows)
-    s = gdash_test.ok(s, m2.ok, "and so does regions")
+    m2 = gdash_store.materialize(sdb, "regions", rplan, rrows)
+    m2sw = gdash_store.swap(sdb, "regions")
+    s = gdash_test.ok(s, m2.ok and m2sw.ok, "and so does regions")
 
     ' --- an empty question -------------------------------------------------
     blank = gdash_ask.ask(p, "sales", "draft", rec, "   ", model_double.saying("select 1"), {})
@@ -62,19 +65,23 @@ program main(args)
     ' The prompt is the half gdash is responsible for. `nlq` builds it, but
     ' only gdash can put real tables, real columns and real values in it.
     logp = root + "/prompt.log"
-    wire = model_double.saying_into("select count(*) as n from orders.orders", logp)
+    wire = model_double.saying_into("select count(*) as n from orders", logp)
     good = gdash_ask.ask(p, "sales", "draft", rec, "how many orders are there?", wire, {})
     said = model_double.prompted(logp)
-    s = gdash_test.contains_text(s, said, "orders.orders", "the model is told the dataset is its own schema")
+    ' Every dataset is a bare table in one database (GDASH-20), so the
+    ' catalog no longer offers `orders.orders`.
+    s = gdash_test.contains_text(s, said, "orders", "the model is told the table by its name")
+    s = gdash_test.ok(s, not contains(said, "orders.orders"), "with no schema in front of it")
     s = gdash_test.contains_text(s, said, "amount", "and the columns it may use")
     s = gdash_test.contains_text(s, said, "west", "and the values a text column actually holds")
-    s = gdash_test.contains_text(s, said, "SQLite", "and which SQL it is writing")
+    s = gdash_test.contains_text(s, said, "G-SQL", "and which SQL it is writing")
+    s = gdash_test.contains_text(s, said, "money in USD", "and which currency a money column holds")
 
     ' --- the happy path ----------------------------------------------------
     s = gdash_test.ok(s, good.ok, "a good query answers")
     s = gdash_test.eq(s, good.stage, "answered", "at the answered stage")
     s = gdash_test.eq(s, string(good.answer.value), "3", "with the value the query returned")
-    s = gdash_test.eq(s, good.sql, "select count(*) as n from orders.orders", "carrying the query it ran")
+    s = gdash_test.eq(s, good.sql, "select count(*) as n from orders", "carrying the query it ran")
     s = gdash_test.ok(s, count(good.as_of) = 2, "and when each dataset was last refreshed")
     s = gdash_test.ok(s, good.key != "", "a plan key comes back for a caller that wants to cache")
 
@@ -82,7 +89,7 @@ program main(args)
     ' told, and nlq strips it. Asserted here because the pipeline is what would
     ' break if it stopped.
     fenced = gdash_ask.ask(p, "sales", "draft", rec, "how many orders are there?",
-                           model_double.saying("```sql" + chr(10) + "select count(*) as n from orders.orders" + chr(10) + "```"), {})
+                           model_double.saying("```sql" + chr(10) + "select count(*) as n from orders" + chr(10) + "```"), {})
     s = gdash_test.ok(s, fenced.ok, "a fenced reply is still a query")
 
     ' --- was the model told what the integers mean? -------------------------
@@ -96,26 +103,22 @@ program main(args)
     s = gdash_test.ok(s, not is_unknown(good.units_told), "and it is always present, never unknown")
     s = gdash_test.ok(s, not is_unknown(cold.units_told), "including on a draft that stopped before planning")
 
-    ' --- THE FAILURE THAT STARTED THIS PHASE -------------------------------
+    ' --- THE FAILURE THAT STARTED GDASH-12, AND WHY IT IS GONE --------------
     '
-    ' Step 0 measured this against the shipped library: the question is about
-    ' DOLLARS, the column holds CENTS, the SQL is valid, nlq reports no
-    ' problems, and the number is wrong by a factor of a hundred. gdash cannot
-    ' refuse it -- someone may genuinely mean ten dollars -- so the whole of
-    ' the defence is that the draft says what the number means.
+    ' GDASH-12 step 0 measured this against the shipped library: the question
+    ' was about DOLLARS, the column held CENTS, the SQL was valid, and the
+    ' number was wrong by a factor of a hundred -- 3 where the answer is 2.
+    ' gdash's defence was a note restating the literal in minor units.
+    '
+    ' Money is stored as money now (GDASH-20), and G-SQL reads `1000`
+    ' compared with a USD column as USD 1000. The query a model naturally
+    ' writes for the question IS the right query, and there is nothing to
+    ' restate.
     money = gdash_ask.ask(p, "sales", "draft", rec, "how many orders were over 1000 dollars?",
-                          model_double.saying("select count(*) as n from orders.orders where amount > 1000"), {})
-    s = gdash_test.ok(s, money.ok, "the wrong query is accepted, because it is valid")
-    s = gdash_test.eq(s, string(money.answer.value), "3", "and returns the wrong answer")
-    s = gdash_test.eq(s, count(money.notes), 1, "and the draft carries a unit note")
-    s = gdash_test.contains_text(s, note_at(money.notes, 0).means, "$10.00", "saying what 1000 means in that column")
-
-    ' The right query returns 2 and is restated too, which is how a reviewer
-    ' confirms rather than assumes.
-    right = gdash_ask.ask(p, "sales", "draft", rec, "how many orders were over 1000 dollars?",
-                          model_double.saying("select count(*) as n from orders.orders where amount > 100000"), {})
-    s = gdash_test.eq(s, string(right.answer.value), "2", "the correct query returns the true answer")
-    s = gdash_test.contains_text(s, note_at(right.notes, 0).means, "1,000.00", "and is restated as well, not waved through")
+                          model_double.saying("select count(*) as n from orders where amount > 1000"), {})
+    s = gdash_test.ok(s, money.ok, "the natural query for a dollars question is accepted")
+    s = gdash_test.eq(s, string(money.answer.value), "2", "and returns the TRUE answer, 2, where minor units gave 3")
+    s = gdash_test.eq(s, count(money.notes), 0, "with no unit note, because there is no unit to misread")
 
     ' --- two refusals, two different things to say -------------------------
     '
@@ -160,11 +163,11 @@ program main(args)
 
     ' --- what the model can do wrong ---------------------------------------
     del = gdash_ask.ask(p, "sales", "draft", rec, "remove the west orders",
-                        model_double.saying("delete from orders.orders where region = 'west'"), {})
+                        model_double.saying("delete from orders where region = 'west'"), {})
     s = gdash_test.ok(s, not del.ok, "a write is refused")
     s = gdash_test.eq(s, del.stage, "sql", "by the SQL check, before anything runs")
     s = gdash_test.ok(s, count(del.problems) > 0, "with a problem to show")
-    s = gdash_test.eq(s, del.sql, "delete from orders.orders where region = 'west'", "and the query it refused")
+    s = gdash_test.eq(s, del.sql, "delete from orders where region = 'west'", "and the query it refused")
 
     ' The question grounds -- it is about orders -- and the model answers about
     ' something else entirely. That is the case check_sql exists for, and it is
@@ -172,7 +175,7 @@ program main(args)
     ' now stops one step earlier, at the catalog, which is better and is a
     ' different assertion.
     stranger = gdash_ask.ask(p, "sales", "draft", rec, "how many orders are there?",
-                             model_double.saying("select count(*) from payroll.payroll"), {})
+                             model_double.saying("select count(*) from payroll"), {})
     s = gdash_test.ok(s, not stranger.ok, "a query naming a table that is not there is refused")
     s = gdash_test.eq(s, stranger.stage, "sql", "by the SQL check, since the question itself was answerable")
 
@@ -183,22 +186,21 @@ program main(args)
     ' Valid, read-only, every name grounded -- and it does not compile. Only
     ' the database can find this one, which is why there is a `run` stage.
     broken = gdash_ask.ask(p, "sales", "draft", rec, "how many orders?",
-                           model_double.saying("select count(*) from orders.orders group by"), {})
+                           model_double.saying("select count(*) from orders group by"), {})
     s = gdash_test.ok(s, not broken.ok, "a query that does not compile is a reportable outcome")
     s = gdash_test.eq(s, broken.stage, "run", "at the run stage, not as a crash")
-    s = gdash_test.eq(s, broken.sql, "select count(*) from orders.orders group by", "with the query that failed")
+    s = gdash_test.eq(s, broken.sql, "select count(*) from orders group by", "with the query that failed")
 
     ' --- the gate behind the gate ------------------------------------------
     '
     ' `nlq.check_sql` refuses a write and is the reason `del` above never ran.
-    ' This asserts the thing underneath it: every dataset is ATTACHED READ-ONLY,
-    ' so a gap in that check is harmless rather than destructive. It goes
-    ' straight to the store, because the point is to test what happens when the
-    ' check above it does not fire.
-    only = { orders: gdash_paths.dataset_db(p, "sales", "draft", "orders") }
-    wrote = gdash_store.select_across(only, "delete from orders.orders")
-    s = gdash_test.ok(s, not wrote.ok, "a write through an attached dataset is refused by SQLite itself")
-    still = gdash_store.select_across(only, "select count(*) as n from orders.orders")
+    ' This asserts the thing underneath it: every read runs in a READ-ONLY
+    ' G-SQL transaction, so a gap in that check is harmless rather than
+    ' destructive. It goes straight to the store, because the point is to test
+    ' what happens when the check above it does not fire.
+    wrote = gdash_store.select_across(sdb, "delete from orders")
+    s = gdash_test.ok(s, not wrote.ok, "a write through the question path is refused by G-SQL itself")
+    still = gdash_store.select_across(sdb, "select count(*) as n from orders")
     s = gdash_test.eq(s, string(still.rows[0].n), "3", "and the data is still there")
 
     ' --- the model itself being unreachable --------------------------------
@@ -237,16 +239,13 @@ program main(args)
     ' A KEY MUST NOT TRAVEL WITH THE ANSWER. The draft is rendered into a page
     ' and could be logged; nothing in it may carry the credential.
     s = gdash_test.ok(s, not contains(string(good), "sk-fake-not-a-key"), "no key reaches the draft")
-    s = gdash_test.ok(s, not contains(string(money.notes), "sk-fake-not-a-key"), "nor the unit notes")
+    s = gdash_test.ok(s, not contains(string(money), "sk-fake-not-a-key"), "nor any other draft")
 
-    ' --- requalifying, which is where the two tiers disagree ---------------
+    ' --- requalifying a draft written in the old form ----------------------
     '
-    ' The NLQ catalog names a table `orders.orders`, because every dataset is
-    ' attached under its own name and that is what makes each `_gdash_meta`
-    ' readable at its own scale. A VISUAL query opens its dataset directly and
-    ' attaches only the siblings, so the same table is plain `orders` and
-    ' `orders.orders` does not resolve at all. A promoted query has to cross
-    ' that line.
+    ' Before GDASH-20 the NLQ catalog named a table `orders.orders` and a
+    ' visual query named it `orders`. They agree now, and requalifying stays
+    ' so that a draft in the old `D.D` form still promotes to SQL that runs.
     ds = ["orders", "regions"]
     s = gdash_test.eq(s, gdash_ask.requalify("select count(*) as n from orders.orders", ds),
                       "select count(*) as n from orders", "the schema-qualified table becomes the table")
@@ -272,11 +271,11 @@ program main(args)
 
     ' --- the visual a draft would become -----------------------------------
     grouped = gdash_ask.ask(p, "sales", "draft", rec, "total by region",
-                            model_double.saying("select region, sum(amount) as total from orders.orders group by region"), {})
+                            model_double.saying("select region, sum(amount) as total from orders group by region"), {})
     s = gdash_test.ok(s, grouped.ok, "a grouped question answers")
     vis = gdash_ask.draft_visual(grouped, rec, grouped.scaled)
     s = gdash_test.eq(s, vis.dataset, "orders", "the visual opens the dataset the query names")
-    s = gdash_test.eq(s, vis.sql, "select region, sum(amount) as total from orders group by region", "with the query requalified")
+    s = gdash_test.eq(s, vis.sql, "select region, sum(amount) as total from orders group by region", "with the query as the visual will run it")
     s = gdash_test.eq(s, vis.encoding.mark, "bar", "and an encoding that suits the shape")
 
     ' A query touching only the SECOND dataset must open the second. Without
@@ -288,26 +287,25 @@ program main(args)
     ' its own values, and check_sql then correctly refuses a query naming a
     ' table nobody offered. `manager` is a column only regions has.
     who = gdash_ask.ask(p, "sales", "draft", rec, "list every manager",
-                        model_double.saying("select manager from regions.regions where region = 'west'"), {})
+                        model_double.saying("select manager from regions where region = 'west'"), {})
     s = gdash_test.ok(s, who.ok, "a question about the other dataset answers")
     vis2 = gdash_ask.draft_visual(who, rec, who.scaled)
     s = gdash_test.eq(s, vis2.dataset, "regions", "and its visual opens THAT dataset, not the first one")
-    s = gdash_test.eq(s, vis2.sql, "select manager from regions where region = 'west'", "requalified the same way")
+    s = gdash_test.eq(s, vis2.sql, "select manager from regions where region = 'west'", "with its own query")
 
-    ' --- money, one step later than step 0 ---------------------------------
+    ' --- money, one step later --------------------------------------------
     '
-    ' A money column holds minor units, and an aggregate of minor units is
-    ' still minor units. A promoted `sum(amount) as total` renders 215100 where
-    ' a person expects $2,151.00 -- the same failure as step 0, arriving in the
-    ' chart instead of the answer. gdash can render it correctly, but only if
-    ' the encoding says the channel is currency.
+    ' A promoted `sum(amount) as total` should draw as currency, and does only
+    ' if the encoding says so. The draft's rows answer whether it is money --
+    ' G-SQL returns an aggregate of money as money -- and when there are no
+    ' rows, the query is read; these pin the reading.
     sc = grouped.scaled
     s = gdash_test.ok(s, gdash_ask.is_money_channel("select region, sum(amount) as total from orders group by region", sc, "total"), "an aggregate over a money column carries money")
     s = gdash_test.ok(s, gdash_ask.is_money_channel("select region, avg(orders.amount) as total from orders", sc, "total"), "whatever the aggregate, and however the column is qualified")
     s = gdash_test.ok(s, gdash_ask.is_money_channel("select amount from orders", sc, "amount"), "and so does the column itself, unaliased")
 
     ' NOT marking is the safe direction, and these are the cases that must not
-    ' be marked. A count rendered as currency would show 3 as $0.03 -- a wrong
+    ' be marked. A count rendered as currency would show 3 as $3.00 -- a wrong
     ' answer produced by the machinery meant to prevent wrong answers.
     s = gdash_test.ok(s, not gdash_ask.is_money_channel("select region, count(*) as n from orders where amount > 100000 group by region", sc, "n"), "a count in a query full of money is not money")
     s = gdash_test.ok(s, not gdash_ask.is_money_channel("select region, amount / 100 as dollars from orders", sc, "dollars"), "an expression that already converted is left alone")
@@ -323,7 +321,7 @@ program main(args)
     s = gdash_test.eq(s, string(vis.encoding["currency"]), "USD", "in the currency the record declares")
 
     counted = gdash_ask.ask(p, "sales", "draft", rec, "how many orders per region?",
-                            model_double.saying("select region, count(*) as n from orders.orders group by region"), {})
+                            model_double.saying("select region, count(*) as n from orders group by region"), {})
     cvis = gdash_ask.draft_visual(counted, rec, counted.scaled)
     s = gdash_test.ok(s, is_unknown(cvis.encoding["format"]), "a count is promoted with no currency format at all")
 
@@ -338,9 +336,11 @@ program main(args)
     tcols = ["account", "usd_value", "jpy_value"]
     trows = [["ACC-1", "1250750.25", "430000"], ["ACC-2", "-90425.10", "12"]]
     tplan = gdash_store.plan_columns(tcols, trows, { usd_value: { type: "money", scale: 2 },
-                                                    jpy_value: { type: "money", scale: 0 } })
-    tm = gdash_store.materialize(gdash_paths.dataset_db(p, "treasury", "draft", "positions"), "positions", tplan, trows)
-    s = gdash_test.ok(s, tm.ok, "a two-currency dataset materializes")
+                                                    jpy_value: { type: "money", scale: 0, currency: "JPY" } })
+    tdb = gdash_paths.stage_db(p, "treasury", "draft")
+    tm = gdash_store.materialize(tdb, "positions", tplan, trows)
+    tsw = gdash_store.swap(tdb, "positions")
+    s = gdash_test.ok(s, tm.ok and tsw.ok, "a two-currency dataset materializes")
 
     trec = { datasets: {} }
     trec["datasets"]["positions"] = { columns: {} }
@@ -348,19 +348,19 @@ program main(args)
     trec["datasets"]["positions"]["columns"]["jpy_value"] = { type: "money", scale: 0, currency: "JPY" }
 
     mixed = gdash_ask.ask(p, "treasury", "draft", trec, "total usd value by account",
-                          model_double.saying("select account, sum(usd_value) as total from positions.positions group by account"), {})
+                          model_double.saying("select account, sum(usd_value) as total from positions group by account"), {})
     s = gdash_test.ok(s, mixed.ok, "the question answers")
     mvis = gdash_ask.draft_visual(mixed, trec, mixed.scaled)
     s = gdash_test.ok(s, is_unknown(mvis.encoding["format"]), "an unresolvable money channel is NOT promoted as currency")
     caveat = gdash_ask.currency_caveat(mixed, trec, mvis)
     s = gdash_test.contains_text(s, caveat, "total", "and the draft says which column")
-    s = gdash_test.contains_text(s, caveat, "minor units", "and what will happen instead")
+    s = gdash_test.contains_text(s, caveat, "display scale", "and why it was left unformatted")
     s = gdash_test.contains_text(s, caveat, "Alias it", "and what to do about it")
 
     ' Aliased to the money column's own name, it resolves, and the currency
     ' format comes back -- which is exactly what the caveat tells a person.
     named = gdash_ask.ask(p, "treasury", "draft", trec, "total usd value by account",
-                          model_double.saying("select account, sum(usd_value) as usd_value from positions.positions group by account"), {})
+                          model_double.saying("select account, sum(usd_value) as usd_value from positions group by account"), {})
     nvis = gdash_ask.draft_visual(named, trec, named.scaled)
     s = gdash_test.eq(s, string(nvis.encoding["format"]), "currency", "aliased to the money column, it formats as currency")
     s = gdash_test.eq(s, gdash_ask.currency_caveat(named, trec, nvis), "", "and there is nothing left to warn about")

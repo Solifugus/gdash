@@ -4,8 +4,9 @@
 ' (design §1, load-time red/green). This phase implements the subset the spine
 ' needs; GDASH-1 owns the full catalog and its golden refusal messages.
 '
-' One limit is structural, not an omission: `sqlite.columns` has not shipped
-' (finding F4), so encoding-channel names cannot be checked against a real
+' One limit is structural, not an omission: G-SQL cannot yet describe a query
+' without running it (finding F4; asked as GDASH-20 A2), so encoding-channel
+' names cannot be checked against a real
 ' result set here. Design §2 already provides for that -- channel checks
 ' happen at first refresh -- and gdash_store enforces them there.
 
@@ -201,7 +202,7 @@ library gdash_record
 
         if not _has(rec, "format") then
             errors = concat(errors, ["record has no 'format'"])
-        else if default(rec["format"], 0) != 1 then
+        else if type(rec["format"]) != "number" or rec["format"] != 1 then
             errors = concat(errors, ["unsupported record format: " + string(rec["format"]) + " (this build reads format 1)"])
         end if
 
@@ -235,14 +236,10 @@ library gdash_record
         end if
         ds_names = keys(datasets)
 
-        ' SQLite allows ten attached databases besides `main` (finding G2-4),
-        ' and a visual query attaches every sibling dataset so it can name
-        ' them unqualified. Refused at LOAD time rather than at render time:
-        ' a dashboard that validates and then fails on its twelfth dataset
-        ' would break the load-time red/green promise (design §1).
-        if count(ds_names) > gdash_store.attach_limit() + 1 then
-            errors = concat(errors, ["dashboard has " + string(count(ds_names)) + " datasets; SQLite attaches at most " + string(gdash_store.attach_limit()) + " beside the one being queried, so " + string(gdash_store.attach_limit() + 1) + " is the limit"])
-        end if
+        ' NO DATASET LIMIT. A dashboard's datasets are tables in one G-SQL
+        ' database (GDASH-20), so a visual query reaches every sibling with
+        ' no attach -- the 11-dataset cap that SQLite's attach limit imposed
+        ' went with the attach.
 
         i = 0
         while i < count(ds_names)
@@ -256,6 +253,8 @@ library gdash_record
             ' identifier (design §2).
             if not gdash_sql.legal_identifier(dn) then
                 errors = concat(errors, ["dataset name is not a legal SQL identifier: '" + dn + "'"])
+            else if gdash_store.reserved(dn) then
+                errors = concat(errors, ["dataset name '" + dn + "' is reserved: names starting '_gdash' or ending '__staging' are the store's own tables"])
             end if
             if not _has(ds, "sql") then
                 errors = concat(errors, ["dataset '" + dn + "' has no 'sql'"])
@@ -270,7 +269,7 @@ library gdash_record
                     j += 1
                 end while
                 if gdash_sql.placeholders(ds["sql"]) > 0 then
-                    errors = concat(errors, ["dataset '" + dn + "' writes a bare '?'; gdash produces placeholders itself from ':name' and supplies no argument for a hand-written one"])
+                    errors = concat(errors, ["dataset '" + dn + "' writes a positional placeholder ('?' or '$1'); gdash produces placeholders itself from ':name' and supplies no argument for a hand-written one"])
                 end if
             end if
             if not _has(ds, "profile") then
@@ -328,6 +327,20 @@ library gdash_record
                         if not is_unknown(cur) then
                             if not contains(gdash_format.supported_currencies(), cur) then
                                 errors = concat(errors, ["money column '" + dn + "." + cn[k] + "' names currency '" + string(cur) + "', which this build does not support"])
+                                cur = unknown
+                            end if
+                        else
+                            cur = "USD"
+                        end if
+                        ' The scale is the DISPLAY scale (plan D4a): the value is
+                        ' stored exactly, at the currency's own storage scale,
+                        ' and a person is shown `scale` places. Showing more
+                        ' places than the currency stores would print digits
+                        ' that are always zero, so it is refused by name.
+                        if not is_unknown(cur) and not is_unknown(sc) then
+                            most = gdash_format.storage_places(cur)
+                            if most >= 0 and sc > most then
+                                errors = concat(errors, ["money column '" + dn + "." + cn[k] + "' has scale " + string(sc) + ", but " + string(cur) + " stores only " + string(most) + " decimal places"])
                             end if
                         end if
                     end if
@@ -352,6 +365,8 @@ library gdash_record
         while i < count(pn)
             if is_reserved(pn[i]) then
                 errors = concat(errors, ["param '" + pn[i] + "' is reserved; the server supplies it from the authenticated identity"])
+            else
+                errors = concat(errors, _param_shape(pn[i], rec["params"][pn[i]]))
             end if
             i += 1
         end while
@@ -380,7 +395,7 @@ library gdash_record
                 errors = concat(errors, ["visual '" + vn + "' has no 'sql'"])
             else
                 if gdash_sql.placeholders(v["sql"]) > 0 then
-                    errors = concat(errors, ["visual '" + vn + "' writes a bare '?'; gdash produces placeholders itself from ':name' and supplies no argument for a hand-written one"])
+                    errors = concat(errors, ["visual '" + vn + "' writes a positional placeholder ('?' or '$1'); gdash produces placeholders itself from ':name' and supplies no argument for a hand-written one"])
                 end if
                 ' Every binding resolves, before any database is touched.
                 found = gdash_sql.bindings(v["sql"])
@@ -725,6 +740,113 @@ library gdash_record
         return out
     end function
 
+    ' --- typed params (GDASH-20, plan D3) -------------------------------------
+    '
+    ' A param value arrives from the page as text. G-SQL converts nothing it is
+    ' not asked to, so a param DECLARES what it is, and the value is converted
+    ' here, once, where the request arrives -- before any query runs. A value
+    ' that does not convert is refused by name, not coerced, as money is.
+    function param_types()
+        return ["string", "integer", "number", "date", "money"]
+    end function
+
+    ' "" for a param that declares no type. Such a param behaves exactly as it
+    ' did before types existed: its value is bound as it arrived.
+    function _param_type(decl)
+        if type(decl) != "record" then
+            return ""
+        end if
+        return string(default(decl["type"], ""))
+    end function
+
+    ' One value as the declared kind. { ok, value, message }.
+    function convert_param(decl, raw)
+        t = _param_type(decl)
+        if t = "" then
+            return { ok: true, value: raw, message: "" }
+        end if
+        if t = "string" then
+            return { ok: true, value: string(raw), message: "" }
+        end if
+        if is_unknown(raw) or is_nothing(raw) then
+            return { ok: false, value: unknown, message: "has no value" }
+        end if
+        text = trim(string(raw))
+        on error goto next
+        if t = "integer" then
+            probe = text
+            if starts_with(probe, "-") or starts_with(probe, "+") then
+                probe = mid(probe, 1, len(probe) - 1)
+            end if
+            ok = probe != ""
+            i = 0
+            while ok and i < len(probe)
+                ok = contains("0123456789", mid(probe, i, 1))
+                i += 1
+            end while
+            if not ok then
+                return { ok: false, value: unknown, message: "'" + text + "' is not a whole number" }
+            end if
+            v = number(text)
+        else if t = "number" then
+            v = number(text)
+            if not error and (is_unknown(v) or is_nothing(v)) then
+                return { ok: false, value: unknown, message: "'" + text + "' is not a number" }
+            end if
+        else if t = "date" then
+            v {date}= text
+        else if t = "money" then
+            v = money.of(string(default(decl["currency"], "USD")), text)
+        else
+            return { ok: false, value: unknown, message: "has type '" + t + "', which this build does not implement" }
+        end if
+        e = error
+        if e then
+            return { ok: false, value: unknown, message: "'" + text + "' is not a " + t + " (" + e.message + ")" }
+        end if
+        return { ok: true, value: v, message: "" }
+    end function
+
+    function _param_shape(nm, decl)
+        t = _param_type(decl)
+        if t = "" then
+            return []
+        end if
+        if not contains(param_types(), t) then
+            return ["param '" + nm + "' has type '" + t + "'; the types are " + join(param_types(), ", ")]
+        end if
+        if t = "money" and not is_unknown(decl["currency"]) then
+            if not contains(gdash_format.supported_currencies(), decl["currency"]) then
+                return ["param '" + nm + "' names currency '" + string(decl["currency"]) + "', which this build does not support"]
+            end if
+        end if
+        got = convert_param(decl, decl["default"])
+        if not got.ok then
+            return ["param '" + nm + "' has a default that is not its type: " + got.message]
+        end if
+        return []
+    end function
+
+    ' Supplied values that do not convert, each named. The caller refuses the
+    ' request when there are any, so `resolve_params` never has to choose
+    ' between a wrong value and a silent default.
+    function param_errors(rec, supplied)
+        out = []
+        params = rec["params"]
+        if is_unknown(params) or is_unknown(supplied) then
+            return out
+        end if
+        for each nm in keys(params)
+            if not is_reserved(nm) and not is_unknown(supplied[nm]) then
+                got = convert_param(params[nm], supplied[nm])
+                if not got.ok then
+                    out = append(out, "param '" + nm + "' " + got.message)
+                end if
+            end if
+        next
+        return out
+    end function
+
     function resolve_params(rec, supplied, identity)
         out = {}
         params = rec["params"]
@@ -733,11 +855,16 @@ library gdash_record
             i = 0
             while i < count(names)
                 nm = names[i]
-                out[nm] = params[nm]["default"]
+                decl = params[nm]
+                chosen = convert_param(decl, default(decl["default"], unknown))
+                out[nm] = chosen.value
                 if not is_unknown(supplied) and not is_reserved(nm) then
                     got = supplied[nm]
                     if not is_unknown(got) then
-                        out[nm] = got
+                        conv = convert_param(decl, got)
+                        if conv.ok then
+                            out[nm] = conv.value
+                        end if
                     end if
                 end if
                 i += 1

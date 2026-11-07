@@ -17,9 +17,10 @@
 ' generation rather than typing". `money.of(code, text)` takes the code as a
 ' value, so it now wants neither.
 '
-' The F1 text boundary is unchanged by that: minor units still cross from
-' SQLite as decimal TEXT and go straight into the currency modifier. No
-' number() appears anywhere on this path.
+' Since GDASH-20 a money column ARRIVES as money: G-SQL stores gBASIC values,
+' with their currency, so there is no minor-unit text to reassemble. A money
+' value is rendered at the column's display scale, rounded half-even
+' (gsql_migration_plan.md D4a), and nothing on the path is a double.
 
 library gdash_format
 
@@ -55,29 +56,6 @@ library gdash_format
             i += 1
         end while
         return true
-    end function
-
-    ' Minor units (exact text) -> decimal text at `scale`. String surgery, so
-    ' it stays exact past 2^53 -- dividing here would be a double hop.
-    function minor_to_decimal(minor_text, scale)
-        t = trim(string(minor_text))
-        neg = false
-        if starts_with(t, "-") then
-            neg = true
-            t = mid(t, 1, len(t) - 1)
-        end if
-        while len(t) <= scale
-            t = "0" + t
-        end while
-        if scale = 0 then
-            out = t
-        else
-            out = mid(t, 0, len(t) - scale) + "." + mid(t, len(t) - scale, scale)
-        end if
-        if neg then
-            out = "-" + out
-        end if
-        return out
     end function
 
     ' The int64 an exact money value is, spelled out. Used only to say what a
@@ -116,10 +94,10 @@ library gdash_format
             msg = error.message
             ' Range is the interesting failure, and it is a consequence of
             ' the guard digits: an int64 at storage scale exponent+4 tops out
-            ' far below an int64 at the minor unit. gdash's SQLite storage is
-            ' unaffected -- only rendering is bounded -- and a refusal is
-            ' better than a second formatting path with different rounding
-            ' semantics quietly taking over above a threshold.
+            ' far below an int64 at the minor unit. Since GDASH-20 the store
+            ' holds the same type, so a stored value cannot exceed it; this is
+            ' reached by a plain number, and a refusal is better than a second
+            ' formatting path with different rounding semantics.
             if contains(msg, "out of range") then
                 return { ok: false, value: 0, message: "value is beyond what " + string(currency) + " can represent (its exact range stops at " + range_ceiling(currency) + "); the data is intact, only rendering refuses" }
             end if
@@ -182,24 +160,55 @@ library gdash_format
         return currency + " "
     end function
 
-    ' Render minor units as currency. The money type does the arithmetic and
-    ' the minor-unit rounding; grouping is applied to the digits it returns.
-    function currency(minor_text, scale, code)
-        dec = minor_to_decimal(minor_text, scale)
-        built = to_money(dec, code)
-        if not built.ok then
-            return { ok: false, text: "", message: built.message }
+    ' A plain number or decimal text as exact decimal text, for `money.of`.
+    ' An integer is spelled exactly; a fraction is rounded to six places
+    ' first, because a double's shortest spelling can carry seventeen digits
+    ' and money text refuses more decimals than its currency stores.
+    function _decimal_text(value)
+        if type(value) = "string" then
+            return trim(value)
         end if
-        ' money.text at the currency's own minor-unit precision -- the exact
-        ' exit the platform added for this.
-        shown = money.text(built.value, minor_places(code))
+        if type(value) = "number" and value != floor(value) then
+            return string(round(value, 6))
+        end if
+        return string(value)
+    end function
+
+    ' Render a value as currency at `places` decimals, rounded half-even.
+    '
+    ' A MONEY VALUE CARRIES ITS OWN CURRENCY, and that is the one it renders
+    ' in. `code` is what the record states, or "" when it states nothing; a
+    ' stated currency that disagrees with the value is REFUSED, not relabelled
+    ' -- "¥430,000" drawn with a dollar sign is the plausible wrong answer the
+    ' whole money design exists to prevent. A plain number (`count(*)`, or a
+    ' source that sent no money) is an amount in `code`, USD when unstated.
+    function currency(value, places, code)
+        cur = string(default(code, ""))
+        if type(value) = "money" then
+            own = money.currency(value)
+            if cur != "" and cur != own then
+                return { ok: false, text: "", message: "the value is " + own + ", and the visual formats it as " + cur }
+            end if
+            cur = own
+            m = value
+        else
+            if cur = "" then
+                cur = "USD"
+            end if
+            built = to_money(_decimal_text(value), cur)
+            if not built.ok then
+                return { ok: false, text: "", message: built.message }
+            end if
+            m = built.value
+        end if
+        shown = money.text(m, places)
         neg = false
         if starts_with(shown, "-") then
             neg = true
             shown = mid(shown, 1, len(shown) - 1)
         end if
         bits = split(shown, ".")
-        body = _symbol(code) + _group(bits[0])
+        body = _symbol(cur) + _group(bits[0])
         if count(bits) = 2 then
             body = body + "." + bits[1]
         end if
@@ -225,6 +234,17 @@ library gdash_format
     ' `currency` rather than declared a second time (GDASH-10 §2.2).
     function symbol_for(code)
         return _symbol(code)
+    end function
+
+    ' Decimal places a currency STORES: its minor unit plus four guard digits
+    ' (USD 6, JPY 4). The most a money column can show; -1 for a code ISO
+    ' 4217 does not define.
+    function storage_places(code)
+        mp = minor_places(code)
+        if mp < 0 then
+            return -1
+        end if
+        return mp + 4
     end function
 
     function minor_places(code)
@@ -279,16 +299,29 @@ library gdash_format
         return contains(["currency", "number", "percent", "text"], name)
     end function
 
+    ' A value as a number for chart GEOMETRY. A bar's height is pixels, so a
+    ' double is right here -- and only here: every value a person reads goes
+    ' through `currency`. Money is read at its full storage scale, so the
+    ' bar is not drawn at a rounded height.
+    function chart_number(value)
+        if is_unknown(value) or is_nothing(value) then
+            return unknown
+        end if
+        if type(value) = "money" then
+            return number(money.text(value))
+        end if
+        return number(value)
+    end function
+
     ' Apply a format spec to one cell. `spec` is a record: { name, decimals,
     ' currency, scale }. Returns display text.
-    function apply(spec, raw, exact_text)
+    function apply(spec, raw)
         nm = default(spec["name"], "text")
         if nm = "currency" then
-            src = exact_text
-            if is_unknown(src) or is_nothing(src) then
-                src = string(raw)
+            if is_unknown(raw) or is_nothing(raw) then
+                return ""
             end if
-            got = currency(src, default(spec["scale"], 2), default(spec["currency"], "USD"))
+            got = currency(raw, default(spec["scale"], 2), default(spec["currency"], ""))
             if not got.ok then
                 return "!" + got.message
             end if

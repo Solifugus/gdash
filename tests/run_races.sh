@@ -14,6 +14,7 @@
 
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$HERE/gsql_owners.sh"
 cd "$HERE/.."
 GBASIC="${GDASH_GBASIC:-$HOME/development/gbasic/gbasic}"
 export GDASH_GBASIC="$GBASIC"
@@ -43,7 +44,7 @@ reap(){
         kill "$pid" 2>/dev/null
     done
 }
-cleanup(){ reap; rm -rf "$SCRATCH"; }
+cleanup(){ reap; wait_for_gsql_owners "$SCRATCH"; rm -rf "$SCRATCH"; }
 trap cleanup EXIT
 
 # A fixed port that is already occupied produces a failure with nothing to do

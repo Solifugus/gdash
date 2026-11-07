@@ -6,6 +6,7 @@
 
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$HERE/gsql_owners.sh"
 cd "$HERE/.."
 GBASIC="${GDASH_GBASIC:-$HOME/development/gbasic/gbasic}"
 export GDASH_GBASIC="$GBASIC"
@@ -99,17 +100,16 @@ echo "--- CLI: asking the data a question, and promoting the answer ---"
 mkdir -p "$SCRATCH/model" "$SCRATCH/model_money"
 cat > "$SCRATCH/model/anthropic_response.json" <<'JSON'
 {"id":"msg_fixture","type":"message","role":"assistant","model":"fixture",
- "content":[{"type":"text","text":"select region, sum(amount) as total from orders.orders group by region"}],
+ "content":[{"type":"text","text":"select region, sum(amount) as total from orders group by region"}],
  "stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}
 JSON
-# The second fixture is THE FAILURE THIS PHASE EXISTS FOR, as a model would
-# actually produce it: the question is about dollars, the column holds cents,
-# the SQL is valid and every name is grounded, and the number is wrong by a
-# hundred. Nothing can refuse it -- someone may mean ten dollars -- so the
-# whole of the defence is that the draft says what 1000 means.
+# The second fixture is THE FAILURE GDASH-12 EXISTED FOR, as a model would
+# actually produce it: a question about dollars, answered with `amount > 1000`.
+# Against minor units that meant ten dollars and gave 3; against money
+# (GDASH-20) it means USD 1000, and gives the true answer, 2.
 cat > "$SCRATCH/model_money/anthropic_response.json" <<'JSON'
 {"id":"msg_fixture","type":"message","role":"assistant","model":"fixture",
- "content":[{"type":"text","text":"select count(*) as n from orders.orders where amount > 1000"}],
+ "content":[{"type":"text","text":"select count(*) as n from orders where amount > 1000"}],
  "stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}
 JSON
 cat > "$ROOT/etc/models.json" <<JSON
@@ -127,15 +127,14 @@ has "$ask_out" "--promote" "and how to promote it, since that is the next thing 
 hasnt "$(cat "$ROOT/lib/dashboards/sales/draft.json")" "total_by_region" "asking writes nothing into the record"
 
 money_out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" --model cents ask sales "how many orders were over 1000 dollars?" 2>&1)"
-ok "the cents question exits 0, because the query is valid" "$?" "0"
-has "$money_out" "amount 1000 means" "the draft restates the literal in the column's own units"
-has "$money_out" "\$10.00" "which is ten dollars, not a thousand"
+ok "the dollars question exits 0" "$?" "0"
+has "$money_out" "n: 2" "and answers 2, the true count over USD 1000, where minor units gave 3"
+hasnt "$money_out" "check the numbers in that query" "with nothing to restate, because there is no unit to misread"
 
 promote_out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" ask sales "total by region" --promote total_by_region 2>&1)"; ok "promote exits 0" "$?" "0"
 rec_after="$(cat "$ROOT/lib/dashboards/sales/draft.json")"
-# REQUALIFIED: the NLQ catalog names the table orders.orders, a visual query
-# names it orders, and a promoted visual that kept the first spelling would not
-# resolve at all. The record is written by `encode`, which emits compact JSON.
+# The NLQ catalog and a visual query name the table the same way, `orders`
+# (GDASH-20). The record is written by `encode`, which emits compact JSON.
 has "$rec_after" '"sql":"select region, sum(amount) as total from orders group by region"' "the promoted query is requalified for the visual tier"
 has "$rec_after" '"format":"currency"' "an aggregate over a money column is promoted as currency"
 has "$rec_after" '"visual":"total_by_region"' "and it is placed on a tab, where it will be seen"
@@ -353,8 +352,8 @@ has "$out" "timed.regions: refreshed" "so does its hour-long sibling"
 hasnt "$out" "sales." "an unpublished dashboard is not scheduled at all"
 hasnt "$out" "opened.orders: refreshed" "an on_open dataset waits for someone to open it"
 has "$out" "down.orders:" "a failing dataset is reported"
-if [[ -f "$ROOT/cache/timed/published/orders.db" ]]; then echo "  ok   published data lands in the published directory"; pass=$((pass+1)); else echo "  FAIL published data lands in the published directory"; fail=$((fail+1)); fi
-if [[ -f "$ROOT/cache/timed/draft/orders.db" ]]; then echo "  FAIL a policy refresh must not write the draft directory"; fail=$((fail+1)); else echo "  ok   a policy refresh does not touch the draft directory"; pass=$((pass+1)); fi
+ok "published data lands in the published database" "$("$GBASIC" tests/staging_probe.bas "$ROOT/cache/timed/published/data.gsql" orders live)" "live"
+if [[ -e "$ROOT/cache/timed/draft/data.gsql" ]]; then echo "  FAIL a policy refresh must not write the draft database"; fail=$((fail+1)); else echo "  ok   a policy refresh does not touch the draft database"; pass=$((pass+1)); fi
 
 echo "--- the interval is honoured, and an unchanged refetch is quiet ---"
 v1="$(cat "$ROOT/cache/timed/published/version")"
@@ -381,9 +380,11 @@ has "$page5" "last refresh failed" "the failure is on the page, not only in a lo
 has "$page5" "configured to fail" "with what the source said"
 
 echo "--- crash residue is swept ---"
-printf 'not a database' > "$ROOT/cache/timed/published/orders__staging.db"
+# A child that died between writing its staging table and the parent's swap
+# leaves exactly this behind.
+ok "a crashed refresh's staging table is planted" "$("$GBASIC" tests/staging_probe.bas "$ROOT/cache/timed/published/data.gsql" orders plant)" "planted"
 "$GBASIC" src/gdash_cli.bas --root "$ROOT" schedule >/dev/null 2>&1
-if [[ -f "$ROOT/cache/timed/published/orders__staging.db" ]]; then echo "  FAIL crash residue is swept"; fail=$((fail+1)); else echo "  ok   crash residue is swept"; pass=$((pass+1)); fi
+ok "crash residue is swept" "$("$GBASIC" tests/staging_probe.bas "$ROOT/cache/timed/published/data.gsql" orders staging)" "none"
 # EXPIRED SESSIONS GO ON THE SAME PASS. gdash_session.sweep existed and was
 # tested from GDASH-4 and was called by nothing for three phases; /run clearing
 # on reboot bounds the mess without bounding it well, and a host that stays up
@@ -772,20 +773,23 @@ base = json.load(open('dashboards/sales/draft.json'))
 d = {"format": 1, "name": "charts", "title": "Every mark", "access": "open",
      "datasets": {"orders": base["datasets"]["orders"]},
      "params": {}, "controls": {}, "visuals": {}, "tabs": []}
-period = "cast(substr(month, 6, 2) as integer)"
+# A numeric period from a derived table: G-SQL has no substring function and
+# groups neither by an output alias nor by position (GDASH-20 ask A5).
+src = ("(select case when month = '2026-01' then 1 when month = '2026-02' then 2 else 3 end as period, "
+       "region, amount from orders) t")
 d["visuals"]["trend"] = {
     "dataset": "orders",
-    "sql": f"select {period} as period, sum(amount) as total from orders group by period order by period",
+    "sql": f"select period, sum(amount) as total from {src} group by period order by period",
     "encoding": {"mark": "line", "x": "period", "y": "total",
                  "title": "Trend", "x_label": "Month", "y_label": "Revenue"}}
 d["visuals"]["band"] = {
     "dataset": "orders",
-    "sql": f"select {period} as period, region as region, sum(amount) as total "
-           f"from orders group by period, region order by period, region",
+    "sql": f"select period, region, sum(amount) as total "
+           f"from {src} group by period, region order by period, region",
     "encoding": {"mark": "area", "x": "period", "y": "total", "series": "region", "stacked": True}}
 d["visuals"]["points"] = {
     "dataset": "orders",
-    "sql": f"select {period} as period, sum(amount) as total from orders group by period order by period",
+    "sql": f"select period, sum(amount) as total from {src} group by period order by period",
     "encoding": {"mark": "scatter", "x": "period", "y": "total", "grid": False}}
 d["visuals"]["share"] = {
     "dataset": "orders",
@@ -966,12 +970,11 @@ code="$(curl -s -o /dev/null -w '%{http_code}' -b "$jarA" --max-time 10 -X POST 
 ok "asking without a CSRF token is refused" "$code" "400"
 
 asked="$(curl -s -b "$jarA" --max-time 10 -X POST -d "csrf=$tokA4" --data-urlencode "question=total by region" "http://127.0.0.1:$PORT/d/team/ask")"
-has "$asked" "select region, sum(amount) as total from orders.orders group by region" "the draft shows the query the model wrote"
+has "$asked" "select region, sum(amount) as total from orders group by region" "the draft shows the query the model wrote"
 has "$asked" "data as of" "and when the data it read was refreshed"
 # THE RENDER IS THE POINT of doing this in a browser rather than a terminal.
 has "$asked" "<svg" "and draws the visual it would promote"
-# In dollars. An aggregate of minor units is still minor units, and a chart
-# whose axis reads 325100 for \$3,251.00 is the step-0 failure in a picture.
+# In dollars: an aggregate of money is money, drawn at its value.
 has "$asked" "\$3,000.00" "with a money axis in dollars, not in cents"
 has "$asked" 'action="/d/team/ask/promote"' "and offers to promote it"
 
@@ -1023,7 +1026,7 @@ for pid in $(pgrep -f "gdash_server.bas\|gdash_scheduler.bas" 2>/dev/null); do
     [[ "$(cat /proc/$pid/comm 2>/dev/null)" == "gbasic" ]] && left=$((left + 1))
 done
 ok "no server or scheduler outlives the run" "$left" "0"
-rm -rf "$SCRATCH"
+wait_for_gsql_owners "$SCRATCH"; rm -rf "$SCRATCH"
 [[ -e "$SCRATCH" ]] && { echo "SCRATCH NOT CLEAN"; exit 1; }
 echo "scratch clean: $SCRATCH removed"
 echo "e2e: $pass passed, $fail failed"

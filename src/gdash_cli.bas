@@ -34,6 +34,7 @@ program main(args)
     load gdash_paths from "gdash_paths.bas"
     load gdash_record from "gdash_record.bas"
     load gdash_refresh from "gdash_refresh.bas"
+    load gdash_store from "gdash_store.bas"
     load gdash_publish from "gdash_publish.bas"
     load gdash_diff from "gdash_diff.bas"
     load gdash_users from "gdash_users.bas"
@@ -533,10 +534,11 @@ program main(args)
         loaded_pub = gdash_record.load_file(pubmode.record_file)
         if loaded_pub.ok then
             dsn = keys(loaded_pub.record["datasets"])
+            pubdb = gdash_paths.stage_db(p, name, "published")
             empty = 0
             m = 0
             while m < count(dsn)
-                if not gdash_paths.path_exists(gdash_paths.dataset_db(p, name, "published", dsn[m])) then
+                if not gdash_store.has_dataset(pubdb, dsn[m]) then
                     empty += 1
                 end if
                 m += 1
@@ -784,14 +786,15 @@ program main(args)
             print("  " + draft.as_of[j].dataset + ": data as of " + draft.as_of[j].text)
             j += 1
         end while
-        ' THE UNIT NOTES ARE THE POINT. A number in a money column is a number
-        ' of cents, and a question about dollars that produced a plausible
-        ' answer is the failure this whole feature was built around.
+        ' Whether the model was told which currency each money column holds.
+        ' Money is stored as money (GDASH-20), so there is no unit to misread,
+        ' but a model not told the currency can still write a number in the
+        ' wrong one.
         if not draft.units_told then
             print("")
             print("  NOTE: the installed nlq library is too old to be told what the money")
-            print("        columns mean, so the model wrote this query without knowing the")
-            print("        integers are minor units. Check the numbers below with care.")
+            print("        columns hold, so the model wrote this query without knowing their")
+            print("        currencies. Check the numbers below with care.")
         end if
         if count(draft.notes) > 0 then
             print("")

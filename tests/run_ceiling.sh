@@ -33,6 +33,7 @@
 
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$HERE/gsql_owners.sh"
 cd "$HERE/.."
 GBASIC="${GDASH_GBASIC:-$HOME/development/gbasic/gbasic}"
 export GDASH_GBASIC="$GBASIC"
@@ -179,7 +180,7 @@ for i in $(seq 1 40); do
 done
 ok "no server outlives the run" "$left" "0"
 
-rm -rf "$SCRATCH"
+wait_for_gsql_owners "$SCRATCH"; rm -rf "$SCRATCH"
 if [[ -e "$SCRATCH" ]]; then
     echo "SCRATCH NOT CLEAN: $SCRATCH survived removal" >&2
     fail=$((fail+1))

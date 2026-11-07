@@ -10,6 +10,7 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$HERE/gsql_owners.sh"
 GBASIC="${GDASH_GBASIC:-$HOME/development/gbasic/gbasic}"
 
 if [[ ! -x "$GBASIC" ]]; then
@@ -251,7 +252,11 @@ else
 fi
 
 # Scratch-clean assertion: the suite owns exactly one temp tree and leaves
-# nothing outside it. Removing it must succeed and leave no residue.
+# nothing outside it. Removing it must succeed and leave no residue -- after
+# every G-SQL owner serving it has finished (tests/gsql_owners.sh).
+if ! wait_for_gsql_owners "$SCRATCH"; then
+    exit 1
+fi
 rm -rf "$SCRATCH"
 if [[ -e "$SCRATCH" ]]; then
     echo "SCRATCH NOT CLEAN: $SCRATCH survived removal" >&2

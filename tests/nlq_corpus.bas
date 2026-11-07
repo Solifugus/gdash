@@ -42,18 +42,14 @@ program main(args)
     end if
     rec = loaded.record
 
-    attach = gdash_nlq.attach_for(p, dash, "draft", rec)
-    if count(keys(attach)) = 0 then
+    db = gdash_paths.stage_db(p, dash, "draft")
+    desc = gdash_store.describe_datasets(db)
+    if not desc.ok or count(keys(desc.datasets)) = 0 then
         print to error "no dataset of " + dash + " has been refreshed; there is nothing to ground against"
         exit(2)
     end if
-    desc = gdash_store.describe_datasets(attach)
-    if not desc.ok then
-        print to error desc.message
-        exit(2)
-    end if
     cat = gdash_nlq.catalog(desc)
-    rows = gdash_ask.value_rows(attach, desc, 25)
+    rows = gdash_ask.value_rows(db, desc, 25)
     vocab = nlq.vocabulary(rows, { max_values: 25 })
     ex = nlq.exemplars(rows, { min_distinct: 2 })
 

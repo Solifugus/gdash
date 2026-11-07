@@ -1,21 +1,93 @@
 ' gdash — the staging store.
 '
 ' ALL staging-store access goes through this module (design §3): create,
-' insert, swap, select. A future backend swap is this module's rewrite, which
-' is discipline rather than a pluggable abstraction layer.
+' insert, swap, select. The backend swap the design anticipated happened
+' here, in GDASH-20: SQLite files became G-SQL tables, and no caller learned
+' the word `gsql`.
 '
-' The money boundary lives here and nowhere else. gBASIC numbers are IEEE-754
-' doubles, so an integer above 2^53 is silently truncated crossing the SQLite
-' binding in either direction (finding F1). Minor units therefore travel as
-' decimal TEXT: a numeric string bound into an INTEGER column stores an exact
-' int64, and `cast(col as text)` brings it back exactly. Never divide minor
-' units in gBASIC -- that division is itself a 2^53 hop.
+' ONE DATABASE PER (DASHBOARD, STAGE), every dataset a table in it
+' (gsql_migration_plan.md D1). A dashboard's SQL can therefore name its own
+' datasets and nothing else -- the wall between dashboards is the directory,
+' not a check in the code -- and a visual query reaches every sibling with no
+' attach and no cap.
+'
+' VALUES ARE gBASIC VALUES. G-SQL stores money as money, with its currency,
+' and integers exactly past 2^53, so nothing here converts a number to text
+' to protect it. The one conversion left is the column's own: a source's text
+' stored into a typed column is read as that column's kind, and refused if it
+' does not read as one (a seventh decimal of USD, an empty string for money).
+'
+' Stale-but-coherent is a transaction now, not a rename: a refresh writes
+' `<dataset>__staging` and `swap` drops the live table and renames the staging
+' one in a single commit. A reader inside `begin("read")` keeps the snapshot it
+' started with until it finishes (GDASH-20 step 0, measured).
 
 library gdash_store
 
-    load sqlite
+    load gsql
     load crypto
     load gdash_sql from "gdash_sql.bas"
+    load gdash_paths from "gdash_paths.bas"
+
+    ' How long an owner this process starts stays up after its last client.
+    ' Workers open a connection per request, so a warm owner is the difference
+    ' between 0.14 ms and 20-30 ms a request (GDASH-20 step 0). The suite sets
+    ' 0 so that nothing it starts outlives it.
+    function linger()
+        got = env("GDASH_GSQL_LINGER")
+        if is_unknown(got) or trim(string(got)) = "" then
+            return 30
+        end if
+        n = number(got)
+        if is_unknown(n) or is_nothing(n) then
+            return 30
+        end if
+        return n
+    end function
+
+    ' THE ONE CONNECT. Every process that reaches a dashboard's data -- a
+    ' worker, the refresh child, the refresh parent, the CLI -- comes through
+    ' here, so where the owner's socket lives is one function's business
+    ' (GDASH-20 S0-6, asked of the platform as A1).
+    '
+    ' Without `create`, a database that does not exist is not created: a read
+    ' of data that has never refreshed is "no data", not an empty database.
+    function connect(path, create)
+        if not create and not gdash_paths.path_exists(path) then
+            return unknown
+        end if
+        on error goto next
+        db = gsql.connect(path, { create: create, linger: linger() })
+        if error then
+            return unknown
+        end if
+        return db
+    end function
+
+    function _close(db)
+        on error goto next
+        gsql.close(db)
+        if error then
+        end if
+    end function
+
+    function _rollback(db)
+        on error goto next
+        gsql.rollback(db)
+        if error then
+        end if
+    end function
+
+    function staging_name(table)
+        return table + "__staging"
+    end function
+
+    ' Names the store uses for itself, refused as dataset names by the record
+    ' validator: a dataset called `_gdash_meta` would be its own metadata, and
+    ' one called `orders__staging` would be another dataset's refresh.
+    function reserved(name)
+        return starts_with(lower(name), "_gdash") or ends_with(lower(name), "__staging")
+    end function
 
     function _digits_only(s)
         if s = "" then
@@ -31,91 +103,25 @@ library gdash_store
         return true
     end function
 
-    function _strip_leading_zeros(s)
-        i = 0
-        while i < len(s) - 1 and mid(s, i, 1) = "0"
-            i += 1
-        end while
-        return mid(s, i, len(s) - i)
+    ' The kind a column is stored as. gdash's own vocabulary (money, integer,
+    ' real, text) is what `_gdash_meta` records and what ask reads; this is the
+    ' G-SQL kind each one becomes -- gBASIC kinds, not SQL types that resemble
+    ' them (plan D5).
+    function _sql_type(entry)
+        if entry.kind = "money" then
+            return "money(" + entry.currency + ")"
+        end if
+        if entry.kind = "integer" then
+            return "integer"
+        end if
+        if entry.kind = "real" then
+            return "number"
+        end if
+        return "string"
     end function
 
-    ' Decimal text -> integer minor units, as TEXT. Excess decimals are
-    ' REJECTED, not rounded (design §4): rounding money silently is the
-    ' failure this whole mechanism exists to prevent.
-    function to_minor(value, scale)
-        t = trim(string(value))
-        if t = "" then
-            return { ok: false, minor: "", message: "empty money value" }
-        end if
-        neg = false
-        if starts_with(t, "-") then
-            neg = true
-            t = mid(t, 1, len(t) - 1)
-        else if starts_with(t, "+") then
-            t = mid(t, 1, len(t) - 1)
-        end if
-
-        parts = split(t, ".")
-        if count(parts) > 2 then
-            return { ok: false, minor: "", message: "not a decimal number: '" + string(value) + "'" }
-        end if
-        whole = parts[0]
-        frac = ""
-        if count(parts) = 2 then
-            frac = parts[1]
-        end if
-        if whole = "" then
-            whole = "0"
-        end if
-        if not _digits_only(whole) then
-            return { ok: false, minor: "", message: "not a decimal number: '" + string(value) + "'" }
-        end if
-        if frac != "" and not _digits_only(frac) then
-            return { ok: false, minor: "", message: "not a decimal number: '" + string(value) + "'" }
-        end if
-        ' TRAILING ZEROS ARE NOT EXCESS PRECISION. `1250.7500` at scale 2 is
-        ' exactly 1250.75 and loses nothing by being stored as 125075; refusing
-        ' it would refuse the most ordinary money column there is, a
-        ' numeric(19,4) reported in cents.
-        '
-        ' Found by comparing two origins (finding G9-6): Postgres renders that
-        ' value as "1250.7500" and an ODBC driver renders it as "1250.75", so
-        ' the same source data was accepted through one and refused through the
-        ' other. The check counted CHARACTERS after the point; what design §4
-        ' means by "excess decimals are rejected, not rounded" is significant
-        ' ones. 1250.7512 at scale 2 is still refused, which is the property
-        ' that matters.
-        while len(frac) > scale and ends_with(frac, "0")
-            frac = mid(frac, 0, len(frac) - 1)
-        end while
-        if len(frac) > scale then
-            return { ok: false, minor: "", message: "value '" + string(value) + "' has " + string(len(frac)) + " decimal places; column scale is " + string(scale) + " (rejected, not rounded)" }
-        end if
-        while len(frac) < scale
-            frac = frac + "0"
-        end while
-        minor = _strip_leading_zeros(whole + frac)
-        if neg and minor != "0" then
-            minor = "-" + minor
-        end if
-        return { ok: true, minor: minor, message: "" }
-    end function
-
-    function _sql_type(declared)
-        if declared = "money" then
-            return "INTEGER"
-        end if
-        if declared = "integer" then
-            return "INTEGER"
-        end if
-        if declared = "real" then
-            return "REAL"
-        end if
-        return "TEXT"
-    end function
-
-    ' Undeclared columns map: integer-looking -> INTEGER, numeric -> REAL,
-    ' else TEXT (design §4).
+    ' Undeclared columns map: integer-looking -> integer, numeric -> real,
+    ' else text (design §4).
     function infer_kind(samples)
         seen = false
         all_int = true
@@ -123,7 +129,7 @@ library gdash_store
         i = 0
         while i < count(samples)
             v = trim(string(samples[i]))
-            if v != "" then
+            if not is_unknown(samples[i]) and v != "" then
                 seen = true
                 probe = v
                 if starts_with(probe, "-") or starts_with(probe, "+") then
@@ -160,7 +166,8 @@ library gdash_store
     end function
 
     ' Build the column plan for a dataset: declared money columns keep their
-    ' scale; everything else is inferred from the fetched rows.
+    ' currency and their DISPLAY scale (plan D4a: stored exactly, rounded only
+    ' for a person); everything else is inferred from the fetched rows.
     function plan_columns(column_names, rows, declared)
         plan = []
         c = 0
@@ -170,16 +177,16 @@ library gdash_store
             if not is_unknown(declared) then
                 d = declared[nm]
             end if
-            if not is_unknown(d) and d["type"] = "money" then
-                plan = concat(plan, [{ name: nm, kind: "money", scale: d["scale"] }])
+            if not is_unknown(d) and default(d["type"], "") = "money" then
+                plan = append(plan, { name: nm, kind: "money", scale: default(d["scale"], 2), currency: string(default(d["currency"], "USD")) })
             else
                 samples = []
                 r = 0
                 while r < count(rows)
-                    samples = concat(samples, [rows[r][c]])
+                    samples = append(samples, rows[r][c])
                     r += 1
                 end while
-                plan = concat(plan, [{ name: nm, kind: infer_kind(samples), scale: 0 }])
+                plan = append(plan, { name: nm, kind: infer_kind(samples), scale: 0, currency: "" })
             end if
             c += 1
         end while
@@ -190,218 +197,446 @@ library gdash_store
         return chr(34) + replace(nm, chr(34), chr(34) + chr(34)) + chr(34)
     end function
 
-    ' Materialize fetched rows into a staging file. Per-column scale lives in
-    ' _gdash_meta inside the dataset file (design §4), so a reader needs
-    ' nothing but the file to interpret its money columns.
-    function materialize(path, table, plan, rows)
-        on error goto next
-        db = sqlite.connect(path)
-        if error then
-            return { ok: false, message: "cannot open staging file: " + path, rejected: 0 }
+    function _ensure_meta(db)
+        gsql.exec(db, "create table if not exists _gdash_meta (dataset string, column_name string, kind string, currency string, scale integer, position integer)")
+    end function
+
+    ' TRAILING ZEROS ARE NOT EXCESS PRECISION (finding G9-6, again). A source
+    ' renders numeric(19,8) as `1100.00000000`, and gBASIC's money text reader
+    ' counts the CHARACTERS after the point, so it refuses an exact whole amount
+    ' as "more decimal places than the currency can store" -- every refresh of
+    ' such a column would fail. `to_minor` knew this rule and was deleted with
+    ' the minor units (GDASH-20), so it is restored here, as the one thing the
+    ' store still does to a money value, until the platform reads significant
+    ' digits (gdash20_platform_ask_gsql.md A6). `1250.7512345` is still refused:
+    ' only zeros are dropped.
+    function _money_text(raw)
+        if type(raw) != "string" then
+            return raw
         end if
+        t = raw
+        ' `find` answers `nothing` when there is no match, not -1.
+        dot = find(t, ".")
+        if is_nothing(dot) or is_unknown(dot) then
+            return t
+        end if
+        while ends_with(t, "0") and len(t) - 1 > dot
+            t = mid(t, 0, len(t) - 1)
+        end while
+        if ends_with(t, ".") then
+            t = mid(t, 0, len(t) - 1)
+        end if
+        return t
+    end function
+
+    ' A cell as the column takes it. Money, integer and real cells go in as the
+    ' source gave them and the column reads them; a text cell goes in as text,
+    ' because a string column refuses a number rather than spelling it.
+    function _cell(entry, raw)
+        if is_unknown(raw) or is_nothing(raw) then
+            return unknown
+        end if
+        if entry.kind = "text" then
+            return string(raw)
+        end if
+        if entry.kind = "money" then
+            return _money_text(raw)
+        end if
+        return raw
+    end function
+
+    ' Rows per INSERT statement. Ten halves a 10^5-row load against one
+    ' (GDASH-20 S0-7); the platform's bulk verb (ask A3) replaces this.
+    function _rows_per_statement()
+        return 10
+    end function
+
+    function _rows_per_commit()
+        return 1000
+    end function
+
+    function _insert_sql(table, width, n)
+        groups = []
+        r = 0
+        while r < n
+            marks = []
+            c = 0
+            while c < width
+                marks = append(marks, "$" + string(r * width + c + 1))
+                c += 1
+            end while
+            groups = append(groups, "(" + join(marks, ", ") + ")")
+            r += 1
+        end while
+        return "insert into " + _quote_ident(table) + " values " + join(groups, ", ")
+    end function
+
+    ' The refused row, found again one row at a time. A batched statement
+    ' refuses as a whole, and "somewhere in rows 40-49" is not something a
+    ' person can act on.
+    function _locate(db, table, plan, rows, first, last)
+        r = first
+        stmt = _insert_sql(table, count(plan), 1)
+        while r <= last
+            vals = []
+            c = 0
+            while c < count(plan)
+                vals = append(vals, _cell(plan[c], rows[r][c]))
+                c += 1
+            end while
+            on error goto next
+            gsql.begin(db)
+            gsql.exec(db, stmt, vals)
+            e = error
+            _rollback(db)
+            on error stop
+            if e then
+                col = ""
+                if has(e.details, "column") then
+                    col = ", column '" + string(e.details.column) + "'"
+                end if
+                return "row " + string(r) + col + ": " + e.message
+            end if
+            r += 1
+        end while
+        return "rows " + string(first) + "-" + string(last) + " were refused"
+    end function
+
+    ' Materialize fetched rows into `<table>__staging`. Per-column kind,
+    ' currency and display scale go into `_gdash_meta` under the staging name,
+    ' and `swap` renames them with the table, in the same commit.
+    function materialize(db_path, table, plan, rows)
+        db = connect(db_path, true)
+        if is_unknown(db) then
+            return { ok: false, message: "cannot open the staging database: " + db_path, rejected: 0 }
+        end if
+        staging = staging_name(table)
 
         defs = []
         i = 0
         while i < count(plan)
-            defs = concat(defs, [_quote_ident(plan[i].name) + " " + _sql_type(plan[i].kind)])
+            defs = append(defs, _quote_ident(plan[i].name) + " " + _sql_type(plan[i]))
             i += 1
         end while
 
-        sqlite.exec(db, "drop table if exists " + _quote_ident(table))
-        sqlite.exec(db, "create table " + _quote_ident(table) + " (" + join(defs, ", ") + ")")
-        sqlite.exec(db, "drop table if exists _gdash_meta")
-        sqlite.exec(db, "create table _gdash_meta (column_name text, kind text, scale integer)")
-        if error then
-            sqlite.close(db)
-            return { ok: false, message: "cannot create dataset table", rejected: 0 }
+        on error goto next
+        _ensure_meta(db)
+        gsql.exec(db, "drop table if exists " + _quote_ident(staging))
+        gsql.exec(db, "delete from _gdash_meta where dataset = $1", [staging])
+        gsql.exec(db, "create table " + _quote_ident(staging) + " (" + join(defs, ", ") + ")")
+        e = error
+        if e then
+            _close(db)
+            return { ok: false, message: "cannot create the staging table: " + e.message, rejected: 0 }
         end if
 
         i = 0
         while i < count(plan)
-            sqlite.exec(db, "insert into _gdash_meta values (?, ?, ?)", [plan[i].name, plan[i].kind, plan[i].scale])
+            gsql.exec(db, "insert into _gdash_meta values ($1, $2, $3, $4, $5, $6)", [staging, plan[i].name, plan[i].kind, plan[i].currency, plan[i].scale, i])
             i += 1
         end while
+        e = error
+        if e then
+            _close(db)
+            return { ok: false, message: "cannot record the staging table's columns: " + e.message, rejected: 0 }
+        end if
 
-        marks = []
-        i = 0
-        while i < count(plan)
-            marks = concat(marks, ["?"])
-            i += 1
-        end while
-        stmt = "insert into " + _quote_ident(table) + " values (" + join(marks, ", ") + ")"
-
-        sqlite.begin(db)
+        width = count(plan)
+        per = _rows_per_statement()
+        full = _insert_sql(staging, width, per)
         r = 0
-        while r < count(rows)
-            vals = []
-            c = 0
-            while c < count(plan)
-                raw = rows[r][c]
-                if plan[c].kind = "money" then
-                    conv = to_minor(raw, plan[c].scale)
-                    if not conv.ok then
-                        sqlite.rollback(db)
-                        sqlite.close(db)
-                        ' A refusal, not a rounding. The whole refresh fails
-                        ' and the previous dataset file stays untouched.
-                        return { ok: false, message: "row " + string(r) + ", column '" + plan[c].name + "': " + conv.message, rejected: 1 }
-                    end if
-                    ' The minor-unit STRING binds into an INTEGER column as an
-                    ' exact int64; binding a number would round past 2^53.
-                    vals = concat(vals, [conv.minor])
-                else
-                    vals = concat(vals, [raw])
-                end if
-                c += 1
-            end while
-            sqlite.exec(db, stmt, vals)
-            if error then
-                sqlite.rollback(db)
-                sqlite.close(db)
-                return { ok: false, message: "insert failed at row " + string(r), rejected: 0 }
+        n = count(rows)
+        since = 0
+        gsql.begin(db)
+        while r < n
+            take = per
+            stmt = full
+            if n - r < per then
+                take = n - r
+                stmt = _insert_sql(staging, width, take)
             end if
-            r += 1
+            vals = []
+            k = 0
+            while k < take
+                c = 0
+                while c < width
+                    vals = append(vals, _cell(plan[c], rows[r + k][c]))
+                    c += 1
+                end while
+                k += 1
+            end while
+            gsql.exec(db, stmt, vals)
+            e = error
+            if e then
+                _rollback(db)
+                ' A refusal, not a rounding: the whole refresh fails, and the
+                ' live table is untouched.
+                where = _locate(db, staging, plan, rows, r, r + take - 1)
+                gsql.exec(db, "drop table if exists " + _quote_ident(staging))
+                gsql.exec(db, "delete from _gdash_meta where dataset = $1", [staging])
+                if error then
+                end if
+                _close(db)
+                return { ok: false, message: where, rejected: 1 }
+            end if
+            r += take
+            since += take
+            if since >= _rows_per_commit() then
+                gsql.commit(db)
+                gsql.begin(db)
+                since = 0
+            end if
         end while
-        sqlite.commit(db)
-        sqlite.close(db)
-        if error then
-            return { ok: false, message: "commit failed", rejected: 0 }
+        gsql.commit(db)
+        e = error
+        _close(db)
+        if e then
+            return { ok: false, message: "commit failed: " + e.message, rejected: 0 }
         end if
         return { ok: true, message: "", rejected: 0 }
     end function
 
-    ' Every dataset file carries its own _gdash_meta, and an UNQUALIFIED read
-    ' of it across attached schemas resolves silently to `main` (finding
-    ' G2-3) -- which would render one dataset's money column at another
-    ' dataset's scale, with no error anywhere. So every metadata read is
-    ' schema-qualified, and it is qualified here, inside the module, where no
-    ' caller can forget to.
-    ' CONFLICT IS RECORDED, NOT OVERWRITTEN. This map is keyed by COLUMN NAME
-    ' across the primary dataset and every attached sibling, because a result
-    ' column is all a renderer has: SQLite reports no provenance for one, and
-    ' `sqlite.columns(db, sql)` -- the platform ask that would give it -- has
-    ' not landed.
-    '
-    ' So two datasets can each define `amount` at different scales. This used
-    ' to be last-write-wins, with `main` written last, which is a silent
-    ' choice on a path where being wrong is indistinguishable from being right.
-    ' A name that means two things now maps to -2, and the renderer refuses
-    ' rather than picking one (G13-2).
-    function _meta_from(db, schema, into)
-        out = into
+    ' Does `table` exist in this database? Asked of the table itself rather
+    ' than of `_gdash_meta`, because the question is whether a query naming it
+    ' will find it.
+    function _has_table(db, table)
         on error goto next
-        rows = sqlite.query(db, "select column_name, scale from " + _quote_ident(schema) + "._gdash_meta where kind = 'money'")
-        if error then
-            return out
-        end if
-        i = 0
-        while i < count(rows)
-            nm = rows[i].column_name
-            sc = rows[i].scale
-            if is_unknown(out[nm]) then
-                out[nm] = sc
-            else if out[nm] != sc then
-                out[nm] = -2
-            end if
-            i += 1
-        end while
-        return out
-    end function
-
-    ' Scales for every money column reachable from this visual: the primary
-    ' dataset's own, plus each attached sibling's. The primary is read LAST so
-    ' it wins a name collision -- it is the dataset the visual named.
-    function money_columns(path, attach)
-        on error goto next
-        db = sqlite.connect(path)
-        if error then
-            return {}
-        end if
-        out = {}
-        names = keys(attach)
-        i = 0
-        while i < count(names)
-            if _attach_one(db, names[i], attach[names[i]]) then
-                out = _meta_from(db, names[i], out)
-            end if
-            i += 1
-        end while
-        out = _meta_from(db, "main", out)
-        sqlite.close(db)
-        return out
-    end function
-
-    function table_columns(path, table)
-        on error goto next
-        db = sqlite.connect(path)
-        if error then
-            return []
-        end if
-        rows = sqlite.query(db, "pragma table_info(" + _quote_ident(table) + ")")
-        sqlite.close(db)
-        if error then
-            return []
-        end if
-        out = []
-        i = 0
-        while i < count(rows)
-            out = concat(out, [rows[i].name])
-            i += 1
-        end while
-        return out
-    end function
-
-    ' SQLite allows ten attached databases besides `main` (finding G2-4); the
-    ' record validator refuses a dashboard with more datasets than that, so
-    ' reaching the limit here means the validator was bypassed.
-    function attach_limit()
-        return 10
-    end function
-
-    ' EVERY ATTACH IN GDASH IS READ-ONLY, and nothing is lost by it: a dataset
-    ' file is written by `materialize` through its own direct connection, and
-    ' made visible by a single rename. No query gdash runs -- a visual query, a
-    ' describe, a sample, or SQL a model wrote -- has any business writing
-    ' through an attachment.
-    '
-    ' It matters most for the last of those. `nlq.check_sql` refuses anything
-    ' that is not read-only and is the gate that should stop a generated
-    ' `delete`; this is what makes a gap in that gate harmless rather than
-    ' destructive. Measured: with the SQL check bypassed, a generated
-    ' `delete from orders.orders` is refused by SQLite itself.
-    '
-    ' `mode=ro` travels in a URI, so the three characters SQLite reads
-    ' specially inside one are percent-encoded. A path is otherwise passed
-    ' through unchanged, and there is NO FALLBACK to a writable attach: a file
-    ' gdash cannot open read-only is a file gdash reports, not one it opens
-    ' another way.
-    function _ro_uri(file)
-        out = "file:"
-        i = 0
-        n = len(file)
-        while i < n
-            ch = mid(file, i, 1)
-            if ch = "%" then
-                out = out + "%25"
-            else if ch = "#" then
-                out = out + "%23"
-            else if ch = "?" then
-                out = out + "%3f"
-            else
-                out = out + ch
-            end if
-            i += 1
-        end while
-        return out + "?mode=ro"
-    end function
-
-    function _attach_one(db, alias, file)
-        on error goto next
-        sqlite.exec(db, "attach database ? as " + _quote_ident(alias), [_ro_uri(file)])
-        if error then
+        gsql.begin(db, "read")
+        x = gsql.query(db, "select 1 as one from " + _quote_ident(table) + " limit 1")
+        e = error
+        _rollback(db)
+        if e then
             return false
         end if
         return true
+    end function
+
+    function has_dataset(db_path, table)
+        db = connect(db_path, false)
+        if is_unknown(db) then
+            return false
+        end if
+        got = _has_table(db, table)
+        _close(db)
+        return got
+    end function
+
+    function has_staging(db_path, table)
+        return has_dataset(db_path, staging_name(table))
+    end function
+
+    ' The swap: one transaction. The live table is dropped and the staging
+    ' table renamed over it, with its metadata, in a single commit; a reader
+    ' inside `begin("read")` keeps reading the old table until it finishes,
+    ' and the version file bumps AFTER, so a notified reader always finds
+    ' complete data (design §3).
+    function swap(db_path, table)
+        db = connect(db_path, false)
+        if is_unknown(db) then
+            return { ok: false, message: "the staging database is not there: " + db_path }
+        end if
+        staging = staging_name(table)
+        on error goto next
+        gsql.begin(db)
+        gsql.exec(db, "drop table if exists " + _quote_ident(table))
+        gsql.exec(db, "alter table " + _quote_ident(staging) + " rename to " + _quote_ident(table))
+        gsql.exec(db, "delete from _gdash_meta where dataset = $1", [table])
+        gsql.exec(db, "update _gdash_meta set dataset = $1 where dataset = $2", [table, staging])
+        e = error
+        if e then
+            _rollback(db)
+            _close(db)
+            return { ok: false, message: e.message }
+        end if
+        gsql.commit(db)
+        e = error
+        _close(db)
+        if e then
+            return { ok: false, message: e.message }
+        end if
+        return { ok: true, message: "" }
+    end function
+
+    ' A failed or unchanged refresh's staging table, and any a crashed child
+    ' left behind. True when there is none afterwards.
+    function discard_staging(db_path, table)
+        db = connect(db_path, false)
+        if is_unknown(db) then
+            return true
+        end if
+        staging = staging_name(table)
+        on error goto next
+        gsql.exec(db, "drop table if exists " + _quote_ident(staging))
+        gsql.exec(db, "delete from _gdash_meta where dataset = $1", [staging])
+        e = error
+        _close(db)
+        if e then
+            return false
+        end if
+        return true
+    end function
+
+    function _meta_rows(db)
+        on error goto next
+        gsql.begin(db, "read")
+        rows = gsql.query(db, "select dataset, column_name, kind, currency, scale, position from _gdash_meta order by dataset, position")
+        e = error
+        _rollback(db)
+        if e then
+            return []
+        end if
+        out = []
+        for each r in rows
+            if not ends_with(string(r.dataset), "__staging") then
+                out = append(out, r)
+            end if
+        next
+        return out
+    end function
+
+    ' Display scales for every money column of this dashboard, keyed by column
+    ' name, because a result column is all a renderer has.
+    '
+    ' CONFLICT IS RECORDED, NOT OVERWRITTEN. Two datasets can each define
+    ' `amount` at different scales; a name that means two things maps to -2,
+    ' and the renderer refuses rather than picking one (G13-2). With exact
+    ' money that refusal protects the number of places shown, not the amount,
+    ' and it is kept until a ruling says otherwise.
+    function money_columns(db_path)
+        db = connect(db_path, false)
+        if is_unknown(db) then
+            return {}
+        end if
+        rows = _meta_rows(db)
+        _close(db)
+        out = {}
+        for each r in rows
+            if string(r.kind) = "money" then
+                nm = string(r.column_name)
+                sc = r.scale
+                if is_unknown(out[nm]) then
+                    out[nm] = sc
+                else if out[nm] != sc then
+                    out[nm] = -2
+                end if
+            end if
+        next
+        return out
+    end function
+
+    function table_columns(db_path, table)
+        db = connect(db_path, false)
+        if is_unknown(db) then
+            return []
+        end if
+        rows = _meta_rows(db)
+        _close(db)
+        out = []
+        for each r in rows
+            if string(r.dataset) = table then
+                out = append(out, string(r.column_name))
+            end if
+        next
+        return out
+    end function
+
+    ' Every column of every refreshed dataset, with the kind and display scale
+    ' it was materialized at. This is gdash's own account of its data -- not a
+    ' discovery pass over it -- because gdash wrote these tables and recorded
+    ' what it wrote.
+    function describe_datasets(db_path)
+        db = connect(db_path, false)
+        if is_unknown(db) then
+            return { ok: false, datasets: {}, message: "cannot open the staged data" }
+        end if
+        rows = _meta_rows(db)
+        _close(db)
+        out = {}
+        for each r in rows
+            ds = string(r.dataset)
+            if is_unknown(out[ds]) then
+                out[ds] = { columns: [] }
+            end if
+            entry = out[ds]
+            entry.columns = append(entry.columns, { name: string(r.column_name), kind: string(r.kind), scale: r.scale, currency: string(default(r.currency, "")) })
+            out[ds] = entry
+        next
+        return { ok: true, datasets: out, message: "" }
+    end function
+
+    ' The datasets of this dashboard that have actually been refreshed.
+    function datasets(db_path)
+        return sort(keys(describe_datasets(db_path).datasets))
+    end function
+
+    ' A handful of values a column actually holds. gdash owns the rows, so
+    ' sampling costs one query and needs nobody's permission -- which is the
+    ' difference between telling a model a column is text and telling it the
+    ' text is spelled `north`.
+    function sample_column(db_path, ds, column, limit)
+        db = connect(db_path, false)
+        if is_unknown(db) then
+            return []
+        end if
+        on error goto next
+        gsql.begin(db, "read")
+        rows = gsql.query(db, "select distinct " + _quote_ident(column) + " as v from " + _quote_ident(ds) + " where " + _quote_ident(column) + " is not null limit " + string(limit))
+        e = error
+        _rollback(db)
+        _close(db)
+        if e then
+            return []
+        end if
+        out = []
+        for each r in rows
+            out = append(out, string(r.v))
+        next
+        return out
+    end function
+
+    ' A query, read-only at the engine. EVERY READ gdash runs goes through a
+    ' `begin("read")`: a visual query, a describe, a sample, or SQL a model
+    ' wrote. `nlq.check_sql` refuses anything that is not read-only and is the
+    ' gate that should stop a generated `delete`; this is what makes a gap in
+    ' that gate harmless rather than destructive -- G-SQL refuses a write in a
+    ' read transaction as READ_ONLY (GDASH-20 step 0, measured).
+    function _read(db_path, sql, args)
+        db = connect(db_path, false)
+        if is_unknown(db) then
+            return { ok: false, rows: [], message: "dataset not available" }
+        end if
+        on error goto next
+        gsql.begin(db, "read")
+        rows = gsql.query(db, sql, args)
+        e = error
+        _rollback(db)
+        _close(db)
+        if e then
+            return { ok: false, rows: [], message: e.message }
+        end if
+        return { ok: true, rows: rows, message: "" }
+    end function
+
+    ' A generated query. Separate from select_rows because it takes NO
+    ' PARAMETERS: this is the NLQ path, where the SQL arrived as text from a
+    ' model and was checked by `nlq.check_sql`. A failure is a VALUE: a
+    ' generated query that does not compile is an ordinary outcome of asking a
+    ' question, and it has to reach a person as text they can read.
+    function select_across(db_path, sql)
+        got = _read(db_path, sql, [])
+        if not got.ok then
+            return { ok: false, rows: [], message: "the generated query did not run: " + got.message }
+        end if
+        return got
+    end function
+
+    ' Run a visual query. `:name` bindings become positional parameters, bound
+    ' from `values` -- typed values, converted where the request arrived (plan
+    ' D3), so a date compares as a date.
+    function select_rows(db_path, sql, values)
+        scanned = gdash_sql.scan(sql)
+        args = gdash_sql.args_for(scanned, values)
+        return _read(db_path, scanned.sql, args)
     end function
 
     ' A dataset's content, as one string, hashed. Used to decide whether a
@@ -418,203 +653,13 @@ library gdash_store
             cells = []
             c = 0
             while c < count(row)
-                cells = concat(cells, [string(row[c])])
+                cells = append(cells, string(row[c]))
                 c += 1
             end while
-            parts = concat(parts, [join(cells, chr(31))])
+            parts = append(parts, join(cells, chr(31)))
             r += 1
         end while
         return crypto.sha256_hex(join(parts, chr(30)))
-    end function
-
-    ' Run a visual query. `exact` names result columns whose values must not
-    ' cross the gBASIC number boundary; each comes back additionally as
-    ' <name>__text, cast in SQLite where the arithmetic was already exact.
-    '
-    ' `attach` maps a sibling dataset's name to its file. Unqualified table
-    ' names resolve across attached schemas (finding G2-2), so a visual query
-    ' joining two datasets reads exactly like one over a single dataset.
-    ' --- reading across every dataset at once (GDASH-12) ---------------------
-    '
-    ' A visual query opens ONE dataset and attaches the others, so its tables
-    ' are `main.<primary>` and `<other>.<other>` -- two naming rules for the
-    ' same kind of thing. That is fine for a human writing SQL against a
-    ' dataset they chose, and wrong for a catalog handed to something that did
-    ' not choose: the schema a table lives under would depend on which visual
-    ' asked.
-    '
-    ' So this path opens an empty database and attaches EVERY dataset under its
-    ' own name. Every table is then `<dataset>.<dataset>`, uniformly, and every
-    ' qualified name a generated query can write is one that resolves. It also
-    ' closes G2-3 by construction: each `_gdash_meta` is reached through its own
-    ' schema, so no dataset can be read at another's scale.
-    function _connect_across(attach)
-        db = sqlite.connect(":memory:")
-        if error then
-            return unknown
-        end if
-        names = keys(attach)
-        i = 0
-        while i < count(names)
-            joined = _attach_one(db, names[i], attach[names[i]])
-            i += 1
-        end while
-        return db
-    end function
-
-    ' Every column of every dataset, with the kind and scale it was
-    ' materialized at. This is gdash's own account of its data -- not a
-    ' discovery pass over it -- because gdash wrote these tables and recorded
-    ' what it wrote.
-    function describe_datasets(attach)
-        on error goto next
-        db = _connect_across(attach)
-        if is_unknown(db) then
-            return { ok: false, datasets: {}, message: "cannot open the staged data" }
-        end if
-        out = {}
-        names = keys(attach)
-        i = 0
-        while i < count(names)
-            ds = names[i]
-            scales = {}
-            kinds = {}
-            rows = sqlite.query(db, "select column_name, kind, scale from " + _quote_ident(ds) + "._gdash_meta")
-            if not error then
-                j = 0
-                while j < count(rows)
-                    kinds[string(rows[j].column_name)] = string(rows[j].kind)
-                    scales[string(rows[j].column_name)] = number(rows[j].scale)
-                    j += 1
-                end while
-            end if
-            cols = []
-            ' The meta table is the authority on kind and scale; the table
-            ' itself is the authority on which columns are there. A dataset
-            ' refreshed by an older build could have one without the other.
-            ' The table name binds as a parameter rather than being pasted in.
-            ' It is a validated dataset name either way, and a quoting helper
-            ' that exists only for this one call is a quoting helper somebody
-            ' later reaches for somewhere it does not fit.
-            crows = sqlite.query(db, "select name from " + _quote_ident(ds) + ".pragma_table_info(?)", [ds])
-            if error then
-                sqlite.close(db)
-                return { ok: false, datasets: {}, message: "cannot read the columns of dataset " + ds }
-            end if
-            j = 0
-            while j < count(crows)
-                cn = string(crows[j].name)
-                k = "text"
-                sc = 0
-                if not is_unknown(kinds[cn]) then
-                    k = kinds[cn]
-                    sc = scales[cn]
-                end if
-                cols = concat(cols, [{ name: cn, kind: k, scale: sc }])
-                j += 1
-            end while
-            out[ds] = { columns: cols }
-            i += 1
-        end while
-        sqlite.close(db)
-        return { ok: true, datasets: out, message: "" }
-    end function
-
-    ' A handful of values a column actually holds. gdash owns the rows, so
-    ' sampling costs one query and needs nobody's permission -- which is the
-    ' difference between telling a model a column is text and telling it the
-    ' text is spelled `north`.
-    function sample_column(attach, ds, column, limit)
-        on error goto next
-        db = _connect_across(attach)
-        if is_unknown(db) then
-            return []
-        end if
-        rows = sqlite.query(db, "select distinct " + _quote_ident(column) + " as v from " + _quote_ident(ds) + "." + _quote_ident(ds) + " where " + _quote_ident(column) + " is not null limit " + string(limit))
-        if error then
-            sqlite.close(db)
-            return []
-        end if
-        out = []
-        i = 0
-        while i < count(rows)
-            out = concat(out, [string(rows[i].v)])
-            i += 1
-        end while
-        sqlite.close(db)
-        return out
-    end function
-
-    ' A generated query, run across every attached dataset. Separate from
-    ' select_rows because it takes NO PARAMETERS: this is the NLQ path, where
-    ' the SQL arrived as text from a model and was checked by `nlq.check_sql`
-    ' for being read-only and for naming only grounded objects. Binding values
-    ' into it would mean gdash had a value to bind, and it does not -- the
-    ' model wrote the literals, and the unit guard is what reads them back.
-    '
-    ' A row cap is applied by the caller's SQL or not at all; what this does
-    ' enforce is that a failure is a VALUE. A generated query that does not
-    ' compile is an ordinary outcome of asking a question, not an error
-    ' condition, and it has to reach a person as text they can read.
-    function select_across(attach, sql)
-        on error goto next
-        db = _connect_across(attach)
-        if is_unknown(db) then
-            return { ok: false, rows: [], message: "cannot open the staged data" }
-        end if
-        rows = sqlite.query(db, sql)
-        if error then
-            sqlite.close(db)
-            return { ok: false, rows: [], message: "the generated query did not run" }
-        end if
-        sqlite.close(db)
-        return { ok: true, rows: rows, message: "" }
-    end function
-
-    function select_rows(path, sql, values, exact, attach)
-        scanned = gdash_sql.scan(sql)
-        args = gdash_sql.args_for(scanned, values)
-        stmt = scanned.sql
-        if count(exact) > 0 then
-            casts = []
-            i = 0
-            while i < count(exact)
-                casts = concat(casts, ["cast(" + _quote_ident(exact[i]) + " as text) as " + _quote_ident(exact[i] + "__text")])
-                i += 1
-            end while
-            stmt = "select *, " + join(casts, ", ") + " from ( " + stmt + " )"
-        end if
-
-        on error goto next
-        db = sqlite.connect(path)
-        if error then
-            return { ok: false, rows: [], message: "dataset not available" }
-        end if
-        anames = keys(attach)
-        i = 0
-        while i < count(anames)
-            joined = _attach_one(db, anames[i], attach[anames[i]])
-            i += 1
-        end while
-        rows = sqlite.query(db, stmt, args)
-        if error then
-            msg = error.message
-            sqlite.close(db)
-            return { ok: false, rows: [], message: msg }
-        end if
-        sqlite.close(db)
-        return { ok: true, rows: rows, message: "" }
-    end function
-
-    ' The swap: one POSIX rename, and the version file bumps AFTER it, so a
-    ' notified reader always finds complete data (design §3).
-    function swap(staging, live)
-        on error goto next
-        atomic_replace(staging, live)
-        if error then
-            return { ok: false, message: error.message }
-        end if
-        return { ok: true, message: "" }
     end function
 
     function read_version(path)

@@ -12,6 +12,7 @@
 
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$HERE/gsql_owners.sh"
 cd "$HERE/.."
 GBASIC="${GDASH_GBASIC:-$HOME/development/gbasic/gbasic}"
 export GDASH_GBASIC="$GBASIC"
@@ -35,14 +36,14 @@ fi
 
 "$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh sales >/dev/null 2>&1 || {
     echo "could not stage the reference dashboard" >&2
-    rm -rf "$SCRATCH"
+    wait_for_gsql_owners "$SCRATCH"; rm -rf "$SCRATCH"
     exit 2
 }
 
 "$GBASIC" tests/nlq_corpus.bas "$ROOT" sales
 rc=$?
 
-rm -rf "$SCRATCH"
+wait_for_gsql_owners "$SCRATCH"; rm -rf "$SCRATCH"
 if [[ -e "$SCRATCH" ]]; then
     echo "SCRATCH NOT CLEAN: $SCRATCH survived removal" >&2
     exit 1

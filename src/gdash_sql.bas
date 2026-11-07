@@ -2,8 +2,10 @@
 '
 ' One scan, two consumers (design §2, "derived, never declared"): the set of
 ' `:name` bindings in a query IS the dependency graph, and the same pass emits
-' the positional rewrite the platform requires. `sqlite.query` binds `?` with
-' an array only (finding F2), so gdash owns the `:name` -> `?` rewrite.
+' the positional rewrite. A G-SQL string takes `$1`, `$2`, ... with an array,
+' and gdash binds positionally rather than handing a record over: a `:name`
+' with no field in the record would otherwise be read from a variable where
+' the statement runs, which inside gdash is nobody's param.
 '
 ' The scanner must not see a binding inside a string literal, a quoted
 ' identifier, or a comment. Getting that wrong corrupts queries silently
@@ -26,17 +28,15 @@ library gdash_sql
     end function
 
     ' Returns { names: [...unique, first-appearance order],
-    '           order: [...one name per '?', left to right],
-    '           holes: how many '?' the AUTHOR wrote,
+    '           order: [...one name per '$k', left to right],
+    '           holes: how many positional placeholders the AUTHOR wrote,
     '           sql:   the rewritten text }
     '
-    ' `holes` exists because gdash owns the ':name' -> '?' rewrite (finding
-    ' F2). Every '?' an author writes adds a placeholder that no entry in
-    ' `order` accounts for, so the argument array is always shorter than the
-    ' placeholder count and sqlite refuses the query -- at refresh time, with a
-    ' message about argument counts, rather than at load time with a message
-    ' about the record. Design §1 says a dashboard validates completely before
-    ' any source database is contacted; counting them here is what lets it.
+    ' `holes` exists because gdash owns the ':name' -> '$k' rewrite. A '?' or
+    ' a '$1' an author writes is a placeholder no entry in `order` accounts for
+    ' -- and a '$1' would silently take the value of gdash's first binding --
+    ' so the validator refuses both at load time, with a message about the
+    ' record, rather than letting the query fail or lie at render time.
     function scan(sql)
         names = []
         order = []
@@ -109,7 +109,7 @@ library gdash_sql
                         names = concat(names, [nm])
                     end if
                     order = concat(order, [nm])
-                    chunks = concat(chunks, ["?"])
+                    chunks = concat(chunks, ["$" + string(count(order))])
                     i = j
                 else
                     chunks = concat(chunks, [c])
@@ -118,6 +118,8 @@ library gdash_sql
 
             else
                 if c = "?" then
+                    holes += 1
+                else if c = "$" and contains("0123456789", mid(sql, i + 1, 1)) and mid(sql, i + 1, 1) != "" then
                     holes += 1
                 end if
                 chunks = concat(chunks, [c])

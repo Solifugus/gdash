@@ -262,7 +262,7 @@ library gdash_auth
         if is_unknown(cfg) then
             return ["auth config is not an object"]
         end if
-        if default(cfg["format"], 0) != 1 then
+        if type(cfg["format"]) != "number" or cfg["format"] != 1 then
             errors = concat(errors, ["unsupported auth config format: " + string(default(cfg["format"], "none")) + " (this build reads format 1)"])
         end if
         d = cfg["directory"]

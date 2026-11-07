@@ -1,91 +1,194 @@
 program main(args)
+    load gsql
     load gdash_test from "gdash_test.bas"
     load gdash_store from "../src/gdash_store.bas"
     load gdash_format from "../src/gdash_format.bas"
     load gdash_paths from "../src/gdash_paths.bas"
+    load gdash_sql from "../src/gdash_sql.bas"
 
     s = gdash_test.suite("store")
     root = args[0]
     made = gdash_paths.ensure_dir(root)
-
-    ' --- money: decimal text -> integer minor units (design §4) ---
-    s = gdash_test.eq(s, gdash_store.to_minor("1250.75", 2).minor, "125075", "two decimals at scale 2")
-    s = gdash_test.eq(s, gdash_store.to_minor("1250.7", 2).minor, "125070", "short decimal is padded")
-    s = gdash_test.eq(s, gdash_store.to_minor("1250", 2).minor, "125000", "whole number is scaled")
-    s = gdash_test.eq(s, gdash_store.to_minor("-1250.75", 2).minor, "-125075", "negative preserved")
-    s = gdash_test.eq(s, gdash_store.to_minor("0.01", 2).minor, "1", "one cent")
-    s = gdash_test.eq(s, gdash_store.to_minor("0.00", 2).minor, "0", "zero")
-    s = gdash_test.eq(s, gdash_store.to_minor("-0.00", 2).minor, "0", "negative zero normalizes")
-    s = gdash_test.eq(s, gdash_store.to_minor("12", 0).minor, "12", "scale 0 passes through")
-
-    ' Excess decimals are REJECTED, not rounded. This value would round
-    ' cleanly to 10.01, so the test fails if anyone makes it "helpful".
-    r = gdash_store.to_minor("10.005", 2)
-    s = gdash_test.ok(s, not r.ok, "excess decimals rejected, not rounded")
-    s = gdash_test.contains_text(s, r.message, "rejected, not rounded", "refusal says so plainly")
-    s = gdash_test.ok(s, not gdash_store.to_minor("10.999", 2).ok, "a value that would round UP is still rejected")
-    s = gdash_test.ok(s, not gdash_store.to_minor("abc", 2).ok, "non-numeric rejected")
-    s = gdash_test.ok(s, not gdash_store.to_minor("1.2.3", 2).ok, "malformed decimal rejected")
-    s = gdash_test.ok(s, not gdash_store.to_minor("", 2).ok, "empty rejected")
-
-    ' --- exactness past 2^53, which is the whole point of the text boundary ---
-    big = "92233720368547.75"
-    conv = gdash_store.to_minor(big, 2)
-    s = gdash_test.eq(s, conv.minor, "9223372036854775", "large money converts exactly")
-    s = gdash_test.eq(s, gdash_format.minor_to_decimal(conv.minor, 2), big, "and round-trips back exactly")
-    ' 2^53 + 1 in minor units survives the round trip as text.
-    s = gdash_test.eq(s, gdash_format.minor_to_decimal("9007199254740993", 2), "90071992547409.93", "past 2^53 renders exactly")
-    s = gdash_test.eq(s, gdash_format.minor_to_decimal("1", 2), "0.01", "one cent renders")
-    s = gdash_test.eq(s, gdash_format.minor_to_decimal("-125075", 2), "-1250.75", "negative renders")
 
     ' --- type inference for undeclared columns (design §4) ---
     s = gdash_test.eq(s, gdash_store.infer_kind(["1", "2", "-3"]), "integer", "integer-looking -> integer")
     s = gdash_test.eq(s, gdash_store.infer_kind(["1.5", "2"]), "real", "numeric -> real")
     s = gdash_test.eq(s, gdash_store.infer_kind(["west", "east"]), "text", "else -> text")
     s = gdash_test.eq(s, gdash_store.infer_kind([]), "text", "no samples -> text")
+    s = gdash_test.eq(s, gdash_store.infer_kind([unknown, "4"]), "integer", "an absent cell does not decide the kind")
 
-    ' --- materialize, then read back exactly ---
-    dbp = root + "/orders.db"
+    ' --- the plan carries currency and the display scale ---
     cols = ["region", "month", "amount"]
     rows = [["west", "2026-01", "1250.75"], ["west", "2026-02", "900.25"], ["east", "2026-01", "10.00"]]
-    declared = { amount: { type: "money", scale: 2 } }
-    plan = gdash_store.plan_columns(cols, rows, declared)
+    plan = gdash_store.plan_columns(cols, rows, { amount: { type: "money", scale: 2 } })
     s = gdash_test.eq(s, plan[2].kind, "money", "declared money column planned as money")
+    s = gdash_test.eq(s, plan[2].currency, "USD", "and in USD when no currency is declared")
     s = gdash_test.eq(s, plan[0].kind, "text", "region inferred text")
+    jplan = gdash_store.plan_columns(["v"], [["430000"]], { v: { type: "money", scale: 0, currency: "JPY" } })
+    s = gdash_test.eq(s, jplan[0].currency, "JPY", "a declared currency is kept")
 
-    m = gdash_store.materialize(dbp, "orders", plan, rows)
-    s = gdash_test.ok(s, m.ok, "materialize succeeds")
-    s = gdash_test.eq(s, string(gdash_store.table_columns(dbp, "orders")), string(cols), "table has the fetched columns")
-    mc = gdash_store.money_columns(dbp, {})
-    s = gdash_test.eq(s, mc["amount"], 2, "per-column scale lives in _gdash_meta")
+    ' --- one database per (dashboard, stage); a dataset is a table ---
+    db = root + "/sales/data.gsql"
+    made = gdash_paths.ensure_dir(root + "/sales")
+    s = gdash_test.ok(s, not gdash_store.has_dataset(db, "orders"), "no database yet: no dataset, and no database created by asking")
+    s = gdash_test.ok(s, not gdash_paths.path_exists(db), "a read does not create the database")
 
-    ' SUM over minor units is exact in SQLite and crosses back as text.
-    res = gdash_store.select_rows(dbp, "select sum(amount) as total from orders where region = :region", { region: "west" }, ["total"], {})
-    s = gdash_test.ok(s, res.ok, "visual query runs")
-    s = gdash_test.eq(s, res.rows[0]["total__text"], "215100", "sum of 1250.75 + 900.25 in minor units")
-    s = gdash_test.eq(s, gdash_format.minor_to_decimal(res.rows[0]["total__text"], 2), "2151.00", "renders as money exactly")
+    m = gdash_store.materialize(db, "orders", plan, rows)
+    s = gdash_test.ok(s, m.ok, "materialize succeeds -- " + m.message)
+    s = gdash_test.ok(s, gdash_store.has_staging(db, "orders"), "materialize writes the STAGING table")
+    s = gdash_test.ok(s, not gdash_store.has_dataset(db, "orders"), "and nothing is live until the swap")
+    sw = gdash_store.swap(db, "orders")
+    s = gdash_test.ok(s, sw.ok, "swap succeeds -- " + sw.message)
+    s = gdash_test.ok(s, gdash_store.has_dataset(db, "orders"), "the dataset is live after the swap")
+    s = gdash_test.ok(s, not gdash_store.has_staging(db, "orders"), "and the staging table is gone, renamed rather than copied")
+    s = gdash_test.eq(s, string(gdash_store.table_columns(db, "orders")), string(cols), "the table has the fetched columns, in order")
+    s = gdash_test.eq(s, gdash_store.money_columns(db)["amount"], 2, "the display scale is recorded in _gdash_meta")
 
-    ' The :name rewrite reached SQLite as a positional bind.
-    res2 = gdash_store.select_rows(dbp, "select sum(amount) as total from orders where region = :region", { region: "east" }, ["total"], {})
-    s = gdash_test.eq(s, res2.rows[0]["total__text"], "1000", "param actually filtered")
+    ' --- money is money: exact, with its currency ---
+    res = gdash_store.select_rows(db, "select sum(amount) as total from orders where region = :region", { region: "west" })
+    s = gdash_test.ok(s, res.ok, "visual query runs -- " + res.message)
+    s = gdash_test.eq(s, type(res.rows[0].total), "money", "a sum of money comes back as money")
+    s = gdash_test.eq(s, money.currency(res.rows[0].total), "USD", "in the column's currency")
+    s = gdash_test.eq(s, money.text(res.rows[0].total, 2), "2151.00", "1250.75 + 900.25, exactly")
+    res2 = gdash_store.select_rows(db, "select sum(amount) as total from orders where region = :region", { region: "east" })
+    s = gdash_test.eq(s, money.text(res2.rows[0].total, 2), "10.00", "the param actually filtered")
+    ' S3: a plain number compared with a money column is that column's currency.
+    over = gdash_store.select_rows(db, "select count(*) as n from orders where amount > 1000", {})
+    s = gdash_test.eq(s, over.rows[0].n, 1, "amount > 1000 means USD 1000, not 1000 cents")
 
-    ' A materialize that hits an excess-decimal value fails whole.
-    bad = gdash_store.materialize(root + "/bad.db", "orders", plan, [["west", "2026-01", "1.005"]])
-    s = gdash_test.ok(s, not bad.ok, "excess decimals fail the materialize")
-    s = gdash_test.contains_text(s, bad.message, "rejected, not rounded", "and say why")
+    ' --- D4a: stored exactly, rounded only for a person ---
+    exact_db = root + "/exact/data.gsql"
+    made = gdash_paths.ensure_dir(root + "/exact")
+    xplan = gdash_store.plan_columns(["amount"], [], { amount: { type: "money", scale: 2 } })
+    xm = gdash_store.materialize(exact_db, "ledger", xplan, [["1250.7512"], ["0.0049"]])
+    s = gdash_test.ok(s, xm.ok, "a value with more decimals than the display scale is STORED, not refused -- " + xm.message)
+    xs = gdash_store.swap(exact_db, "ledger")
+    xr = gdash_store.select_rows(exact_db, "select sum(amount) as s from ledger", {})
+    s = gdash_test.eq(s, money.text(xr.rows[0].s), "1250.756100", "and summed at its true value")
+    s = gdash_test.eq(s, gdash_format.currency(xr.rows[0].s, 2, "").text, "$1,250.76", "rounded only when shown")
 
-    ' --- the swap, and stale-but-coherent (design §3) ---
-    live = root + "/live.db"
-    stage = root + "/live__staging.db"
-    p1 = gdash_store.materialize(live, "orders", plan, [["west", "2026-01", "1.00"]])
-    p2 = gdash_store.materialize(stage, "orders", plan, [["west", "2026-01", "2.00"]])
-    before = gdash_store.select_rows(live, "select cast(amount as text) as a from orders", {}, [], {})
-    s = gdash_test.eq(s, before.rows[0].a, "100", "live file before swap")
-    sw = gdash_store.swap(stage, live)
-    s = gdash_test.ok(s, sw.ok, "swap succeeds")
-    after = gdash_store.select_rows(live, "select cast(amount as text) as a from orders", {}, [], {})
-    s = gdash_test.eq(s, after.rows[0].a, "200", "a fresh reader sees the new data")
-    s = gdash_test.ok(s, not gdash_paths.path_exists(stage), "staging file is consumed by the rename")
+    ' A seventh decimal of USD is more than money can hold: refused, naming
+    ' the row and column, and the live table is untouched.
+    bad = gdash_store.materialize(exact_db, "ledger", xplan, [["1.00"], ["2.1234567"]])
+    s = gdash_test.ok(s, not bad.ok, "a value the currency cannot store fails the materialize")
+    s = gdash_test.contains_text(s, bad.message, "row 1", "and names the row")
+    s = gdash_test.contains_text(s, bad.message, "amount", "and the column")
+    s = gdash_test.ok(s, not gdash_store.has_staging(db, "ledger"), "a refused materialize leaves no staging table")
+    still = gdash_store.select_rows(exact_db, "select count(*) as n from ledger", {})
+    s = gdash_test.eq(s, still.rows[0].n, 2, "the live table is untouched: stale-but-coherent")
+    ' Trailing zeros are not excess precision (G9-6): a numeric(19,8) source
+    ' sends `1100.00000000`, an exact whole amount, and it must not fail the
+    ' refresh because it spells eight places.
+    padded = gdash_store.materialize(exact_db, "padded", xplan, [["1100.00000000"], ["12.34560000"], ["-0.50000000"]])
+    s = gdash_test.ok(s, padded.ok, "zeros past the currency's places are not precision -- " + padded.message)
+    psw = gdash_store.swap(exact_db, "padded")
+    pr = gdash_store.select_rows(exact_db, "select sum(amount) as s from padded", {})
+    s = gdash_test.eq(s, money.text(pr.rows[0].s), "1111.845600", "and the values are exactly what they said")
+    nonzero = gdash_store.materialize(exact_db, "padded", xplan, [["1.00000001"]])
+    s = gdash_test.ok(s, not nonzero.ok, "but a non-zero eighth place is still refused")
+    empty = gdash_store.materialize(exact_db, "ledger", xplan, [[""]])
+    s = gdash_test.ok(s, not empty.ok, "an empty string is not an amount")
+
+    ' --- integers past 2^53 cross no boundary ---
+    iplan = gdash_store.plan_columns(["id"], [["9007199254740993"]], {})
+    s = gdash_test.eq(s, iplan[0].kind, "integer", "a big id is inferred integer")
+    im = gdash_store.materialize(db, "ids", iplan, [["9007199254740993"]])
+    isw = gdash_store.swap(db, "ids")
+    ir = gdash_store.select_rows(db, "select id from ids", {})
+    s = gdash_test.eq(s, string(ir.rows[0].id), "9007199254740993", "2^53 + 1 comes back exactly")
+
+    ' --- the swap under a live reader (design §3) ---
+    ' The reader is a raw G-SQL connection holding a read snapshot, which is
+    ' exactly what a worker mid-query is. It must keep the old rows until it
+    ' finishes, and a fresh read after must see the new ones.
+    p1 = gdash_store.materialize(db, "orders", plan, [["west", "2026-01", "1.00"]])
+    p1s = gdash_store.swap(db, "orders")
+    reader = gsql.connect(db)
+    gsql.begin(reader, "read")
+    held = gsql.query(reader, "select count(*) as n from orders")
+    p2 = gdash_store.materialize(db, "orders", plan, [["west", "2026-01", "2.00"], ["east", "2026-01", "3.00"]])
+    p2s = gdash_store.swap(db, "orders")
+    s = gdash_test.ok(s, p2s.ok, "a swap commits while a reader holds a snapshot -- " + p2s.message)
+    during = gsql.query(reader, "select count(*) as n from orders")
+    s = gdash_test.eq(s, during[0].n, 1, "the reader keeps the table it started with")
+    gsql.commit(reader)
+    gsql.close(reader)
+    after = gdash_store.select_rows(db, "select count(*) as n from orders", {})
+    s = gdash_test.eq(s, after.rows[0].n, 2, "a fresh reader sees the new data")
+
+    ' --- a crashed child's staging table is discarded, not trusted ---
+    junk = gdash_store.materialize(db, "orders", plan, [["north", "2026-01", "9.00"]])
+    s = gdash_test.ok(s, gdash_store.has_staging(db, "orders"), "a staging table left behind is visible as one")
+    s = gdash_test.ok(s, gdash_store.discard_staging(db, "orders"), "and discarded")
+    s = gdash_test.ok(s, not gdash_store.has_staging(db, "orders"), "so it is gone")
+    s = gdash_test.eq(s, gdash_store.select_rows(db, "select count(*) as n from orders", {}).rows[0].n, 2, "and the live table never saw it")
+
+    ' --- every read is read-only at the engine ---
+    ' The second line of defence behind nlq.check_sql: a generated `delete`
+    ' that got past the check is refused by G-SQL itself.
+    del = gdash_store.select_across(db, "delete from orders")
+    s = gdash_test.ok(s, not del.ok, "a write through the read path is refused")
+    s = gdash_test.contains_text(s, del.message, "READ_ONLY", "by the engine, as read-only")
+    s = gdash_test.eq(s, gdash_store.select_rows(db, "select count(*) as n from orders", {}).rows[0].n, 2, "and nothing was deleted")
+    viarows = gdash_store.select_rows(db, "delete from orders", {})
+    s = gdash_test.ok(s, not viarows.ok, "the visual-query path refuses a write the same way")
+
+    ' --- siblings are tables in the same database: joined with no prefix ---
+    rplan = gdash_store.plan_columns(["region", "label"], [["west", "West"]], {})
+    rm = gdash_store.materialize(db, "regions", rplan, [["west", "West"], ["east", "East"]])
+    rs = gdash_store.swap(db, "regions")
+    jr = gdash_store.select_rows(db, "select r.label as label, sum(o.amount) as amt from orders o join regions r on r.region = o.region group by r.label order by 1", {})
+    s = gdash_test.ok(s, jr.ok, "a query joining two datasets runs -- " + jr.message)
+    s = gdash_test.eq(s, count(jr.rows), 2, "the join returns both rows")
+    s = gdash_test.eq(s, jr.rows[0].label, "East", "the sibling's column is readable")
+    s = gdash_test.eq(s, money.text(jr.rows[0].amt, 2), "3.00", "and the money is still exact")
+
+    ' --- no dataset limit (the SQLite attach cap is gone) ---
+    many = root + "/many/data.gsql"
+    made = gdash_paths.ensure_dir(root + "/many")
+    k = 0
+    ok_all = true
+    while k < 20
+        one = gdash_store.materialize(many, "d" + string(k), gdash_store.plan_columns(["k", "v"], [["1", "x"]], {}), [["1", "v" + string(k)]])
+        two = gdash_store.swap(many, "d" + string(k))
+        ok_all = ok_all and one.ok and two.ok
+        k += 1
+    end while
+    s = gdash_test.ok(s, ok_all, "twenty datasets in one dashboard")
+    far = gdash_store.select_rows(many, "select a.v as a, b.v as b from d0 a join d19 b on a.k = b.k", {})
+    s = gdash_test.ok(s, far.ok, "a query naming the first and the twentieth runs -- " + far.message)
+    s = gdash_test.eq(s, far.rows[0].b, "v19", "and reads the twentieth")
+
+    ' --- the wall between dashboards is the directory ---
+    ' `orders` lives in the sales database. A query run against another
+    ' dashboard's database cannot name it, however it is spelled.
+    other = root + "/hr/data.gsql"
+    made = gdash_paths.ensure_dir(root + "/hr")
+    hm = gdash_store.materialize(other, "staff", gdash_store.plan_columns(["n"], [["a"]], {}), [["a"]])
+    hs = gdash_store.swap(other, "staff")
+    cross = gdash_store.select_rows(other, "select count(*) as n from orders", {})
+    s = gdash_test.ok(s, not cross.ok, "one dashboard's query cannot name another dashboard's table")
+    s = gdash_test.ok(s, not gdash_store.has_dataset(other, "orders"), "nor does the other dashboard have it")
+
+    ' --- money_columns: a name meaning two scales is a conflict (G13-2) ---
+    mix = root + "/mix/data.gsql"
+    made = gdash_paths.ensure_dir(root + "/mix")
+    a1 = gdash_store.materialize(mix, "usd", gdash_store.plan_columns(["amount"], [], { amount: { type: "money", scale: 2 } }), [["1.00"]])
+    a2 = gdash_store.swap(mix, "usd")
+    b1 = gdash_store.materialize(mix, "fine", gdash_store.plan_columns(["amount"], [], { amount: { type: "money", scale: 6 } }), [["1.000001"]])
+    b2 = gdash_store.swap(mix, "fine")
+    s = gdash_test.eq(s, gdash_store.money_columns(mix)["amount"], -2, "a column name meaning two display scales is a conflict, not a guess")
+    c1 = gdash_store.materialize(mix, "fine", gdash_store.plan_columns(["amount"], [], { amount: { type: "money", scale: 2 } }), [["1.00"]])
+    c2 = gdash_store.swap(mix, "fine")
+    s = gdash_test.eq(s, gdash_store.money_columns(mix)["amount"], 2, "the same name at the same scale in two datasets is not a conflict")
+    s = gdash_test.ok(s, gdash_store.reserved("_gdash_meta") and gdash_store.reserved("orders__staging") and not gdash_store.reserved("orders"), "the store's own names are reserved")
+
+    ' --- describe: gdash's own account of what it wrote ---
+    d = gdash_store.describe_datasets(db)
+    s = gdash_test.ok(s, d.ok, "describe answers")
+    s = gdash_test.eq(s, string(sort(keys(d.datasets))), string(["ids", "orders", "regions"]), "every live dataset, and no staging table")
+    s = gdash_test.eq(s, d.datasets["orders"].columns[2].currency, "USD", "with each money column's currency")
+    s = gdash_test.eq(s, string(gdash_store.sample_column(db, "regions", "label", 5)), string(["West", "East"]), "a column's values sampled")
 
     ' --- version file ---
     vp = root + "/version"
@@ -93,63 +196,6 @@ program main(args)
     s = gdash_test.eq(s, gdash_store.bump_version(vp, vp + ".tmp"), 1, "first bump")
     s = gdash_test.eq(s, gdash_store.bump_version(vp, vp + ".tmp"), 2, "second bump")
     s = gdash_test.eq(s, gdash_store.read_version(vp), 2, "version persists")
-
-    ' --- two datasets, attached, joined unqualified (finding G2-2) ---
-    ordersp = root + "/attach_orders.db"
-    regionsp = root + "/attach_regions.db"
-    oplan = [{ name: "region", kind: "text", scale: 0 }, { name: "amount", kind: "money", scale: 2 }]
-    rplan = [{ name: "region", kind: "text", scale: 0 }, { name: "label", kind: "text", scale: 0 }]
-    m1 = gdash_store.materialize(ordersp, "orders", oplan, [["w", "10.00"], ["e", "20.00"]])
-    m2 = gdash_store.materialize(regionsp, "regions", rplan, [["w", "West"], ["e", "East"]])
-
-    ' The join names the sibling table with no schema prefix at all.
-    jr = gdash_store.select_rows(ordersp, "select r.label as label, cast(o.amount as text) as amt from orders o join regions r on r.region = o.region order by 1", {}, [], { regions: regionsp })
-    s = gdash_test.ok(s, jr.ok, "a query joining two dataset files runs")
-    s = gdash_test.eq(s, count(jr.rows), 2, "the join returns both rows")
-    s = gdash_test.eq(s, jr.rows[0].label, "East", "the sibling dataset's column is readable")
-    s = gdash_test.eq(s, jr.rows[0].amt, "2000", "the primary dataset's money is still exact")
-
-    ' Without the attachment the same query fails, which is what makes the
-    ' attachment (not some ambient search path) the thing doing the work.
-    nr = gdash_store.select_rows(ordersp, "select count(*) as n from orders o join regions r on r.region = o.region", {}, [], {})
-    s = gdash_test.ok(s, not nr.ok, "the same query fails with nothing attached")
-
-    ' --- _gdash_meta is read schema-qualified (finding G2-3) ---
-    ' Both files carry a _gdash_meta. regions has NO money column; orders has
-    ' one at scale 2. An unqualified read would answer from whichever file is
-    ' `main` and silently render money at the wrong scale.
-    mc2 = gdash_store.money_columns(ordersp, { regions: regionsp })
-    s = gdash_test.eq(s, mc2["amount"], 2, "the primary's money scale survives an attachment")
-
-    ' The reverse direction is the one that would go wrong quietly: `main` is
-    ' the file WITHOUT the money column, and the scale must not leak in from
-    ' the attached sibling under an unqualified read.
-    scaled8 = root + "/attach_scale8.db"
-    m3 = gdash_store.materialize(scaled8, "fine", [{ name: "amount", kind: "money", scale: 8 }], [["1.00000000"]])
-    mixed = gdash_store.money_columns(ordersp, { fine: scaled8 })
-
-    ' THIS ASSERTION IS REVERSED FROM WHAT IT SAID, AND THE REVERSAL IS THE
-    ' POINT (G13-2). It used to expect 2 -- "the primary wins a column-name
-    ' collision across schemas" -- which is a reasonable guess and is still
-    ' only a guess: in `select amount from fine`, the amount is the SIBLING's,
-    ' and nothing here can tell. SQLite reports no provenance for a result
-    ' column and `sqlite.columns(db, sql)`, the platform ask that would give
-    ' it, has not landed.
-    '
-    ' "Main wins" is therefore a rule that is right most of the time and
-    ' SILENTLY WRONG the rest, on the one path where wrong money is
-    ' indistinguishable from right money. gdash refuses a money value with
-    ' excess decimals rather than rounding it; this is the same posture. A name
-    ' that means two things maps to -2 and the renderer says so, naming the
-    ' column, so an author renames one instead of reading a wrong number.
-    s = gdash_test.eq(s, mixed["amount"], -2, "a column name meaning two scales is a conflict, not a guess")
-
-    ' Agreement is not conflict. The same name at the same scale in two
-    ' datasets is exactly as unambiguous as one, and must not refuse.
-    same2 = root + "/attach_same2.db"
-    m4 = gdash_store.materialize(same2, "twin", [{ name: "amount", kind: "money", scale: 2 }], [["1.00"]])
-    agreed = gdash_store.money_columns(ordersp, { twin: same2 })
-    s = gdash_test.eq(s, agreed["amount"], 2, "the same name at the same scale in two datasets is not a conflict")
 
     ' --- content hash: the same content hashes the same, and only that ---
     h1 = gdash_store.content_hash(["a", "b"], [["1", "2"], ["3", "4"]])

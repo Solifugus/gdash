@@ -51,7 +51,7 @@ library gdash_shadow
     ' library added to gdash without being added here is a test failure rather
     ' than a silent gap in the guard.
     function guarded_names()
-        return ["chart", "crypto", "ldap", "llm", "nlq", "odbc", "pg", "sqlite", "web"]
+        return ["chart", "crypto", "gsql", "ldap", "llm", "nlq", "odbc", "pg", "web"]
     end function
 
     ' Every `<name>.bas` sitting IN `dir` -- not below it -- for the names

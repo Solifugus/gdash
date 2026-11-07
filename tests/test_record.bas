@@ -110,16 +110,58 @@ program main(args)
     good9 = { format: 1, name: "b", access: "open", datasets: { d1: { profile: "p", sql: "select 1", refresh: "interval", every: 300 } }, params: {}, visuals: {}, tabs: [{ name: "t", layout: { vert: [] } }] }
     s = gdash_test.eq(s, count(gdash_record.validate(good9)), 0, "a well-formed interval dataset validates")
 
-    ' Eleven datasets is the ceiling; twelve is refused at load rather than
-    ' at render (finding G2-4).
+    ' NO DATASET CEILING (GDASH-20). Eleven was SQLite's attach limit; every
+    ' dataset is now a table in one G-SQL database, and twenty validate.
     many = {}
     mi = 0
-    while mi < 12
+    while mi < 20
         many["d" + string(mi)] = { profile: "p", sql: "select 1" }
         mi += 1
     end while
-    toomany = { format: 1, name: "b", datasets: many, params: {}, visuals: {}, tabs: [{ name: "t", layout: { vert: [] } }] }
-    s = gdash_test.contains_text(s, join(gdash_record.validate(toomany), "|"), "SQLite attaches at most", "a twelfth dataset is refused at load")
+    lots = { format: 1, name: "b", access: "open", datasets: many, params: {}, visuals: {}, tabs: [{ name: "t", layout: { vert: [] } }] }
+    s = gdash_test.eq(s, count(gdash_record.validate(lots)), 0, "twenty datasets validate: the attach cap is gone")
+
+    ' The store's own table names are not dataset names.
+    resv = { format: 1, name: "b", datasets: { _gdash_meta: { profile: "p", sql: "select 1" }, orders__staging: { profile: "p", sql: "select 1" } }, params: {}, visuals: {}, tabs: [{ layout: { vert: [] } }] }
+    rv = join(gdash_record.validate(resv), "|")
+    s = gdash_test.contains_text(s, rv, "'_gdash_meta' is reserved", "a dataset named like the store's metadata is refused")
+    s = gdash_test.contains_text(s, rv, "'orders__staging' is reserved", "and one named like a refresh in progress")
+
+    ' A hand-written $1 would take the value of gdash's own first binding.
+    dollar = { format: 1, name: "b", datasets: { d1: { profile: "p", sql: "select * from t where a = $1" } }, params: {}, visuals: {}, tabs: [{ layout: { vert: [] } }] }
+    s = gdash_test.contains_text(s, join(gdash_record.validate(dollar), "|"), "positional placeholder", "a hand-written $1 is refused")
+
+    ' The scale is a DISPLAY scale (D4a), and a currency stores only so many
+    ' places: USD six, JPY four.
+    wide = { format: 1, name: "b", datasets: { d1: { profile: "p", sql: "select 1", columns: { a: { type: "money", scale: 6 }, y: { type: "money", scale: 5, currency: "JPY" } } } }, params: {}, visuals: {}, tabs: [{ layout: { vert: [] } }] }
+    wv = join(gdash_record.validate(wide), "|")
+    s = gdash_test.ok(s, not contains(wv, "'d1.a' has scale"), "USD at scale 6 is within what USD stores")
+    s = gdash_test.contains_text(s, wv, "JPY stores only 4 decimal places", "JPY at scale 5 is refused, naming the limit")
+
+    ' --- typed params (D3) ---
+    typed = { format: 1, name: "b", access: "open", datasets: { d1: { profile: "p", sql: "select 1" } },
+              params: { since: { default: "2026-01-01", type: "date" }, min: { default: "10", type: "integer" },
+                        floor: { default: "2.50", type: "money", currency: "EUR" }, region: { default: "west" } },
+              visuals: {}, tabs: [{ name: "t", layout: { vert: [] } }] }
+    s = gdash_test.eq(s, count(gdash_record.validate(typed)), 0, "typed params with defaults of their type validate")
+    tv = gdash_record.resolve_params(typed, {}, unknown)
+    ' type() of a date is "datetime" in gBASIC, by design (reference, `type`):
+    ' a date is the date-time kind with no time part.
+    s = gdash_test.eq(s, type(tv["since"]), "datetime", "a date param binds a date value, not text")
+    s = gdash_test.eq(s, tv["min"], 10, "an integer param binds a number")
+    s = gdash_test.eq(s, money.currency(tv["floor"]), "EUR", "a money param binds money in its currency")
+    s = gdash_test.eq(s, tv["region"], "west", "an untyped param binds as it always has")
+    tv2 = gdash_record.resolve_params(typed, { since: "2026-03-15", min: "25" }, unknown)
+    s = gdash_test.eq(s, string(tv2["since"]), "2026-03-15", "a supplied date is converted")
+    s = gdash_test.eq(s, tv2["min"], 25, "and a supplied integer")
+    pe = join(gdash_record.param_errors(typed, { since: "next tuesday", min: "2.5" }), "|")
+    s = gdash_test.contains_text(s, pe, "param 'since'", "a supplied value that is not a date is named")
+    s = gdash_test.contains_text(s, pe, "param 'min' '2.5' is not a whole number", "and one that is not a whole number")
+    s = gdash_test.eq(s, count(gdash_record.param_errors(typed, { region: "anything at all" })), 0, "an untyped param is never refused")
+    badtype = { format: 1, name: "b", datasets: {}, params: { a: { default: "x", type: "uuid" }, b: { default: "soon", type: "date" } }, visuals: {}, tabs: [{ layout: { vert: [] } }] }
+    bt = join(gdash_record.validate(badtype), "|")
+    s = gdash_test.contains_text(s, bt, "param 'a' has type 'uuid'", "an unknown param type is refused by name")
+    s = gdash_test.contains_text(s, bt, "param 'b' has a default that is not its type", "and a default that does not convert")
 
     ' --- load failures are values, not raises ---
     miss = gdash_record.load_file(root + "/nope.json")

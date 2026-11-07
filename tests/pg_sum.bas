@@ -1,8 +1,10 @@
 ' Helper for the live-Postgres runner: read one exact money total back out of
-' a refreshed dataset file. Kept as a file rather than piped to the
-' interpreter because gbasic takes a FILE argument and has no stdin form.
+' a refreshed dashboard's G-SQL database. Kept as a file rather than piped to
+' the interpreter because gbasic takes a FILE argument and has no stdin form.
+' The total prints through money.text, at its full storage scale, so what the
+' runner compares is the exact stored value.
 '
-'   pg_sum.bas <dataset.db> <region|*>
+'   pg_sum.bas <data.gsql> <region|*>
 
 program main(args)
     load gdash_store from "../src/gdash_store.bas"
@@ -10,9 +12,9 @@ program main(args)
     db = args[0]
     region = args[1]
     if region = "*" then
-        r = gdash_store.select_rows(db, "select sum(amount) as total from orders", {}, ["total"], {})
+        r = gdash_store.select_rows(db, "select sum(amount) as total from orders", {})
     else
-        r = gdash_store.select_rows(db, "select sum(amount) as total from orders where region = :region", { region: region }, ["total"], {})
+        r = gdash_store.select_rows(db, "select sum(amount) as total from orders where region = :region", { region: region })
     end if
     if not r.ok then
         print to error "query failed: " + r.message
@@ -22,5 +24,5 @@ program main(args)
         print to error "no rows"
         exit(1)
     end if
-    print(r.rows[0]["total__text"])
+    print(money.text(r.rows[0]["total"]))
 end program

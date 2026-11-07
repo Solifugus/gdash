@@ -215,15 +215,13 @@ library gdash_ask
     ' --- what gdash tells the model about its own data ---------------------
 
     ' Vocabulary rows, from the values gdash actually holds. Text columns only:
-    ' a number's spellings teach nothing, and a money column's would teach the
-    ' wrong lesson twice over -- the integers are minor units, which is the
-    ' failure the unit guard exists for.
+    ' a number's spellings teach nothing, and an amount's teach less.
     '
     ' `nlq.vocabulary` drops any column with more values than its cap, which is
     ' the right behaviour and means gdash can sample generously: a partial list
     ' would be worse than none, because a literal absent from it reads as
     ' unknown rather than merely unlisted.
-    function value_rows(attach, desc, cap)
+    function value_rows(db, desc, cap)
         rows = []
         dsn = sort(keys(desc.datasets))
         i = 0
@@ -233,9 +231,9 @@ library gdash_ask
             j = 0
             while j < count(cols)
                 if cols[j].kind = "text" then
-                    vals = gdash_store.sample_column(attach, ds, cols[j].name, cap + 1)
+                    vals = gdash_store.sample_column(db, ds, cols[j].name, cap + 1)
                     if count(vals) > 0 then
-                        rows = concat(rows, [{ schema: ds, table: ds, column: cols[j].name, values: vals }])
+                        rows = concat(rows, [{ schema: "", table: ds, column: cols[j].name, values: vals }])
                     end if
                 end if
                 j += 1
@@ -249,9 +247,9 @@ library gdash_ask
     ' per dataset. The draft carries it because a promoted visual will carry
     ' it, and because an answer about data from last Tuesday is a different
     ' answer (design §4).
-    function as_of(p, name, mode, attach)
+    function as_of(p, name, mode, names)
         out = []
-        dsn = sort(keys(attach))
+        dsn = sort(names)
         i = 0
         while i < count(dsn)
             st = gdash_sched.read_state(gdash_paths.dataset_state(p, name, mode, dsn[i]))
@@ -315,21 +313,20 @@ library gdash_ask
             return _stop("ground", q, "ask a question", {})
         end if
 
-        attach = gdash_nlq.attach_for(p, name, mode, rec)
-        if count(keys(attach)) = 0 then
+        ' Only datasets that have refreshed: a question cannot be answered
+        ' from a table that does not exist, and offering its name would be
+        ' offering a table whose columns are a guess.
+        db = gdash_paths.stage_db(p, name, mode)
+        desc = gdash_store.describe_datasets(db)
+        if not desc.ok or count(keys(desc.datasets)) = 0 then
             return _stop("data", q, "no dataset of this dashboard has been refreshed yet, so there is nothing to ask about", {})
         end if
 
-        desc = gdash_store.describe_datasets(attach)
-        if not desc.ok then
-            return _stop("data", q, desc.message, {})
-        end if
-
-        stamps = as_of(p, name, mode, attach)
+        stamps = as_of(p, name, mode, keys(desc.datasets))
         cat = gdash_nlq.catalog(desc)
         scaled = gdash_nlq.scaled_columns(desc, rec)
 
-        rows = value_rows(attach, desc, 25)
+        rows = value_rows(db, desc, 25)
         vocab = nlq.vocabulary(rows, { max_values: 25 })
         ex = nlq.exemplars(rows, { min_distinct: 2 })
 
@@ -351,10 +348,10 @@ library gdash_ask
         told = gdash_nlq.prompt_notes(scaled)
         units_told = true
         on error goto next
-        plan = nlq.plan(cat, vocab, q, { dialect: "SQLite", exemplars: ex, notes: told })
+        plan = nlq.plan(cat, vocab, q, { dialect: _dialect(), exemplars: ex, notes: told })
         if error then
             units_told = false
-            plan = nlq.plan(cat, vocab, q, { dialect: "SQLite", exemplars: ex })
+            plan = nlq.plan(cat, vocab, q, { dialect: _dialect(), exemplars: ex })
             if error then
                 return _stop("ground", q, "the question could not be planned against this data", { as_of: stamps })
             end if
@@ -406,7 +403,11 @@ library gdash_ask
         if error then
             return _stop("sql", q, "the model did not return a query", { key: plan.key, as_of: stamps })
         end if
-        notes = gdash_nlq.unit_notes(reading.sql, scaled)
+        ' The literal-restating guard that stood here is GONE (GDASH-20): it
+        ' existed because `amount > 1000` silently meant ten dollars against
+        ' minor units, and against money it means USD 1000, which is what the
+        ' question said. `notes` stays in the draft's shape, empty.
+        notes = []
         if not reading.ok then
             ' check_sql found something: not read-only, or naming an object the
             ' grounding does not have. The SQL goes back with it, because the
@@ -418,7 +419,7 @@ library gdash_ask
                            units_told: units_told })
         end if
 
-        ran = gdash_store.select_across(attach, reading.sql)
+        ran = gdash_store.select_across(db, reading.sql)
         if not ran.ok then
             return _stop("run", q, ran.message,
                          { sql: reading.sql, notes: notes, tables: reading.tables,
@@ -445,21 +446,18 @@ library gdash_ask
 
     ' --- promoting a draft into the dashboard ------------------------------
     '
-    ' THE TWO TIERS NAME TABLES DIFFERENTLY, and this is where that has to be
-    ' reconciled. The NLQ catalog attaches every dataset under its own name, so
-    ' a table is `orders.orders` -- unambiguous, which is what lets each
-    ' dataset's `_gdash_meta` be read at its own scale (G2-3). A VISUAL query
-    ' opens its named dataset directly and attaches only the SIBLINGS, so the
-    ' same table is plain `orders` and `orders.orders` would not resolve at all.
+    ' THE TWO TIERS NAME TABLES THE SAME WAY NOW. Before GDASH-20 the NLQ
+    ' catalog attached every dataset under its own name, so a generated query
+    ' said `orders.orders` where a visual query said `orders`. Every dataset is
+    ' now a bare table in one database, and the catalog names it bare.
     '
-    ' So a promoted query is requalified: the sequence `D . D` becomes `D` for
-    ' every dataset name D. `orders.orders` becomes `orders`, and
-    ' `orders.orders.amount` becomes `orders.amount` -- which is correct in the
-    ' visual form, where `orders` is a table rather than a schema. A qualified
+    ' Requalifying stays, because it costs nothing on a bare query and it is
+    ' what makes a draft written in the old `D.D` form promotable: the sequence
+    ' `D . D` becomes `D` for every dataset name D, so `orders.orders` becomes
+    ' `orders` and `orders.orders.amount` becomes `orders.amount`. A qualified
     ' column like `orders.amount` is left exactly as it is.
     '
-    ' Token-based, using the same tokenizer as the unit guard, so a dataset
-    ' name inside a string literal is not rewritten.
+    ' A dataset name inside a string literal is not rewritten.
 
     ' A character scan rather than a token rebuild: the tokenizer drops
     ' whitespace, so reassembling from tokens would return SQL that is valid
@@ -538,9 +536,9 @@ library gdash_ask
         return 0
     end function
 
-    ' Which dataset a promoted visual should open directly. Any of them works
-    ' once the query is requalified -- every other one is attached -- so this
-    ' takes THE FIRST ONE THE QUERY NAMES.
+    ' Which dataset a promoted visual names. Any of them would run -- every
+    ' sibling is a table in the same database -- so this takes THE FIRST ONE
+    ' THE QUERY NAMES, which is the one "No data yet" should be about.
     '
     ' Not the first one the GROUNDING names, which was the first attempt and
     ' was wrong: "total by region" grounds both `orders` and `regions`, because
@@ -607,7 +605,7 @@ library gdash_ask
             return { mark: "table" }
         end if
         if count(cols) = 2 then
-            if type(rows[0][cols[0]]) = "string" and type(rows[0][cols[1]]) = "number" then
+            if type(rows[0][cols[0]]) = "string" and contains(["number", "money"], type(rows[0][cols[1]])) then
                 return { mark: "bar", x: cols[0], y: cols[1] }
             end if
         end if
@@ -616,15 +614,10 @@ library gdash_ask
 
     ' --- money, one more time ----------------------------------------------
     '
-    ' A money column holds INTEGER MINOR UNITS, and an aggregate of minor units
-    ' is still minor units. A promoted `sum(amount) as total` therefore renders
-    ' 215100 where a person expects $2,151.00 -- the same failure as step 0,
-    ' arriving one step later, in the chart instead of the answer.
-    '
-    ' gdash already knows how to render it: a visual whose encoding says
-    ' `format: "currency"` is scaled by the dataset\'s own money scale. So the
-    ' only question is whether this particular output column IS money, and that
-    ' is answered NARROWLY ON PURPOSE:
+    ' A promoted `sum(amount) as total` should draw as currency. The draft's
+    ' own rows answer whether a column IS money -- G-SQL returns an aggregate
+    ' of money as money (GDASH-20) -- and when there are no rows to look at,
+    ' the query is read, NARROWLY ON PURPOSE:
     '
     '   sum(amount) as total     -> money   (an aggregate over a money column)
     '   amount as total          -> money   (the column itself)
@@ -632,7 +625,7 @@ library gdash_ask
     '   amount / 100 as dollars  -> not     (already converted; not our business)
     '
     ' Anything it cannot read this way is NOT marked, because marking a count
-    ' as currency would render 3 as $0.03 -- a wrong answer produced by the
+    ' as currency would render 3 as $3.00 -- a wrong answer produced by the
     ' machinery meant to prevent wrong answers. A miss costs one field a person
     ' adds while reviewing the draft, which they are doing anyway.
     function _aggregates()
@@ -692,8 +685,8 @@ library gdash_ask
         return false
     end function
 
-    ' `scaled` is keyed `<dataset>.<dataset>.<column>`, and a query may spell
-    ' the column any of the ways the unit guard already understands.
+    ' A query may spell a money column bare, as `<table>.<column>`, or in the
+    ' `<table>.<table>.<column>` form a pre-GDASH-20 draft carried.
     function _names_money(word, scaled)
         w = lower(trim(string(word)))
         if w = "" then
@@ -726,7 +719,7 @@ library gdash_ask
             channel = string(enc["y"])
         end if
         if channel != "" then
-            if is_money_channel(rewritten, scaled, channel) then
+            if _carries_money(draft.rows, rewritten, scaled, channel) then
                 ' AND ONLY IF THE RENDERER COULD FIND A SCALE FOR IT. Setting
                 ' `format: "currency"` on a channel whose scale cannot be
                 ' resolved produces a visual that validates, promotes, and then
@@ -797,10 +790,28 @@ library gdash_ask
         if not is_unknown(enc["format"]) then
             return ""
         end if
-        if not is_money_channel(vis.sql, draft.scaled, channel) then
+        if not _carries_money(draft.rows, vis.sql, draft.scaled, channel) then
             return ""
         end if
-        return "'" + channel + "' holds money in minor units, and this dashboard's money columns do not agree on a scale -- so it will draw as raw minor units. Alias it to the money column it comes from, or give the datasets one scale."
+        return "'" + channel + "' holds money, and this dashboard's money columns do not agree on a display scale -- so it is left unformatted rather than drawn at a guessed number of places. Alias it to the money column it comes from, or give the datasets one scale."
+    end function
+
+    ' The rows first, because they know: a value that came back as money is
+    ' money. The query is read only when there is no row to ask.
+    function _carries_money(rows, sql, scaled, channel)
+        if type(rows) = "array" and count(rows) > 0 then
+            v = rows[0][channel]
+            if not is_unknown(v) then
+                return type(v) = "money"
+            end if
+        end if
+        return is_money_channel(sql, scaled, channel)
+    end function
+
+    ' The dialect the model is told it writes. gBASIC's own SQL: values keep
+    ' their kinds, text joins with ||, and there is no RIGHT or FULL JOIN.
+    function _dialect()
+        return "G-SQL (PostgreSQL-like; text joins with ||; no RIGHT JOIN or FULL JOIN)"
     end function
 
     function _currency_of(scaled)

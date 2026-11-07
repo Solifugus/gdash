@@ -17,6 +17,7 @@
 
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$HERE/gsql_owners.sh"
 cd "$HERE/.."
 GBASIC="${GDASH_GBASIC:-$HOME/development/gbasic/gbasic}"
 # A guard that REPORTS but does not EXIT leaves the server serving, and this
@@ -146,14 +147,14 @@ done
 rm -rf "$SRC/vendor"
 
 echo "--- removing a real shadow lets gdash start again ---"
-plant "$SRC/sqlite.bas" sqlite
+plant "$SRC/gsql.bas" gsql
 RUN "$SRC/gdash_cli.bas" --root "$ROOT" list >/dev/null 2>"$SCRATCH/again1.err"
 ok "a shadow beside the modules still stops it" "$?" "2"
-rm -f "$SRC/sqlite.bas"
+rm -f "$SRC/gsql.bas"
 RUN "$SRC/gdash_cli.bas" --root "$ROOT" list >/dev/null 2>"$SCRATCH/again.err"
 ok "gdash starts once the file is gone" "$?" "0"
 
-rm -rf "$SCRATCH"
+wait_for_gsql_owners "$SCRATCH"; rm -rf "$SCRATCH"
 if [[ -e "$SCRATCH" ]]; then
     echo "SCRATCH NOT CLEAN: $SCRATCH survived removal" >&2
     exit 1

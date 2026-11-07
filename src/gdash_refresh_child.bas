@@ -1,9 +1,9 @@
 ' gdash — refresh child.
 '
 ' Runs as a separate process (design §3). Its whole job is to block: read the
-' job file, fetch from the source, write the staging file, exit. It never
-' touches the live dataset file -- the parent owns the swap -- so a child that
-' dies or hangs leaves the previous data untouched.
+' job file, fetch from the source, write the staging table, exit. It never
+' touches the live table -- the parent owns the swap -- so a child that dies
+' or hangs leaves the previous data untouched.
 '
 ' The job file carries the connection profile and is mode 0600. Credentials
 ' never appear in argv, where any user on the box could read them from ps.
@@ -67,7 +67,7 @@ program main(args)
 
     plan = gdash_store.plan_columns(got.columns, got.rows, job["columns"])
 
-    wrote = gdash_store.materialize(job["staging"], job["table"], plan, got.rows)
+    wrote = gdash_store.materialize(job["db"], job["table"], plan, got.rows)
     if not wrote.ok then
         print to error wrote.message
         exit(6)
@@ -75,8 +75,8 @@ program main(args)
 
     ' The parent compares this against the hash it recorded last time and
     ' skips the swap when nothing moved. Computed here because this is where
-    ' the fetched rows are; the parent only ever sees a staging file, and two
-    ' SQLite files with identical content are not necessarily identical bytes.
+    ' the fetched rows are; the parent only ever sees a staging table, and
+    ' comparing two tables would cost a second read of both.
     print "rows=" + string(count(got.rows))
     print "hash=" + gdash_store.content_hash(got.columns, got.rows)
     exit(0)
