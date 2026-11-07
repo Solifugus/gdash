@@ -89,7 +89,7 @@ fixture declared a yen column with no currency and formatted it as JPY. That
 was silently wrong before, and it is refused now. The fixture now declares
 JPY. The reference treasury record already did.
 
-## G20-6 — G-SQL dialect gaps an author meets first — *asked* (A5)
+## G20-6 — G-SQL dialect gaps an author meets first — *fixed by the platform* (A5, gbasic `0424a49`)
 
 These are refused by G-SQL, and SQLite and PostgreSQL both accept them:
 
@@ -102,6 +102,12 @@ group by period`. Two suites were rewritten with a `CASE` in a derived table,
 which suits a fixture and not real data. Nothing in the reference records used
 any of these, so the corpus ran unchanged (S0-2). Authors' own SQL will hit
 them, and so will SQL from a model.
+
+After the maintainer's ruling on spellings, gbasic `0424a49` added
+`substring(x, start [, length])`, `extract(part FROM value)`, and `GROUP BY`
+by position or alias. Both rewritten tests went back to the natural SQL. On
+the old builds `GROUP BY 1` grouped by the constant 1 and blamed the select
+list; that was fixed in the same change.
 
 ## G20-7 — `WITH RECURSIVE` past a million rounds is refused — *noted*
 
@@ -164,6 +170,22 @@ was given for the parameter $1". `test_store` caught it.
   (`gdash_record`, `gdash_app`, `run_e2e.sh`). Splitting them would have meant
   staging by hunk, which this environment cannot do interactively. The commit
   message lists the parts.
+
+## G20-15 — a concurrent-render request that is never answered, intermittently — *open*
+
+`run_workers.sh` "eight concurrent renders all succeed" failed twice in about
+a dozen runs. Four of the eight `curl`s got no response within 20 s (`000`),
+and the server log showed no error. It happened on `132bf50` and on
+`0424a49`, so it is not caused by the change being tested. It did not
+reproduce in six further runs, three with `GDASH_GSQL_LINGER=0` and three
+with 5. Whether it existed on SQLite is unknown: the suite's runs before the
+migration did not show it, but they were too few to say.
+
+One plausible mechanism, not shown: eight pages each make several store
+calls, each with its own connection, so owner start and stop under
+concurrency could exhaust a request's time. The next step is to log each
+store call's connect time in the workers suite and catch a failure with it.
+Until then, a red workers run is worth one re-run before it is believed.
 
 ## G20-14 — the bulk insert (A3) is adopted, and the rest of a refresh is gdash's own cost — *noted*
 

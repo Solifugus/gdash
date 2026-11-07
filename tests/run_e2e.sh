@@ -773,23 +773,21 @@ base = json.load(open('dashboards/sales/draft.json'))
 d = {"format": 1, "name": "charts", "title": "Every mark", "access": "open",
      "datasets": {"orders": base["datasets"]["orders"]},
      "params": {}, "controls": {}, "visuals": {}, "tabs": []}
-# A numeric period from a derived table: G-SQL has no substring function and
-# groups neither by an output alias nor by position (GDASH-20 ask A5).
-src = ("(select case when month = '2026-01' then 1 when month = '2026-02' then 2 else 3 end as period, "
-       "region, amount from orders) t")
+# substring and GROUP BY an output alias since gbasic 0424a49 (GDASH-20 ask A5).
+period = "cast(substring(month, 6, 2) as integer)"
 d["visuals"]["trend"] = {
     "dataset": "orders",
-    "sql": f"select period, sum(amount) as total from {src} group by period order by period",
+    "sql": f"select {period} as period, sum(amount) as total from orders group by period order by period",
     "encoding": {"mark": "line", "x": "period", "y": "total",
                  "title": "Trend", "x_label": "Month", "y_label": "Revenue"}}
 d["visuals"]["band"] = {
     "dataset": "orders",
-    "sql": f"select period, region, sum(amount) as total "
-           f"from {src} group by period, region order by period, region",
+    "sql": f"select {period} as period, region as region, sum(amount) as total "
+           f"from orders group by period, region order by period, region",
     "encoding": {"mark": "area", "x": "period", "y": "total", "series": "region", "stacked": True}}
 d["visuals"]["points"] = {
     "dataset": "orders",
-    "sql": f"select period, sum(amount) as total from {src} group by period order by period",
+    "sql": f"select {period} as period, sum(amount) as total from orders group by period order by period",
     "encoding": {"mark": "scatter", "x": "period", "y": "total", "grid": False}}
 d["visuals"]["share"] = {
     "dataset": "orders",

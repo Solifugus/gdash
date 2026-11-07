@@ -30,10 +30,9 @@ program main(args)
     s = gdash_test.ok(s, count(split(frag, "<rect")) - 1 > 1, "with a bar per series value, not an empty frame")
 
     ' A line needs a numeric x, and draws a path when it has one.
-    ' A numeric x from a CASE in a derived table: G-SQL has no substring
-    ' function, and groups neither by an output alias nor by position (asked
-    ' of the platform, GDASH-20 ask A5). The point here is the numeric x.
-    nq = "select period, sum(amount) as total from (select case when month = '2026-01' then 1 when month = '2026-02' then 2 else 3 end as period, amount from orders) t group by period order by period"
+    ' substring and GROUP BY an output alias since gbasic 0424a49 (GDASH-20
+    ' ask A5); until then this was a CASE in a derived table.
+    nq = "select cast(substring(month, 6, 2) as integer) as period, sum(amount) as total from orders group by period order by period"
     nv = { dataset: "orders", sql: nq, encoding: { mark: "line", x: "period", y: "total", format: "currency" } }
     nres = gdash_store.select_rows(live, nq, {})
     nfrag = gdash_render.render_visual("trend_num", nv, nres.rows, live, {})

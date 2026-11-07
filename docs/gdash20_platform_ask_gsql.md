@@ -57,7 +57,7 @@ process.
    hermetic suite's sockets inside its temp root, where today they land in
    the developer's `/run/user/<uid>`.
 
-## A2. Describing a query without running it, and a table's columns. *Medium.*
+## A2. Describing a query without running it, and a table's columns. **Done: gbasic `3250863`** (`db.columns(sql)`). Not adopted yet: using it for channel validation is a ruling owed. *Was: medium.*
 
 This is the `sqlite.columns(db, sql)` ask from gdash's design §9, carried over
 to the new engine:
@@ -94,7 +94,7 @@ refresh mostly the source query's time. It would also give every CSV and
 spreadsheet loader in gBASIC the same path. That loader path is new since
 45f9fe7 ("G-SQL loading"), so it may already be part of this.
 
-## A4. Knowing when an owner has finished. *Low.*
+## A4. Knowing when an owner has finished. **Done: gbasic `219ec73`** (`close({ wait })`) and `0424a49` (`gsql.wait_for_owner(path, seconds)`). The second is the one the suite's scratch-clean uses. *Was: low.*
 
 After a 10⁶-row load with `linger: 0`, the program exited and its database
 directory could not be removed for a moment: the owner was still writing a
@@ -106,7 +106,7 @@ supported form would be better, for example `db.close({ wait: true })` that
 returns once an owner stopping at this close has exited, or a way to ask
 whether a path has a live owner.
 
-## A5. The dialect gaps an author meets first. *Medium.* (Added during the build, 2026-11-06.)
+## A5. The dialect gaps an author meets first. **Done: gbasic `0424a49`**, after the maintainer's ruling on spellings: `substring(x, start [, length])`, `extract(part FROM value)`, and `GROUP BY` by position or alias. *Was: medium.* (Added during the build, 2026-11-06.)
 
 Converting gdash's own tests turned these up. Each is something a dashboard
 author coming from SQLite or PostgreSQL writes without thinking, and something

@@ -7,36 +7,22 @@
 # an owner is still writing into it is not clean -- the owner recreates files
 # in it, or the removal fails.
 #
-# So scratch-clean first WAITS, with a bound, for owners serving a path under
-# the scratch tree, and fails naming them if any remain. It never signals one:
-# the match is on the owner's argv, which names the database path gdash gave
-# it, and a process this run did not start is not this run's to stop (the
-# discipline of e5b1a39). Until the platform's own wait lands (ask A4), the
-# process table is the only place this can be read.
+# So scratch-clean first WAITS, with a bound, until no owner holds a database
+# under the scratch tree, and fails naming any that still do. It asks the
+# store's own lock through gsql.wait_for_owner (tests/wait_owners.bas), which
+# needs no process table and signals nothing: a process this run did not start
+# is not this run's to stop (the discipline of e5b1a39). Until gbasic 0424a49
+# this matched owners' argv in /proc.
 
 export GDASH_GSQL_LINGER="${GDASH_GSQL_LINGER:-0}"
+GSQL_OWNERS_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# PIDs of owners whose argv names a path under $1.
-gsql_owners_under(){
-    local dir="$1" pid
-    for pid in $(pgrep -f -- '--gsql-owner' 2>/dev/null); do
-        if tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -qF -- "$dir/"; then
-            echo "$pid"
-        fi
-    done
-}
-
-# Wait up to $2 seconds (default 15) for every owner under $1 to exit.
+# Wait up to $2 seconds (default 15) until no owner holds a database under $1.
 wait_for_gsql_owners(){
-    local dir="$1" limit="${2:-15}" tries=0 left
-    while :; do
-        left="$(gsql_owners_under "$dir")"
-        [[ -z "$left" ]] && return 0
-        if (( tries >= limit * 10 )); then
-            echo "SCRATCH NOT CLEAN: G-SQL owners still serving $dir after ${limit}s: $(echo $left)" >&2
-            return 1
-        fi
-        sleep 0.1
-        tries=$((tries + 1))
-    done
+    local dir="$1" limit="${2:-15}" gb="${GDASH_GBASIC:-${GBASIC:-$HOME/development/gbasic/gbasic}}"
+    if ! "$gb" "$GSQL_OWNERS_HERE/wait_owners.bas" "$dir" "$limit"; then
+        echo "SCRATCH NOT CLEAN: G-SQL owners still hold databases under $dir after ${limit}s" >&2
+        return 1
+    fi
+    return 0
 }

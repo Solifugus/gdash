@@ -183,12 +183,17 @@ their gBASIC kinds: money is money, and an integer is exact. A plain number or
 a text literal compared with a typed column is read as that column's kind, so
 `amount > 1000` means USD 1000 and `day >= '2026-10-01'` compares dates; kinds
 that do not compare (a date and a number, dollars and yen) are refused, and so
-is arithmetic across currencies. Text joins with `||`. As of GDASH-20 the
-function list is short — `coalesce`, `nullif`, `lower`, `upper`, `length`,
-`char_length`, `abs`, `round`, `trim`, `mod` — so there is no `substr`, and
-`GROUP BY` names a column or repeats an expression, not an output alias or a
-position. A derived table is the portable way round both (asked of the
-platform, `gdash20_platform_ask_gsql.md` A5).
+is arithmetic across currencies. Text joins with `||`. Each of these has one
+spelling:
+
+- `substring(x, start [, length])`, counting characters from 1; there is no
+  `substr` and no `FROM … FOR` form.
+- `extract(part FROM value)`, where `part` is `year`, `quarter`, `month`,
+  `week` (ISO), `day`, `hour`, `minute` or `second`.
+- `GROUP BY` takes a position (`group by 1`) or an output alias. A name that
+  is also a column means the column, as in PostgreSQL.
+
+These need gBASIC `0424a49` or later.
 
 | key | required | meaning |
 |---|---|---|
