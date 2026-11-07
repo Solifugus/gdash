@@ -442,6 +442,8 @@ whose usefulness depends on how much history the published cache holds.
 **Not verified by a dedicated test:** drill to detail. It relies on
 click-to-publish and param binding, each of which is tested on its own.
 
-**Owed to the platform:** A7. Text with a non-midnight time stored into a
-`date` column has its time silently dropped, against gbasic's own conversion
-design. gbasic has noted it.
+**A7, done by the platform (gbasic `c9be074e`).** Text with a non-midnight
+time stored into a `date` column is now refused (`TYPE`), where it used to
+lose its time silently. `test_store` pins it through the store: a
+datetime-shaped source value fails the refresh and says why, and midnight is
+stored. The test fails on `0424a49` and passes on `c9be074e`.

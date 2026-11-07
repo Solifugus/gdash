@@ -119,6 +119,16 @@ program main(args)
     s = gdash_test.eq(s, string(gdash_store.bounds(db, "daily", "day").hi), "2026-03-28", "nor disturbs the live coverage")
     bogus = gdash_store.materialize(db, "daily", dplan, [["2026-02-30", "1.00"]])
     s = gdash_test.ok(s, not bogus.ok, "an impossible date is refused too")
+    ' A time of day other than midnight would be lost by a date, so it is
+    ' refused rather than truncated -- rejected, not coerced (gbasic c9be074e,
+    ' GDASH-20 ask A7). A datetime source feeding a column declared `date`
+    ' fails its refresh; midnight is a date written long.
+    timed = gdash_store.materialize(db, "daily", dplan, [["2026-01-15T10:00", "1.00"]])
+    s = gdash_test.ok(s, not timed.ok, "a date with a time of day fails the materialize, not silently truncated")
+    s = gdash_test.contains_text(s, timed.message, "time of day", "and says why")
+    midnight = gdash_store.materialize(db, "daily", dplan, [["2026-01-15T00:00", "1.00"]])
+    s = gdash_test.ok(s, midnight.ok, "midnight is a date, and is stored -- " + midnight.message)
+    tidy = gdash_store.discard_staging(db, "daily")
     emptyd = gdash_store.materialize(db, "nodays", dplan, [])
     esw = gdash_store.swap(db, "nodays")
     eb = gdash_store.bounds(db, "nodays", "day")

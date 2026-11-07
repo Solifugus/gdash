@@ -131,8 +131,10 @@ them. A code it does not define is refused rather than rendered as dollars.
 ### Date columns
 
 `{ "type": "date" }` materializes as a native date. The source must send
-ISO-8601 (`2026-01-15`); anything else (`01/15/2026`, an impossible
-`2026-02-30`) fails the refresh, naming the column, and the old data stays.
+ISO-8601 (`2026-01-15`). Anything else fails the refresh, naming the column,
+and the old data stays. That includes `01/15/2026`, an impossible
+`2026-02-30`, and a time of day other than midnight (`2026-01-15T10:00`),
+which a date would lose.
 That is the same "rejected, not coerced" stance as money. A date compares
 with a date param, or with a date written as text (`day >= '2026-01-20'`).
 Take parts of it with `extract(month from day)`, not `substring`. Its first
