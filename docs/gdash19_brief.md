@@ -1,6 +1,8 @@
 # GDASH-19 — Controls
 
-**Status:** brief written, **step 0 complete, nothing blocked**. Not started.
+**Status:** step 0 complete; **re-read against G-SQL and built under the
+2026-11-07 rulings below** (GDASH-20 moved the store; this phase was held for
+it).
 **Independent of GDASH-15 … 18** (multi-tenancy) and may be taken before them:
 it touches the record format, the renderer and the shim, and nothing the tenancy
 work touches. Numbered after them to avoid renumbering three documents, not to
@@ -231,6 +233,39 @@ the source of truth. What that moment *should* do is check: `gdash validate`
 confirms a date control names a column declared `date`, and reports the current
 coverage to the author as information. Feedback, not state.
 
+## Re-read against G-SQL (2026-11-07)
+
+Two of the 2026-09-30 decisions were made for SQLite, and both change:
+
+- **Ruled 2026-11-07, reversing "`date` does NOT change the stored form": a
+  column declared `{"type": "date"}` is a native G-SQL `date`.** The
+  maintainer's words: "let's not be held by the limitations of something we
+  are moving away from." Measured first, on the installed build:
+  - the engine refuses `01/15/2026`, `15/01/2026`, `2026-1-5`, `2026-02-30`,
+    `Jan 15 2026`, `20260115` and padded text. So the ISO check, and the
+    "rejected, not coerced" stance, come from the engine, and gdash needs no
+    date parser;
+  - comparing with a text literal or a typed date param works;
+  - `extract(month from day)` works, and the kind is reported as `date`;
+  - charts draw over a date x-axis.
+
+  The one gap is that text with a non-midnight time (`2026-01-15T10:00`) is
+  stored with its time silently dropped. That contradicts gbasic's own
+  conversion design, which says the column refuses it; asked as A7. The cost
+  for authors: `substring(day, …)` no longer works on a declared date column,
+  so write `extract`.
+- **Bounds go in `_gdash_bounds(dataset, column_name, lo, hi)`.** It is still
+  a sibling table, and it gains a `dataset` column because every dataset now
+  shares one database. "A dataset with no bounds row says coverage unknown"
+  stands.
+
+**Found while re-reading: the page did not keep its params.** The shim posted
+only the param that changed, and the server filled every other param from its
+default. With one control nobody could tell. With a date range beside a
+multi-select, changing one control would silently reset the other. The page
+now holds every current value, sends them all, and keeps them in the URL, so
+a bookmark carries a relative range as an expression, as Scope §1 requires.
+
 ## Scope
 
 ### 1. A date range — the one real gap, and the reason for the phase
@@ -347,3 +382,66 @@ the maintainer's to overrule.
 It also interacts with an open ruling already on the list: whether publish
 carries the draft's data across (G11-11). A date range is the first control
 whose usefulness depends on how much history the published cache holds.
+
+## DONE note (2026-11-07)
+
+**Built.**
+
+- **`{"type": "date"}` columns** are native G-SQL dates, as ruled 2026-11-07.
+  A non-ISO or impossible date fails the refresh, naming the column, and
+  leaves the old data in place.
+- **Coverage is recorded at import.** Each date column's first and last day
+  goes into `_gdash_bounds`, moved by the same transaction as the swap.
+  `gdash_store.bounds` answers `{ known, lo, hi }`, so "unknown" and "covers
+  nothing" are different answers.
+- **A declared column type gdash does not implement is refused by name**
+  (S0-8).
+- **`daterange` control** (`gdash_controls`):
+  - the closed vocabulary, resolved per request against an injectable today;
+  - `custom` keeps its own dates;
+  - validated at load: default expression, `from`/`to` declared `date`,
+    column declared `date`;
+  - an unknown expression at request time is a 400.
+- **The hazard is closed:** the control prints "data covers X to Y" and flags
+  a range that starts before the data, ends after it, is wider than it, or
+  misses it entirely.
+- **`multiselect` control** on the `|a|b|` convention. A list's default must
+  be list-shaped, and a malformed list at request time is a 400. An option
+  containing the delimiter is left out and counted, never silently dropped.
+- **The page keeps its params** (found while re-reading):
+  - every change sends the whole state plus `_changed`;
+  - only the visuals binding what changed re-render;
+  - a date range's expression moving counts as its two dates moving;
+  - the controls whose param moved re-render too, so the coverage note
+    follows the range;
+  - the URL is updated, so a bookmark carries the expression.
+
+  The params JSON is escaped on its way into the `<script>` (a test pins it
+  against `</script>` in a param).
+- **Reset** is a link to the bare path.
+- **Drill to detail** is documented as a pattern: `publishes` on a chart, and
+  a table binding the same param. Hierarchical drill is refused by name, as
+  ruled.
+
+**Verified.**
+
+- `test_controls` (38): every expression at an injected clock, the year and
+  leap-February edges, the bookmark property at two clocks, lists, and the
+  load-time refusals.
+- `test_store` additions: date storage, refusals, bounds through a swap,
+  empty and unknown coverage.
+- `test_record`: the S0-8 refusal.
+- `test_app`: script escaping of the page's params.
+- An e2e section over HTTP:
+  - a custom range re-renders only the date-bound visual, with the right sum;
+  - a multi-select re-renders only its own visual;
+  - the coverage note follows the range;
+  - a bookmark renders the same figure;
+  - a bad expression and a malformed list are refused (400).
+
+**Not verified by a dedicated test:** drill to detail. It relies on
+click-to-publish and param binding, each of which is tested on its own.
+
+**Owed to the platform:** A7. Text with a non-midnight time stored into a
+`date` column has its time silently dropped, against gbasic's own conversion
+design. gbasic has noted it.

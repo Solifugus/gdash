@@ -295,7 +295,17 @@ onboarding service to drive. Named here so that "the CLI is the API" stays a
 decision rather than a constraint discovered later. The onboarding site itself
 is a separate product and is not gdash's to build.
 
-## GDASH-19 — Controls  *(brief: gdash19_brief.md; step 0 complete)*
+## GDASH-19 — Controls  *(brief: gdash19_brief.md; built 2026-11-07, at review)*
+
+**Built after GDASH-20 and 21, under the 2026-11-07 ruling that declared
+dates are native G-SQL dates.**
+
+- a date range over a closed vocabulary, with coverage shown and flagged;
+- a multi-select on `|a|b|`;
+- reset;
+- the page keeping its params in the URL. Re-reading the brief found that the
+  page had not kept them: each change reset every other param to its default.
+
 
 **Independent of GDASH-15 … 18 and may be taken before them.** It touches the
 record format, the renderer and the shim; the tenancy phases touch the resolver,

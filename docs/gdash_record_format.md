@@ -37,7 +37,7 @@ are the store's own tables.
 | `refresh` | no | `manual` (default), `on_open`, or `interval`. |
 | `every` | with `interval` | Seconds between refreshes. A whole number, at least 1. Refused with any other policy. |
 | `min_age` | `on_open` only | Seconds. Suppresses the request while the data is younger than this. Refused with any other policy. |
-| `columns` | no | Column name → `{ type, scale, currency }`. |
+| `columns` | no | Column name → `{ type, … }`. `type` is `money` (with `scale`, `currency`) or `date`; any other type is refused by name. |
 
 **Params may not appear in a dataset query.** A param there would make a slicer
 change re-fetch from the source, silently reintroducing pass-through cost
@@ -128,6 +128,17 @@ old data stays. A `scale` larger than the currency stores is refused at load.
 `currency` defaults to `USD` and must be a code ISO 4217 defines — all 178 of
 them. A code it does not define is refused rather than rendered as dollars.
 
+### Date columns
+
+`{ "type": "date" }` materializes as a native date. The source must send
+ISO-8601 (`2026-01-15`); anything else (`01/15/2026`, an impossible
+`2026-02-30`) fails the refresh, naming the column, and the old data stays.
+That is the same "rejected, not coerced" stance as money. A date compares
+with a date param, or with a date written as text (`day >= '2026-01-20'`).
+Take parts of it with `extract(month from day)`, not `substring`. Its first
+and last day are recorded at every refresh as the dataset's coverage, which a
+`daterange` control shows.
+
 Undeclared columns are inferred from the fetched rows: integer-looking →
 `integer` (exact past 2^53), numeric → `number`, else `string`.
 
@@ -154,8 +165,66 @@ Controls publish a param:
 }
 ```
 
-`kind` is `select` in this build. A control's `sql` runs against its dataset;
-the **first result column** supplies the option values.
+A control's `sql` runs against its dataset; the **first result column**
+supplies the option values. There are three kinds.
+
+**`select`** publishes one value, as above.
+
+**`multiselect`** publishes a **list written `|a|b|`**, with delimiters at
+both ends. `||` means none chosen. A query tests membership with the
+delimiters on both sides of the column:
+
+```sql
+where :regions = '||' or :regions like '%|' || region || '|%'
+```
+
+The delimiters are load-bearing. `|west|` must not match `northwest`, and
+without the leading `|` it would. The first clause makes "none chosen" mean
+"all"; leave it out if none should mean none. A list's default must be
+`|…|`-shaped, and an option whose value itself contains `|` cannot be offered
+(the control says how many were left out). It is the same convention
+`user_groups` uses.
+
+**`daterange`** publishes an **expression**, and gdash turns it into two
+dates on every request:
+
+```json
+"params":   { "period": { "default": "last_30d" },
+              "since":  { "default": "2026-01-01", "type": "date" },
+              "until":  { "default": "2026-12-31", "type": "date" } },
+"controls": { "when": { "kind": "daterange", "param": "period",
+                        "from": "since", "to": "until",
+                        "dataset": "orders", "column": "day" } }
+```
+
+- **The vocabulary is closed:** `today`, `last_7d`, `last_30d`, `last_90d`,
+  `mtd`, `qtd`, `ytd`, `last_month`, `last_quarter`, `last_year` and `custom`.
+  An unknown expression is refused at load and at request time.
+- **The SQL binds the two dates**, `where day >= :since and day <= :until`,
+  and both bounds are inclusive.
+- **A relative expression is resolved per request, against today.** A
+  bookmark holds `last_30d`, not the dates it meant when it was saved.
+- **`custom` uses the two date params as given**, and a bookmark carries them.
+- **Both date params must be declared with `type: date`,** and `column` must
+  be declared `{"type": "date"}` in its dataset.
+
+**The control shows what the data covers.** It prints "data covers X to Y",
+from the date column's coverage recorded at the dataset's last refresh, and
+**flags a range that reaches outside it**. A range past the imported data
+would otherwise draw an empty chart that reads as "nothing happened" rather
+than "this was not imported". A dataset refreshed before coverage was
+recorded says "coverage unknown".
+
+**The page keeps its params, and the URL carries them.** Every change sends
+the page's whole state, and the address bar is updated, so a bookmark reopens
+the same view. **Reset** is a link to the bare path, which is every control at
+its default.
+
+**Drill to detail is a pattern, not a feature.** Give a chart
+`"publishes": "<param>"`, and add a `table` visual whose query binds the same
+param. A click on a bar then fills the table with that bar's rows. A drill
+through levels (region, then country, then city, with breadcrumbs) is
+deliberately not built (GDASH-19 brief).
 
 **A query may not write its own positional placeholder.** gdash rewrites every
 `:name` into `$1`, `$2`, … itself, so a hand-written `$1` would silently take
@@ -737,7 +806,7 @@ visual is not an object
   ERROR visual 'v1' has no 'encoding'
 control is not an object
   ERROR control 'c1' must be an object
-  ERROR control 'c1' has kind 'unknown'; this build implements 'select'
+  ERROR control 'c1' has kind 'unknown'; this build implements select, multiselect, daterange
   ERROR control 'c1' has no 'param'
 tab is not an object
   ERROR tab[0] must be an object
@@ -858,7 +927,7 @@ formats unknown name
 visual currency unsupported
   ERROR visual 'v1' names currency 'XYZ', which this build does not support
 control kind
-  ERROR control 'c1' has kind 'radio'; this build implements 'select'
+  ERROR control 'c1' has kind 'radio'; this build implements select, multiselect, daterange
 control param missing
   ERROR control 'c1' has no 'param'
 control param undeclared

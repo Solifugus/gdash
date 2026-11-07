@@ -138,6 +138,13 @@ program main(args)
     s = gdash_test.ok(s, not contains(wv, "'d1.a' has scale"), "USD at scale 6 is within what USD stores")
     s = gdash_test.contains_text(s, wv, "JPY stores only 4 decimal places", "JPY at scale 5 is refused, naming the limit")
 
+    ' A declared column type gdash does not implement is refused by name
+    ' (GDASH-19 S0-8), where it used to be silently dropped.
+    ctyp = { format: 1, name: "b", datasets: { d1: { profile: "p", sql: "select 1", columns: { day: { type: "date" }, when: { type: "timestamp" } } } }, params: {}, visuals: {}, tabs: [{ layout: { vert: [] } }] }
+    cv = join(gdash_record.validate(ctyp), "|")
+    s = gdash_test.contains_text(s, cv, "column 'd1.when' has type 'timestamp'; the column types are money and date", "an unimplemented column type is refused by name")
+    s = gdash_test.ok(s, not contains(cv, "d1.day"), "and date is implemented")
+
     ' --- typed params (D3) ---
     typed = { format: 1, name: "b", access: "open", datasets: { d1: { profile: "p", sql: "select 1" } },
               params: { since: { default: "2026-01-01", type: "date" }, min: { default: "10", type: "integer" },

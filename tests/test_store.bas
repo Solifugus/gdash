@@ -96,6 +96,34 @@ program main(args)
     empty = gdash_store.materialize(exact_db, "ledger", xplan, [[""]])
     s = gdash_test.ok(s, not empty.ok, "an empty string is not an amount")
 
+    ' --- native dates, and their coverage (GDASH-19) ---
+    dcols = ["day", "amount"]
+    drows = [["2026-01-15", "1.00"], ["2026-03-28", "2.00"], ["2026-02-01", "3.00"]]
+    dplan = gdash_store.plan_columns(dcols, drows, { day: { type: "date" }, amount: { type: "money", scale: 2 } })
+    s = gdash_test.eq(s, dplan[0].kind, "date", "a declared date column is planned as a date")
+    dm = gdash_store.materialize(db, "daily", dplan, drows)
+    s = gdash_test.ok(s, dm.ok, "a date column materializes -- " + dm.message)
+    s = gdash_test.ok(s, not gdash_store.bounds(db, "daily", "day").known, "staged bounds are not live bounds")
+    dsw = gdash_store.swap(db, "daily")
+    bd = gdash_store.bounds(db, "daily", "day")
+    s = gdash_test.ok(s, bd.known, "after the swap the coverage is known")
+    s = gdash_test.eq(s, string(bd.lo) + ".." + string(bd.hi), "2026-01-15..2026-03-28", "and is the data's own first and last day")
+    s = gdash_test.eq(s, type(bd.lo), "datetime", "as date values, not text")
+    rng = gdash_store.select_rows(db, "select count(*) as n from daily where day >= :since", { since: "2026-02-01" })
+    s = gdash_test.eq(s, rng.rows[0].n, 2, "a date column compares with a date written as text")
+    s = gdash_test.ok(s, not gdash_store.bounds(db, "orders", "day").known, "a dataset with no date column has no coverage to report")
+    usdate = gdash_store.materialize(db, "daily", dplan, [["01/15/2026", "1.00"]])
+    s = gdash_test.ok(s, not usdate.ok, "a date that is not ISO-8601 fails the materialize -- rejected, not coerced")
+    s = gdash_test.contains_text(s, usdate.message, "day", "naming the column")
+    s = gdash_test.ok(s, not gdash_store.has_staging(db, "daily"), "and leaves no staging table")
+    s = gdash_test.eq(s, string(gdash_store.bounds(db, "daily", "day").hi), "2026-03-28", "nor disturbs the live coverage")
+    bogus = gdash_store.materialize(db, "daily", dplan, [["2026-02-30", "1.00"]])
+    s = gdash_test.ok(s, not bogus.ok, "an impossible date is refused too")
+    emptyd = gdash_store.materialize(db, "nodays", dplan, [])
+    esw = gdash_store.swap(db, "nodays")
+    eb = gdash_store.bounds(db, "nodays", "day")
+    s = gdash_test.ok(s, eb.known and is_unknown(eb.lo), "an empty dataset's coverage is known to be nothing, not unknown")
+
     ' --- integers past 2^53 cross no boundary ---
     iplan = gdash_store.plan_columns(["id"], [["9007199254740993"]], {})
     s = gdash_test.eq(s, iplan[0].kind, "integer", "a big id is inferred integer")
@@ -193,7 +221,7 @@ program main(args)
     ' --- describe: gdash's own account of what it wrote ---
     d = gdash_store.describe_datasets(db)
     s = gdash_test.ok(s, d.ok, "describe answers")
-    s = gdash_test.eq(s, string(sort(keys(d.datasets))), string(["ids", "orders", "regions"]), "every live dataset, and no staging table")
+    s = gdash_test.eq(s, string(sort(keys(d.datasets))), string(["daily", "ids", "nodays", "orders", "regions"]), "every live dataset, and no staging table")
     s = gdash_test.eq(s, d.datasets["orders"].columns[2].currency, "USD", "with each money column's currency")
     s = gdash_test.eq(s, string(gdash_store.sample_column(db, "regions", "label", 5)), string(["West", "East"]), "a column's values sampled")
 

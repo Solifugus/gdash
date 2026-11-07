@@ -178,7 +178,7 @@ program main(args)
     ' contains, so a page assertion about it passes for the wrong reason and
     ' the assertion audit refuses it -- correctly, even though the furniture is
     ' exactly what was meant.
-    shim = gdash_app._shim(3, "0007.json")
+    shim = gdash_app._shim(3, "0007.json", {})
     s = gdash_test.contains_text(s, shim, "function gdashPublish(", "there is one publish path")
     s = gdash_test.contains_text(s, shim, "gdashPublish(el.getAttribute('data-param'),el.value)", "a slicer goes through it")
     s = gdash_test.contains_text(s, shim, "closest('[data-publishes]')", "and so does a click on a keyed mark")
@@ -243,9 +243,15 @@ program main(args)
     ' A value on its way into a <script> element. JSON quoting alone does not
     ' escape angle brackets, and `</script>` inside a JS string literal ends
     ' the element regardless of the quoting around it.
-    hostile = gdash_app._shim(1, "</script><script>alert(1)</script>")
+    hostile = gdash_app._shim(1, "</script><script>alert(1)</script>", {})
     s = gdash_test.ok(s, not contains(hostile, "</script>"), "no embedded value can close the script element")
     s = gdash_test.contains_text(s, hostile, "\\u003c/script", "the bracket is spelled as an escape instead")
+
+    ' The page's own params are a viewer's query string on its way into the
+    ' same <script> (GDASH-19), and get the same treatment.
+    hostp = gdash_app._shim(1, "0001.json", { region: "</script><script>alert(1)</script>" })
+    s = gdash_test.ok(s, not contains(hostp, "</script>"), "no param value can close the script element")
+    s = gdash_test.contains_text(s, hostp, "var gdashParams=", "the page holds its params")
 
     ' --- the version endpoint is as closed as the page --------------------
     s = gdash_test.eq(s, status_of(gdash_app.version_of(req_for("/d/open/version", no_cookies(), {}), "open")), 200, "an open dashboard reports its version to a stranger")

@@ -10,6 +10,7 @@ library gdash_app
     load gdash_record from "gdash_record.bas"
     load gdash_store from "gdash_store.bas"
     load gdash_render from "gdash_render.bas"
+    load gdash_controls from "gdash_controls.bas"
     load gdash_format from "gdash_format.bas"
     load gdash_refresh from "gdash_refresh.bas"
     load gdash_sched from "gdash_sched.bas"
@@ -357,6 +358,11 @@ library gdash_app
 
     function _control_fragment(p, name, mode, rec, ctl_name, values)
         c = rec["controls"][ctl_name]
+        kind = string(default(c["kind"], "select"))
+        if kind = "daterange" then
+            bounds = gdash_store.bounds(gdash_paths.stage_db(p, name, mode), string(c["dataset"]), string(c["column"]))
+            return gdash_render.render_daterange(ctl_name, c, values, bounds)
+        end if
         opts = []
         if not is_unknown(c["sql"]) then
             db = gdash_paths.stage_db(p, name, mode)
@@ -373,7 +379,52 @@ library gdash_app
                 end if
             end if
         end if
+        if kind = "multiselect" then
+            return gdash_render.render_multiselect(ctl_name, c, opts, values[c["param"]])
+        end if
         return gdash_render.render_control(ctl_name, c, opts, values[c["param"]])
+    end function
+
+    ' Params for a request: refused by name if any does not convert or a
+    ' control refuses it, then resolved, then each date range's expression
+    ' turned into its two dates for today (GDASH-19). { ok, values, errors }
+    function _values_for(rec, supplied, identity)
+        bad = concat(gdash_record.param_errors(rec, supplied), gdash_controls.control_param_errors(rec, supplied))
+        if count(bad) > 0 then
+            return { ok: false, values: {}, errors: bad }
+        end if
+        values = gdash_record.resolve_params(rec, supplied, identity)
+        values = gdash_controls.apply_ranges(rec, values, gdash_controls.today())
+        return { ok: true, values: values, errors: [] }
+    end function
+
+    ' The params the PAGE holds, as text: every declared param but the
+    ' reserved ones, and a date range's two dates only when it is `custom` --
+    ' otherwise the expression is the state, and a bookmark carries the
+    ' expression rather than the dates it meant on the day it was saved.
+    function _page_params(rec, values)
+        out = {}
+        params = rec["params"]
+        if type(params) != "record" then
+            return out
+        end if
+        derived = []
+        controls = rec["controls"]
+        if type(controls) = "record" then
+            for each cn in keys(controls)
+                c = controls[cn]
+                if string(default(c["kind"], "")) = "daterange" and string(default(values[string(c["param"])], "")) != "custom" then
+                    derived = append(derived, string(c["from"]))
+                    derived = append(derived, string(c["to"]))
+                end if
+            next
+        end if
+        for each pn in keys(params)
+            if not gdash_record.is_reserved(pn) and not contains(derived, pn) and not is_unknown(values[pn]) then
+                out[pn] = string(values[pn])
+            end if
+        next
+        return out
     end function
 
     function _space_css(sp)
@@ -421,7 +472,7 @@ library gdash_app
             return "<div class=" + chr(34) + "gdash-cell" + chr(34) + " style=" + chr(34) + _child_style(node) + chr(34) + " data-visual=" + chr(34) + vn + chr(34) + ">" + _visual_fragment(p, name, mode, rec, vn, values, theme) + "</div>"
         end if
         if not is_unknown(node["control"]) then
-            return "<div class=" + chr(34) + "gdash-cell" + chr(34) + " style=" + chr(34) + _child_style(node) + chr(34) + ">" + _control_fragment(p, name, mode, rec, node["control"], values) + "</div>"
+            return "<div class=" + chr(34) + "gdash-cell" + chr(34) + " style=" + chr(34) + _child_style(node) + chr(34) + " data-control=" + chr(34) + gdash_render.html_escape(node["control"]) + chr(34) + ">" + _control_fragment(p, name, mode, rec, node["control"], values) + "</div>"
         end if
         return ""
     end function
@@ -526,20 +577,43 @@ library gdash_app
     ' learned on the first poll: a refresh that lands in the second between
     ' rendering the page and the browser's first poll would otherwise be
     ' invisible until the next one after that.
-    function _shim(v, pub)
+    function _shim(v, pub, params)
         q = chr(34)
         js = ""
-        ' ONE publish path, two ways in. A slicer and a click on a bar mean the
-        ' same thing -- "filter by this value" -- and routing them through one
-        ' function is what keeps a click from becoming a second, subtly
-        ' different way to change a param.
-        js = js + "function gdashPublish(name,value){"
-        js = js + "var b={};b[name]=value;"
+        ' THE PAGE HOLDS ITS PARAMS (GDASH-19). Every value travels with every
+        ' change, and the URL keeps them, so a bookmark reopens the same view.
+        ' Until GDASH-19 a change sent only the one param, and the server took
+        ' every other from its default -- invisible with one control, and a
+        ' silent reset of the others with two. `_changed` says which moved, so
+        ' exactly the visuals binding those re-render (design §2).
+        ' A viewer's query string is in here, on its way into a <script>, so
+        ' the brackets are escaped as `_js_literal` escapes them: JSON quoting
+        ' alone would let `</script>` in a param value end the element.
+        js = js + "var gdashParams=" + replace(replace(encode(params), "<", "\\u003c"), ">", "\\u003e") + ";"
+        ' ONE publish path, several ways in. A slicer and a click on a bar mean
+        ' the same thing -- "filter by this value" -- and routing them through
+        ' one function keeps a click from becoming a second, subtly different
+        ' way to change a param.
+        js = js + "function gdashPublishMany(ch){var names=[];for(var n in ch){gdashParams[n]=ch[n];names.push(n)}"
+        js = js + "var b={};for(var k in gdashParams){b[k]=gdashParams[k]}b._changed=names;"
+        js = js + "try{history.replaceState(null,'',location.pathname+'?'+new URLSearchParams(gdashParams).toString())}catch(e){}"
         js = js + "fetch(location.pathname+'/params',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)})"
         js = js + ".then(function(r){return r.json()}).then(function(d){"
         js = js + "for(var k in d.fragments){var c=document.querySelector('[data-visual='+JSON.stringify(k)+']');if(c){c.innerHTML=d.fragments[k]}}"
+        js = js + "for(var k in (d.controls||{})){var c=document.querySelector('[data-control='+JSON.stringify(k)+']');if(c){c.innerHTML=d.controls[k]}}"
         js = js + "});}"
+        js = js + "function gdashPublish(name,value){var o={};o[name]=value;gdashPublishMany(o);}"
         js = js + "function gdashParam(el){gdashPublish(el.getAttribute('data-param'),el.value);}"
+        ' A multi-select publishes a |a|b| list; none chosen is ||.
+        js = js + "function gdashMulti(el){var v=[];for(var i=0;i<el.options.length;i++){if(el.options[i].selected){v.push(el.options[i].value)}}"
+        js = js + "gdashPublish(el.getAttribute('data-param'),v.length?'|'+v.join('|')+'|':'||');}"
+        ' A date range publishes its expression; `custom` waits for both dates.
+        js = js + "function gdashRange(el){var w=el.closest('.gdash-range');var c=w.querySelector('.gdash-range-custom');"
+        js = js + "if(el.value==='custom'){c.hidden=false;gdashRangeDates(c.querySelector('input'));return}c.hidden=true;"
+        js = js + "var o={};o[el.getAttribute('data-param')]=el.value;gdashPublishMany(o);}"
+        js = js + "function gdashRangeDates(inp){var w=inp.closest('.gdash-range');var ins=w.querySelectorAll('input[type=date]');"
+        js = js + "if(!ins[0].value||!ins[1].value){return}var o={};o[w.getAttribute('data-range-param')]='custom';"
+        js = js + "o[w.getAttribute('data-from')]=ins[0].value;o[w.getAttribute('data-to')]=ins[1].value;gdashPublishMany(o);}"
         ' A click on a data mark inside a chart that opted in. Delegated, so it
         ' keeps working after a fragment is replaced -- which is exactly what
         ' publishing a param does to the visuals that bind it.
@@ -1061,11 +1135,11 @@ library gdash_app
         ' A typed param that does not convert is refused before any query
         ' runs, naming the param (plan D3), rather than rendered from its
         ' default as if the viewer had not asked.
-        bad = gdash_record.param_errors(rec, req.query)
-        if count(bad) > 0 then
-            return _refuse(400, join(bad, "; "))
+        resolved = _values_for(rec, req.query, _effective_identity(got, name))
+        if not resolved.ok then
+            return _refuse(400, join(resolved.errors, "; "))
         end if
-        values = gdash_record.resolve_params(rec, req.query, _effective_identity(got, name))
+        values = resolved.values
 
         tabs = rec["tabs"]
         ' Every tab renders server-side in one response and switches on the
@@ -1098,6 +1172,11 @@ library gdash_app
         html = html + _preview_bar(got, name)
         html = html + _ask_link(got, name)
         html = html + "<h1>" + string(default(rec["title"], name)) + "</h1>"
+        ' RESET is a link to the bare path: params round-trip through the
+        ' query string, so a page with none is every control at its default.
+        if type(rec["controls"]) = "record" and count(keys(rec["controls"])) > 0 then
+            html = html + "<p class=" + q + "gdash-reset" + q + "><a href=" + q + "/d/" + gdash_render.html_escape(name) + q + ">Reset the controls</a></p>"
+        end if
         html = html + "<div class=" + q + "gdash-stale" + q + ">" + _status_block(p, name, mode, rec) + "</div>"
         ' Hidden until a publish is observed. The viewer decides when to move.
         html = html + "<div id=" + q + "gdash-notice" + q + " class=" + q + "gdash-notice" + q + " hidden>A new version of this dashboard has been published. <a href=" + q + "" + q + " onclick=" + q + "location.reload();return false" + q + ">Reload to see it.</a></div>"
@@ -1105,7 +1184,7 @@ library gdash_app
         ' Read after every fragment has rendered, so the baseline can only be
         ' the same version the page shows or newer -- never older, which would
         ' make the first poll reload a page that was already current.
-        html = html + "<script>" + _shim(gdash_store.read_version(gdash_paths.version_file(p, name, mode)), gdash_paths.read_pointer(p, name)) + "</script>"
+        html = html + "<script>" + _shim(gdash_store.read_version(gdash_paths.version_file(p, name, mode)), gdash_paths.read_pointer(p, name), _page_params(rec, values)) + "</script>"
         html = html + "</body></html>"
 
         ' Pin at session open (design §7). Re-set only when the browser is not
@@ -1131,19 +1210,64 @@ library gdash_app
 
         ' A param change is a read: it re-renders fragments and stores
         ' nothing. It carries no CSRF token because it changes no state.
-        supplied = req["json"]
-        if is_unknown(supplied) then
-            supplied = {}
+        body = req["json"]
+        if is_unknown(body) or type(body) != "record" then
+            body = {}
         end if
-        bad = gdash_record.param_errors(rec, supplied)
-        if count(bad) > 0 then
-            return _refuse(400, join(bad, "; "))
+        ' The page sends every param it holds, and `_changed` names the ones
+        ' that moved (GDASH-19). A body without it -- an older page, or a
+        ' caller posting one param -- means "these are what changed".
+        supplied = {}
+        for each k in keys(body)
+            if k != "_changed" then
+                supplied[k] = body[k]
+            end if
+        next
+        changed = keys(supplied)
+        if type(body["_changed"]) = "array" then
+            changed = []
+            for each c in body["_changed"]
+                changed = append(changed, string(c))
+            next
         end if
-        values = gdash_record.resolve_params(rec, supplied, _effective_identity(got, name))
+        resolved = _values_for(rec, supplied, _effective_identity(got, name))
+        if not resolved.ok then
+            return _refuse(400, join(resolved.errors, "; "))
+        end if
+        values = resolved.values
         themed = gdash_theme.load_theme(p)
         theme = themed.theme
 
-        changed = keys(supplied)
+        ' A date range's expression moving moves its two dates, which are what
+        ' the SQL binds; and the controls whose param moved re-render too, so
+        ' a coverage note follows the range it describes.
+        moved_controls = []
+        controls = rec["controls"]
+        if type(controls) = "record" then
+            for each cn in keys(controls)
+                c = controls[cn]
+                linked = [string(default(c["param"], ""))]
+                if string(default(c["kind"], "")) = "daterange" then
+                    linked = append(linked, string(c["from"]))
+                    linked = append(linked, string(c["to"]))
+                end if
+                hit = false
+                for each lp in linked
+                    if contains(changed, lp) then
+                        hit = true
+                    end if
+                next
+                if hit then
+                    moved_controls = append(moved_controls, cn)
+                    for each lp in linked
+                        if not contains(changed, lp) then
+                            changed = append(changed, lp)
+                        end if
+                    next
+                end if
+            next
+        end if
+
         moving = []
         i = 0
         while i < count(changed)
@@ -1164,7 +1288,11 @@ library gdash_app
             frags[moving[i]] = _visual_fragment(p, name, mode, rec, moving[i], values, theme)
             i += 1
         end while
-        return _json({ fragments: frags, rerendered: moving })
+        cfrags = {}
+        for each cn in moved_controls
+            cfrags[cn] = _control_fragment(p, name, mode, rec, cn, values)
+        next
+        return _json({ fragments: frags, rerendered: moving, controls: cfrags })
     end function
 
     function refresh(req, name)

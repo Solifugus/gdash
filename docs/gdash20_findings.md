@@ -183,7 +183,7 @@ was given for the parameter $1". `test_store` caught it.
   staging by hunk, which this environment cannot do interactively. The commit
   message lists the parts.
 
-## G20-15 — a concurrent-render request that is never answered, intermittently — *root cause found: gBASIC's client; fix awaiting the maintainer*
+## G20-15 — a concurrent-render request that is never answered, intermittently — *fixed by the platform (gbasic `8af17bb4`), confirmed in gdash*
 
 `run_workers.sh` "eight concurrent renders all succeed" failed twice in about
 a dozen runs. Four of the eight `curl`s got no response within 20 s (`000`),
@@ -245,6 +245,21 @@ deadline** (`client.c`, `DEFAULT_WAIT_MS`):
 The proposed fix, in the client: while waiting, if the lock is free and no
 socket answers, start again at once. gbasic has put it to the maintainer
 before changing anything.
+
+**Fixed (gbasic `8af17bb4`, approved by the maintainer).** Three defects
+were found, each after the one before it was fixed:
+
+1. A client told "busy" waited out its whole deadline after the winning
+   owner had left. It now waits only on a full backlog, and otherwise starts
+   again at once.
+2. An owner's own busy check counted as its first client, which ended its
+   start-up grace, so at linger 0 it stopped before its starter arrived.
+3. Five attempts were a fixed count; the client now keeps trying for its
+   wait.
+
+Confirmed in gdash on a build with the same tree: five `run_workers.sh` runs
+at linger 0, all green. The slowest connect per run was 94, 49, 109, 71 and
+65 ms, where it had been 9.2–10.2 s.
 
 **Production impact: practically none.** The hole needs the winning owner to
 stop inside the client's retry window. At the production linger of 30 s, the

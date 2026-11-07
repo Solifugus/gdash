@@ -255,6 +255,75 @@ west="$(curl -s --max-time 10 -X POST -H 'content-type: application/json' -d '{"
 if [[ "$west" != "$resp" ]]; then echo "  ok   a different param value renders differently"; pass=$((pass+1));
 else echo "  FAIL a different param value renders differently"; fail=$((fail+1)); fi
 
+echo "--- a date range and a multi-select, over HTTP (GDASH-19) ---"
+python3 - "$ROOT" <<'PYEOF'
+import json, os, sys
+r = sys.argv[1]
+c = json.load(open(r + '/etc/connections.json'))
+c['daily'] = {"kind": "fixture", "path": "fixtures/orders_daily.json"}
+json.dump(c, open(r + '/etc/connections.json', 'w'), indent=2)
+rec = {"format": 1, "name": "ctl", "title": "Controls", "access": "open",
+ "datasets": {"daily": {"profile": "daily", "sql": "select region, day, amount from orders",
+                        "columns": {"day": {"type": "date"}, "amount": {"type": "money", "scale": 2}}}},
+ "params": {"period": {"default": "last_30d"},
+            "since": {"default": "2026-01-01", "type": "date"}, "until": {"default": "2026-12-31", "type": "date"},
+            "regions": {"default": "||"}},
+ "controls": {"when": {"kind": "daterange", "label": "When", "param": "period", "from": "since", "to": "until",
+                       "dataset": "daily", "column": "day"},
+              "pick": {"kind": "multiselect", "label": "Regions", "param": "regions", "dataset": "daily",
+                       "sql": "select distinct region from daily order by region"}},
+ "visuals": {"in_range": {"dataset": "daily", "sql": "select sum(amount) as total from daily where day >= :since and day <= :until",
+                          "encoding": {"mark": "value", "value": "total", "format": "currency", "title": "In range"}},
+             "by_region": {"dataset": "daily",
+                           "sql": "select region, sum(amount) as total from daily where :regions = '||' or :regions like '%|' || region || '|%' group by region order by region",
+                           "encoding": {"mark": "table", "formats": {"total": "currency"}}},
+             "plain": {"dataset": "daily", "sql": "select count(*) as n from daily",
+                       "encoding": {"mark": "value", "value": "n", "title": "Rows"}}},
+ "tabs": [{"name": "C", "layout": {"vert": [{"control": "when"}, {"control": "pick"},
+            {"visual": "in_range"}, {"visual": "by_region"}, {"visual": "plain"}]}}]}
+os.makedirs(r + '/lib/dashboards/ctl', exist_ok=True)
+json.dump(rec, open(r + '/lib/dashboards/ctl/draft.json', 'w'), indent=2)
+PYEOF
+"$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh ctl >/dev/null 2>&1
+ok "a dataset with a declared date column refreshes" "$?" "0"
+cpage="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/ctl")"
+has "$cpage" 'data-control="when"' "the date range renders as a control"
+has "$cpage" "Last 30 days" "offering the closed vocabulary"
+# THE HAZARD (brief §2): the default range, the last 30 days, lies wholly after
+# the imported January-to-March data. An empty figure must not pass for "no sales".
+has "$cpage" "nothing in this range: the data covers 2026-01-15 to 2026-03-28" "a range outside the data is flagged, not silently empty"
+has "$cpage" "Reset the controls" "and there is a way back to every default"
+has "$cpage" '<select multiple data-param="regions"' "the multi-select renders"
+
+ranged="$(curl -s --max-time 10 -X POST -H 'content-type: application/json' \
+    -d '{"period":"custom","since":"2026-01-01","until":"2026-02-28","regions":"||","_changed":["period","since","until"]}' \
+    "http://127.0.0.1:$PORT/d/ctl/params")"
+has "$ranged" '"in_range"' "a custom range re-renders the visual that binds its dates"
+has "$ranged" '$600.00' "with the sum of the rows inside it"
+hasnt "$ranged" '"by_region"' "and leaves a visual that binds neither date alone"
+hasnt "$ranged" '"plain"' "as it does one that binds nothing"
+has "$ranged" "the range starts before the data does" "and the control's coverage note follows the range"
+
+picked="$(curl -s --max-time 10 -X POST -H 'content-type: application/json' \
+    -d '{"period":"custom","since":"2026-01-01","until":"2026-12-31","regions":"|west|","_changed":["regions"]}' \
+    "http://127.0.0.1:$PORT/d/ctl/params")"
+has "$picked" '"by_region"' "a multi-select re-renders the visual binding its list"
+# The control re-renders too, and it lists every region as an option, so the
+# check is on the figures: west totals $400.00 and east $200.00.
+has "$picked" '$400.00' "showing the chosen region's total"
+hasnt "$picked" '$200.00' "and not a region it did not choose"
+hasnt "$picked" '"in_range"' "and leaves the date-bound visual alone"
+
+# A BOOKMARK carries the state in the URL: the same view comes back.
+book="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/ctl?period=custom&since=2026-02-01&until=2026-03-31&regions=%7Cwest%7Ceast%7C")"
+has "$book" '$900.00' "a bookmarked custom range renders the same figure"
+has "$book" "the range ends after the data does" "and the same coverage note"
+has "$book" '"period":"custom"' "and the page holds the state it was opened with"
+code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/d/ctl?period=last_fortnight")"
+ok "a range expression outside the vocabulary is refused" "$code" "400"
+code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST -H 'content-type: application/json' -d '{"regions":"west"}' "http://127.0.0.1:$PORT/d/ctl/params")"
+ok "a multi-select value that is not a |a|b| list is refused" "$code" "400"
+
 echo "--- global events reach the page by polling, not by a held stream (design §5) ---"
 # GDASH-11: the page used to hold an EventSource open, which held a worker for
 # as long as the tab was open. The same two facts now travel as JSON the

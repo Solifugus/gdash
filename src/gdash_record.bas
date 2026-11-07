@@ -16,6 +16,7 @@ library gdash_record
     load gdash_theme from "gdash_theme.bas"
     load gdash_format from "gdash_format.bas"
     load gdash_store from "gdash_store.bas"
+    load gdash_controls from "gdash_controls.bas"
 
     function _get(r, k)
         return r[k]
@@ -316,7 +317,15 @@ library gdash_record
                 k = 0
                 while k < count(cn)
                     col = cols[cn[k]]
-                    if default(col["type"], "") = "money" then
+                    ' A DECLARED TYPE GDASH DOES NOT IMPLEMENT IS AN ERROR BY NAME
+                    ' (GDASH-19 S0-8). It used to fall through to inference and
+                    ' be silently dropped -- `"type": "date"` validated clean and
+                    ' did nothing -- where an unknown control kind was refused.
+                    ctype = string(default(col["type"], ""))
+                    if not contains(["money", "date"], ctype) then
+                        errors = concat(errors, ["column '" + dn + "." + cn[k] + "' has type '" + ctype + "'; the column types are money and date"])
+                    end if
+                    if ctype = "money" then
                         sc = col["scale"]
                         if is_unknown(sc) then
                             errors = concat(errors, ["money column '" + dn + "." + cn[k] + "' has no 'scale'"])
@@ -628,8 +637,8 @@ library gdash_record
                 errors = concat(errors, ["control '" + cnm + "' must be an object"])
                 c = {}
             end if
-            if default(c["kind"], "") != "select" then
-                errors = concat(errors, ["control '" + cnm + "' has kind '" + string(c["kind"]) + "'; this build implements 'select'"])
+            if not contains(gdash_controls.kinds(), string(default(c["kind"], ""))) then
+                errors = concat(errors, ["control '" + cnm + "' has kind '" + string(c["kind"]) + "'; this build implements " + join(gdash_controls.kinds(), ", ")])
             end if
             if not _has(c, "param") then
                 errors = concat(errors, ["control '" + cnm + "' has no 'param'"])
@@ -641,6 +650,7 @@ library gdash_record
                     errors = concat(errors, ["control '" + cnm + "' names undefined dataset '" + string(c["dataset"]) + "'"])
                 end if
             end if
+            errors = concat(errors, gdash_controls.validate_control(cnm, c, params, datasets))
             i += 1
         end while
 

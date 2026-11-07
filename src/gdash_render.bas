@@ -22,6 +22,7 @@ library gdash_render
     load gdash_theme from "gdash_theme.bas"
     load gdash_store from "gdash_store.bas"
     load gdash_format from "gdash_format.bas"
+    load gdash_controls from "gdash_controls.bas"
 
     ' The one HTML escaper in gdash. gdash_app had a byte-identical copy until
     ' library_collisions() reported the pair; two implementations of escaping
@@ -650,6 +651,115 @@ library gdash_render
         end while
         label = default(control["label"], name)
         return "<label class=" + chr(34) + "gdash-control" + chr(34) + ">" + html_escape(label) + " <select data-param=" + chr(34) + html_escape(control["param"]) + chr(34) + " onchange=" + chr(34) + "gdashParam(this)" + chr(34) + ">" + join(opts, "") + "</select></label>"
+    end function
+
+    ' --- the multi-select (GDASH-19) -------------------------------------------
+    '
+    ' Publishes a `|a|b|` list. An option whose value contains the delimiter
+    ' could not be represented without escaping its own list, so it is left
+    ' out -- and the control says how many were, rather than having them
+    ' silently missing.
+    function render_multiselect(name, control, options, current)
+        q = chr(34)
+        chosen = gdash_controls.members(string(default(current, "||")))
+        made = gdash_controls.list_of(options)
+        keep = gdash_controls.members(made.list)
+        opts = []
+        for each v in keep
+            sel = ""
+            if contains(chosen, v) then
+                sel = " selected"
+            end if
+            opts = append(opts, "<option value=" + q + html_escape(v) + q + sel + ">" + html_escape(v) + "</option>")
+        next
+        label = default(control["label"], name)
+        h = "<label class=" + q + "gdash-control" + q + ">" + html_escape(label) + " <select multiple data-param=" + q + html_escape(control["param"]) + q + " onchange=" + q + "gdashMulti(this)" + q + ">" + join(opts, "") + "</select></label>"
+        if made.dropped > 0 then
+            h = h + "<div class=" + q + "gdash-coverage-bad" + q + ">" + string(made.dropped) + " value(s) containing '|' cannot be offered</div>"
+        end if
+        return h
+    end function
+
+    function range_label(expr)
+        names = { today: "Today", last_7d: "Last 7 days", last_30d: "Last 30 days", last_90d: "Last 90 days",
+                  mtd: "Month to date", qtd: "Quarter to date", ytd: "Year to date", last_month: "Last month",
+                  last_quarter: "Last quarter", last_year: "Last year", custom: "Custom" }
+        return string(default(names[expr], expr))
+    end function
+
+    ' What the staged data covers, and whether the chosen range reaches past
+    ' it. THE HAZARD THIS PHASE MUST NOT SHIP WITHOUT (brief §2): a range the
+    ' import does not contain draws an empty chart that reads as "no sales in
+    ' June" rather than "we did not import June". So the coverage is shown,
+    ' and a range outside it is flagged, never left silently empty.
+    function coverage_note(bounds, start, finish)
+        if not bounds.known then
+            return { text: "coverage unknown", bad: false }
+        end if
+        if is_unknown(bounds.lo) then
+            return { text: "the data holds no dates yet", bad: true }
+        end if
+        span = string(bounds.lo) + " to " + string(bounds.hi)
+        if is_unknown(start) or is_unknown(finish) then
+            return { text: "data covers " + span, bad: false }
+        end if
+        if finish < bounds.lo or start > bounds.hi then
+            return { text: "nothing in this range: the data covers " + span, bad: true }
+        end if
+        if start < bounds.lo and finish > bounds.hi then
+            return { text: "the range is wider than the data, which covers " + span, bad: true }
+        end if
+        if start < bounds.lo then
+            return { text: "the range starts before the data does: it covers " + span, bad: true }
+        end if
+        if finish > bounds.hi then
+            return { text: "the range ends after the data does: it covers " + span, bad: true }
+        end if
+        return { text: "data covers " + span, bad: false }
+    end function
+
+    ' --- the date range (GDASH-19) ---------------------------------------------
+    '
+    ' A select of the closed vocabulary, publishing the EXPRESSION; two date
+    ' inputs for `custom`, publishing the two dates with it. The coverage line
+    ' sits beneath and is re-rendered with the control on every change.
+    function render_daterange(name, control, values, bounds)
+        q = chr(34)
+        pn = string(control["param"])
+        fp = string(control["from"])
+        tp = string(control["to"])
+        current = string(default(values[pn], ""))
+        opts = []
+        for each ex in gdash_controls.range_vocabulary()
+            sel = ""
+            if ex = current then
+                sel = " selected"
+            end if
+            opts = append(opts, "<option value=" + q + ex + q + sel + ">" + html_escape(range_label(ex)) + "</option>")
+        next
+        hidden = " hidden"
+        if current = "custom" then
+            hidden = ""
+        end if
+        fv = ""
+        if not is_unknown(values[fp]) then
+            fv = string(values[fp])
+        end if
+        tv = ""
+        if not is_unknown(values[tp]) then
+            tv = string(values[tp])
+        end if
+        label = default(control["label"], name)
+        h = "<div class=" + q + "gdash-control gdash-range" + q + " data-range-param=" + q + html_escape(pn) + q + " data-from=" + q + html_escape(fp) + q + " data-to=" + q + html_escape(tp) + q + ">"
+        h = h + "<label>" + html_escape(label) + " <select data-param=" + q + html_escape(pn) + q + " onchange=" + q + "gdashRange(this)" + q + ">" + join(opts, "") + "</select></label>"
+        h = h + "<span class=" + q + "gdash-range-custom" + q + hidden + "> <input type=" + q + "date" + q + " value=" + q + html_escape(fv) + q + " onchange=" + q + "gdashRangeDates(this)" + q + "> to <input type=" + q + "date" + q + " value=" + q + html_escape(tv) + q + " onchange=" + q + "gdashRangeDates(this)" + q + "></span>"
+        note = coverage_note(bounds, values[fp], values[tp])
+        cls = "gdash-coverage"
+        if note.bad then
+            cls = "gdash-coverage-bad"
+        end if
+        h = h + "<div class=" + q + cls + q + ">" + html_escape(note.text) + "</div></div>"
+        return h
     end function
 
 end library

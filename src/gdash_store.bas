@@ -150,6 +150,9 @@ library gdash_store
         if entry.kind = "real" then
             return "number"
         end if
+        if entry.kind = "date" then
+            return "date"
+        end if
         return "string"
     end function
 
@@ -212,6 +215,11 @@ library gdash_store
             end if
             if not is_unknown(d) and default(d["type"], "") = "money" then
                 plan = append(plan, { name: nm, kind: "money", scale: default(d["scale"], 2), currency: string(default(d["currency"], "USD")) })
+            else if not is_unknown(d) and default(d["type"], "") = "date" then
+                ' A NATIVE date (GDASH-19, ruled 2026-11-07): the engine reads
+                ' ISO-8601 and refuses anything else, so a source that hands
+                ' back `01/15/2026` fails the refresh -- rejected, not coerced.
+                plan = append(plan, { name: nm, kind: "date", scale: 0, currency: "" })
             else
                 samples = []
                 r = 0
@@ -230,8 +238,14 @@ library gdash_store
         return chr(34) + replace(nm, chr(34), chr(34) + chr(34)) + chr(34)
     end function
 
+    ' The store's two side tables. Created wherever they might be missing, so a
+    ' swap or a discard never fails on a database that predates one of them.
+    ' `_gdash_bounds` holds each declared date column's coverage, recorded at
+    ' import (GDASH-19 ruling 1): a dataset with no row says "coverage
+    ' unknown" rather than a guess.
     function _ensure_meta(db)
         gsql.exec(db, "create table if not exists _gdash_meta (dataset string, column_name string, kind string, currency string, scale integer, position integer)")
+        gsql.exec(db, "create table if not exists _gdash_bounds (dataset string, column_name string, lo date, hi date)")
     end function
 
     ' A cell as the column takes it. Money, integer and real cells go in as the
@@ -280,6 +294,7 @@ library gdash_store
         _ensure_meta(db)
         gsql.exec(db, "drop table if exists " + _quote_ident(staging))
         gsql.exec(db, "delete from _gdash_meta where dataset = $1", [staging])
+        gsql.exec(db, "delete from _gdash_bounds where dataset = $1", [staging])
         gsql.exec(db, "create table " + _quote_ident(staging) + " (" + join(defs, ", ") + ")")
         e = error
         if e then
@@ -340,6 +355,7 @@ library gdash_store
                 end if
                 gsql.exec(db, "drop table if exists " + _quote_ident(staging))
                 gsql.exec(db, "delete from _gdash_meta where dataset = $1", [staging])
+                gsql.exec(db, "delete from _gdash_bounds where dataset = $1", [staging])
                 if error then
                 end if
                 _close(db)
@@ -347,7 +363,22 @@ library gdash_store
             end if
             r += take
         end while
+
+        ' Coverage, once per refresh, from the rows just written: the engine's
+        ' own min and max over a date column, so a bound is a date the data
+        ' really holds. An empty dataset records NULL bounds, which is "covers
+        ' nothing", not "unknown".
+        for each entry in plan
+            if entry.kind = "date" then
+                b = gsql.query(db, "select min(" + _quote_ident(entry.name) + ") as lo, max(" + _quote_ident(entry.name) + ") as hi from " + _quote_ident(staging))
+                gsql.exec(db, "insert into _gdash_bounds values ($1, $2, $3, $4)", [staging, entry.name, b[0].lo, b[0].hi])
+            end if
+        next
+        e = error
         _close(db)
+        if e then
+            return { ok: false, message: "cannot record the date columns' coverage: " + e.message, rejected: 0 }
+        end if
         return { ok: true, message: "", rejected: 0 }
     end function
 
@@ -392,11 +423,14 @@ library gdash_store
         end if
         staging = staging_name(table)
         on error goto next
+        _ensure_meta(db)
         gsql.begin(db)
         gsql.exec(db, "drop table if exists " + _quote_ident(table))
         gsql.exec(db, "alter table " + _quote_ident(staging) + " rename to " + _quote_ident(table))
         gsql.exec(db, "delete from _gdash_meta where dataset = $1", [table])
         gsql.exec(db, "update _gdash_meta set dataset = $1 where dataset = $2", [table, staging])
+        gsql.exec(db, "delete from _gdash_bounds where dataset = $1", [table])
+        gsql.exec(db, "update _gdash_bounds set dataset = $1 where dataset = $2", [table, staging])
         e = error
         if e then
             _rollback(db)
@@ -421,8 +455,10 @@ library gdash_store
         end if
         staging = staging_name(table)
         on error goto next
+        _ensure_meta(db)
         gsql.exec(db, "drop table if exists " + _quote_ident(staging))
         gsql.exec(db, "delete from _gdash_meta where dataset = $1", [staging])
+        gsql.exec(db, "delete from _gdash_bounds where dataset = $1", [staging])
         e = error
         _close(db)
         if e then
@@ -477,6 +513,27 @@ library gdash_store
             end if
         next
         return out
+    end function
+
+    ' A date column's coverage, as recorded at its last refresh:
+    ' { known, lo, hi }. `known` is false when no refresh has recorded it --
+    ' which a control must say as "coverage unknown", never as a guessed
+    ' range. lo and hi are unknown together for a dataset with no rows.
+    function bounds(db_path, dataset, column)
+        db = connect(db_path, false)
+        if is_unknown(db) then
+            return { known: false, lo: unknown, hi: unknown }
+        end if
+        on error goto next
+        gsql.begin(db, "read")
+        rows = gsql.query(db, "select lo, hi from _gdash_bounds where dataset = $1 and column_name = $2", [dataset, column])
+        e = error
+        _rollback(db)
+        _close(db)
+        if e or count(rows) = 0 then
+            return { known: false, lo: unknown, hi: unknown }
+        end if
+        return { known: true, lo: rows[0].lo, hi: rows[0].hi }
     end function
 
     function table_columns(db_path, table)

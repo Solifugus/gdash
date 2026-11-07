@@ -127,8 +127,17 @@
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:234",
+      "where": "src/gdash_store.bas:247",
       "sql": "create table if not exists _gdash_meta (dataset string, column_name string, kind string, currency string, scale integer, position integer)",
+      "binds": false
+    },
+    {
+      "id": "store._ensure_meta.2",
+      "kind": "store internal",
+      "runs_on": "store",
+      "origin": "code template",
+      "where": "src/gdash_store.bas:248",
+      "sql": "create table if not exists _gdash_bounds (dataset string, column_name string, lo date, hi date)",
       "binds": false
     },
     {
@@ -136,7 +145,7 @@
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:281",
+      "where": "src/gdash_store.bas:295",
       "sql": "drop table if exists \"<staging>\"",
       "binds": false
     },
@@ -145,7 +154,7 @@
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:282",
+      "where": "src/gdash_store.bas:296",
       "sql": "delete from _gdash_meta where dataset = $1",
       "binds": true
     },
@@ -154,18 +163,45 @@
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:283",
-      "sql": "create table \"<staging>\" (<defs>)",
-      "binds": false,
-      "note": "<defs> is '\"<column>\" money(<currency>)|integer|number|string' per column (store_column_types)."
+      "where": "src/gdash_store.bas:297",
+      "sql": "delete from _gdash_bounds where dataset = $1",
+      "binds": true
     },
     {
       "id": "store.materialize.4",
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:292",
+      "where": "src/gdash_store.bas:298",
+      "sql": "create table \"<staging>\" (<defs>)",
+      "binds": false,
+      "note": "<defs> is '\"<column>\" money(<currency>)|integer|number|string' per column (store_column_types)."
+    },
+    {
+      "id": "store.materialize.5",
+      "kind": "store internal",
+      "runs_on": "store",
+      "origin": "code template",
+      "where": "src/gdash_store.bas:307",
       "sql": "insert into _gdash_meta values ($1, $2, $3, $4, $5, $6)",
+      "binds": true
+    },
+    {
+      "id": "store.materialize.6",
+      "kind": "store internal",
+      "runs_on": "store",
+      "origin": "code template",
+      "where": "src/gdash_store.bas:373",
+      "sql": "select min(\"<entry.name>\") as lo, max(\"<entry.name>\") as hi from \"<staging>\"",
+      "binds": false
+    },
+    {
+      "id": "store.materialize.7",
+      "kind": "store internal",
+      "runs_on": "store",
+      "origin": "code template",
+      "where": "src/gdash_store.bas:374",
+      "sql": "insert into _gdash_bounds values ($1, $2, $3, $4)",
       "binds": true
     },
     {
@@ -173,7 +209,7 @@
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:360",
+      "where": "src/gdash_store.bas:391",
       "sql": "select 1 as one from \"<table>\" limit 1",
       "binds": false
     },
@@ -182,7 +218,7 @@
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:396",
+      "where": "src/gdash_store.bas:428",
       "sql": "drop table if exists \"<table>\"",
       "binds": false
     },
@@ -191,7 +227,7 @@
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:397",
+      "where": "src/gdash_store.bas:429",
       "sql": "alter table \"<staging>\" rename to \"<table>\"",
       "binds": false,
       "note": "The swap: drop the live table and rename the staging one, with its _gdash_meta rows, in one transaction."
@@ -201,8 +237,17 @@
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:399",
+      "where": "src/gdash_store.bas:431",
       "sql": "update _gdash_meta set dataset = $1 where dataset = $2",
+      "binds": true
+    },
+    {
+      "id": "store.swap.4",
+      "kind": "store internal",
+      "runs_on": "store",
+      "origin": "code template",
+      "where": "src/gdash_store.bas:433",
+      "sql": "update _gdash_bounds set dataset = $1 where dataset = $2",
       "binds": true
     },
     {
@@ -210,16 +255,25 @@
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:437",
+      "where": "src/gdash_store.bas:473",
       "sql": "select dataset, column_name, kind, currency, scale, position from _gdash_meta order by dataset, position",
       "binds": false
+    },
+    {
+      "id": "store.bounds.1",
+      "kind": "store internal",
+      "runs_on": "store",
+      "origin": "code template",
+      "where": "src/gdash_store.bas:529",
+      "sql": "select lo, hi from _gdash_bounds where dataset = $1 and column_name = $2",
+      "binds": true
     },
     {
       "id": "store.sample_column.1",
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:538",
+      "where": "src/gdash_store.bas:595",
       "sql": "select distinct \"<column>\" as v from \"<ds>\" where \"<column>\" is not null limit <limit>",
       "binds": false
     },
@@ -228,7 +282,7 @@
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:566",
+      "where": "src/gdash_store.bas:623",
       "sql": "<sql>",
       "binds": true,
       "note": "<sql> is ask or visual SQL, run inside begin(\"read\") so the engine refuses any write."
