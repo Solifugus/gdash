@@ -37,13 +37,13 @@ library gdash_source_pg
             while c < count(cols)
                 v = rows[i][cols[c]]
                 if is_unknown(v) or is_nothing(v) then
-                    vals = concat(vals, [""])
+                    vals = append(vals, "")
                 else
-                    vals = concat(vals, [string(v)])
+                    vals = append(vals, string(v))
                 end if
                 c += 1
             end while
-            out = concat(out, [vals])
+            out = append(out, vals)
             i += 1
         end while
         return { ok: true, columns: cols, rows: out, message: "" }
