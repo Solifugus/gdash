@@ -235,7 +235,20 @@ because GDASH-15 needs one.
 
 Small, overdue, and the prerequisite for treating downtime as cheap.
 
-### GDASH-15 — Tenant as a root
+### GDASH-15 — Tenant as a root  *(brief: gdash15_brief.md; built 2026-11-08, at review)*
+
+**Built:**
+
+- the registry (`<base>/<id>` roots, contained by `real_path`);
+- `tenant_of(req)` as the one resolution point: unknown host 404, suspended
+  403, invalid registry 503;
+- `tenant create|list|suspend|resume|delete` and `--tenant` on every verb;
+- per-tenant scheduler template units;
+- `run_tenants.sh`, 45 assertions, running on every suite pass.
+
+**Proposed first for GDASH-16:** the tenant-level gate on `access: open`.
+
+The original scope follows.
 
 The core, and small **because of decisions already made**: the resolver exists,
 `_root_of(req)` already takes the request, and there is no cross-request state
@@ -464,6 +477,17 @@ plus the four that need a decision before there is a sentence to write.
   number of places is ambiguous, and it falls back to the currency's own.
 - **Multi-tenancy itself**: `gdash_saas_design.md` §9 lists the four sections
   that would need a sentence.
+
+### Asked from outside, not yet scheduled
+
+- **G57 (gbasic-books, volume 3, Chapter 17): a dashboard's datasets refresh
+  one at a time.** Between the first swap and the last, a viewer can see one
+  dataset from the new extract and another from the old. The chapter measured
+  revision 2's USD totals under revision 1's manifest. **Now cheap:** since
+  GDASH-20 a dashboard's datasets are tables in one database, so a whole-
+  dashboard refresh can stage every dataset and swap them all in one
+  transaction, with one version bump. That is "staged together, swapped
+  together". Recorded 2026-11-08; priority is the maintainer's.
 
 ### Deferred features, with the reason attached
 

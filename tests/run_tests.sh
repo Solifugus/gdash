@@ -155,6 +155,16 @@ if [[ "${GDASH_SKIP_E2E:-0}" != "1" ]]; then
     fi
 fi
 
+# Two tenants, one server, and the wall between them (GDASH-15). Loopback
+# only, fixture sources; skipped with the end-to-end run, since it wants a port.
+if [[ "${GDASH_SKIP_E2E:-0}" != "1" ]]; then
+    echo "--- tenants ---"
+    ran=$((ran + 1))
+    if ! "$HERE/run_tenants.sh"; then
+        failed=$((failed + 1))
+    fi
+fi
+
 # The ODBC origin, through a real driver manager. Opt-in, but the cheapest of
 # the live runners: the SQLite driver reads a file, so there is no service.
 if [[ "${GDASH_ODBC_TEST:-0}" == "1" ]]; then

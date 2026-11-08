@@ -46,7 +46,7 @@ library gdash_controls
     ' the caller supplies, so a test pins the vocabulary with no wall clock in
     ' it. `custom` is not resolved here: its two dates are the params' own.
     ' { ok, from, to, message }
-    function range(expr, today)
+    function range_dates(expr, today)
         t = today
         if expr = "today" then
             return { ok: true, from: t, to: t, message: "" }
@@ -106,7 +106,7 @@ library gdash_controls
             if string(default(c["kind"], "")) = "daterange" then
                 expr = string(default(out[string(c["param"])], ""))
                 if expr != "custom" then
-                    got = range(expr, today_date)
+                    got = range_dates(expr, today_date)
                     if got.ok then
                         out[string(c["from"])] = got.from
                         out[string(c["to"])] = got.to
@@ -133,7 +133,7 @@ library gdash_controls
             v = supplied[pn]
             if not is_unknown(v) then
                 if kind = "daterange" and not contains(range_vocabulary(), string(v)) then
-                    out = append(out, "param '" + pn + "': " + range(string(v), today()).message)
+                    out = append(out, "param '" + pn + "': " + range_dates(string(v), today()).message)
                 else if kind = "multiselect" and not list_shaped(string(v)) then
                     out = append(out, "param '" + pn + "' must be a list written |a|b|, delimiters at both ends")
                 end if

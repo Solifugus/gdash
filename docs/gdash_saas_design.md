@@ -122,9 +122,12 @@ Isolation by construction, not by a check someone can forget.
 it is host-only and subdomain tenants do not share it. The default is already
 the safe one; the work is to keep it.
 
-**Every ATTACH is read-only and inside one root** (GDASH-13). A generated query
-cannot write, and there is no path by which it can name a file outside its
-tenant's cache directory.
+**Every query is read-only and inside one root.** Since GDASH-20, each
+dashboard's data is its own G-SQL database under its tenant's cache
+directory, and every read runs in a read transaction. A generated query
+cannot write, and cannot name a table outside its own dashboard, let alone
+its tenant. *(Corrected 2026-11-08; this said "every ATTACH is read-only",
+which described the SQLite store.)*
 
 ---
 
@@ -172,10 +175,10 @@ refresh count**, and that is what must be bounded.
 
 ### TLS
 
-Terminated at the proxy, as it already must be (gdash refuses to serve TLS
-rather than serve cleartext — `gdash8_platform_report_tls.md`). In SaaS the
-proxy is a given and becomes the tenant router as well, wanting a wildcard
-certificate.
+Terminated at the proxy. In SaaS the proxy is a given and becomes the tenant
+router as well, wanting a wildcard certificate. *(Corrected 2026-11-08: gdash
+can now serve TLS directly too, which a single-tenant box may prefer; it
+refused to until gbasic `d643f9b1`.)*
 
 ---
 

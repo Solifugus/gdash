@@ -11,6 +11,7 @@ library gdash_app
     load gdash_store from "gdash_store.bas"
     load gdash_render from "gdash_render.bas"
     load gdash_controls from "gdash_controls.bas"
+    load gdash_tenants from "gdash_tenants.bas"
     load gdash_format from "gdash_format.bas"
     load gdash_refresh from "gdash_refresh.bas"
     load gdash_sched from "gdash_sched.bas"
@@ -27,12 +28,19 @@ library gdash_app
     load gdash_ask from "gdash_ask.bas"
     load gdash_nlq from "gdash_nlq.bas"
 
-    function _root_of(req)
-        return default(env("GDASH_ROOT"), "")
-    end function
-
-    function paths_for(req)
-        return gdash_paths.roles(_root_of(req))
+    ' WHICH ROOT A REQUEST BELONGS TO, decided once, here, at the edge
+    ' (GDASH-15; gdash_saas_design.md §2). With no tenant registry it is the
+    ' deployment's own root, exactly as before. With one, the Host header
+    ' names the tenant -- and an unknown host, a suspended tenant or a registry
+    ' that does not read is a refusal, never a default. Nothing downstream
+    ' re-derives a tenant from anything else.
+    function tenant_of(req)
+        base = gdash_paths.roles(default(env("GDASH_ROOT"), ""))
+        host = ""
+        if type(req) = "record" and type(req["headers"]) = "record" then
+            host = string(default(req["headers"]["host"], ""))
+        end if
+        return gdash_tenants.resolve_host(base, host)
     end function
 
     function _html(body)
@@ -312,7 +320,11 @@ library gdash_app
     ' viewer pinned at session open, or `current` if they have not pinned one;
     ' an unpublished dashboard serves the draft.
     function _load_dashboard(req, name, need)
-        p = paths_for(req)
+        t = tenant_of(req)
+        if not t.ok then
+            return { ok: false, rec: {}, p: {}, mode: "draft", snapshot: "", pin_was: "", viewer: anonymous(), response: _refuse(t.status, t.message) }
+        end if
+        p = t.p
         if contains(name, "/") then
             return { ok: false, rec: {}, p: p, mode: "draft", snapshot: "", pin_was: "", viewer: anonymous(), response: _refuse(400, "bad dashboard name") }
         end if
@@ -867,7 +879,11 @@ library gdash_app
     ' using the served record would ask a published dashboard'"'"'s groups about an
     ' operation that does not touch it.
     function _load_draft_for_edit(req, name)
-        p = paths_for(req)
+        t = tenant_of(req)
+        if not t.ok then
+            return { ok: false, rec: {}, p: {}, viewer: anonymous(), response: _refuse(t.status, t.message) }
+        end if
+        p = t.p
         if contains(name, "/") then
             return { ok: false, rec: {}, p: p, viewer: anonymous(), response: _refuse(400, "bad dashboard name") }
         end if
@@ -1425,7 +1441,11 @@ library gdash_app
     ' something to be bound to. It carries no user and no privilege; the id it
     ' holds is thrown away the moment one is granted.
     function login_form(req)
-        p = paths_for(req)
+        t = tenant_of(req)
+        if not t.ok then
+            return _refuse(t.status, t.message)
+        end if
+        p = t.p
         v = viewer_of(req, p)
         target = ""
         q = req["query"]
@@ -1461,7 +1481,11 @@ library gdash_app
     end function
 
     function login(req)
-        p = paths_for(req)
+        t = tenant_of(req)
+        if not t.ok then
+            return _refuse(t.status, t.message)
+        end if
+        p = t.p
         v = viewer_of(req, p)
         f = req["form"]
         if is_unknown(f) then
@@ -1533,7 +1557,11 @@ library gdash_app
     end function
 
     function logout(req)
-        p = paths_for(req)
+        t = tenant_of(req)
+        if not t.ok then
+            return _refuse(t.status, t.message)
+        end if
+        p = t.p
         v = viewer_of(req, p)
         if not csrf_present(req, p, v) then
             return _refuse(400, "that form expired")
@@ -1549,7 +1577,11 @@ library gdash_app
     end function
 
     function whoami(req)
-        p = paths_for(req)
+        t = tenant_of(req)
+        if not t.ok then
+            return _refuse(t.status, t.message)
+        end if
+        p = t.p
         v = viewer_of(req, p)
         return _json({ authenticated: v.authed, user: v.name, groups: v.groups, admin: v.admin, csrf: gdash_session.csrf_for(secret_of(p), v.sid) })
     end function
@@ -1601,7 +1633,11 @@ library gdash_app
     end function
 
     function index_page(req)
-        p = paths_for(req)
+        t = tenant_of(req)
+        if not t.ok then
+            return _refuse(t.status, t.message)
+        end if
+        p = t.p
         v = viewer_of(req, p)
         visible = _visible_dashboards(p, v)
         q = chr(34)

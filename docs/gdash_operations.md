@@ -317,6 +317,39 @@ Design §6 recommends TLS rather than requiring it, and gdash sets the session
 cookie's `Secure` flag from `req.scheme` — so a proxy that speaks HTTPS to the
 browser and forwards the scheme gets the right behaviour.
 
+## 6b. Many tenants on one server (GDASH-15)
+
+A tenant is a root: one directory holding the five roles, sharing nothing
+with any other tenant. The server's own root (FHS, or `GDASH_ROOT`) holds the
+**registry**, `etc/tenants.json`. With no registry, gdash is the
+single-tenant deployment it has always been.
+
+```sh
+gdash tenant create acme --host acme.example.com --base /srv/gdash   # the first one names the base
+printf 'pw\npw\n' | gdash --tenant acme user add alice --admin       # its first admin
+gdash tenant list
+gdash tenant suspend acme | resume acme | delete acme
+gdash --tenant acme refresh sales                                    # any verb, for one tenant
+systemctl enable --now gdash-scheduler@acme.timer                    # its scheduler
+```
+
+**How a request finds its tenant.**
+
+- The `Host` header names it; case, port and a trailing dot are ignored.
+- **An unknown host is refused (404)**, and is never given a default tenant.
+- A suspended tenant is refused (403).
+- A registry that does not read refuses every host (503) until it is fixed.
+
+**Where tenants live.** A tenant's root is always `<base>/<id>`, and a tenant
+directory that resolves outside the base (a symlink out, say) is refused.
+
+**Deleting.** `delete` makes a tenant unreachable at once and keeps its
+directory; remove the directory yourself once nothing in it is wanted.
+
+**Before onboarding real tenants:** `access: open` on a dashboard means the
+open internet in a multi-tenant deployment, and there is not yet a
+tenant-level gate on it (GDASH-16).
+
 ## 7. Upgrades
 
 ```sh

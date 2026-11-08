@@ -35,6 +35,7 @@ program main(args)
     load gdash_record from "gdash_record.bas"
     load gdash_refresh from "gdash_refresh.bas"
     load gdash_store from "gdash_store.bas"
+    load gdash_tenants from "gdash_tenants.bas"
     load gdash_channels from "gdash_channels.bas"
     load gdash_publish from "gdash_publish.bas"
     load gdash_diff from "gdash_diff.bas"
@@ -61,6 +62,9 @@ program main(args)
     force_draft = false
     promote_as = ""
     model_named = ""
+    tenant_id = ""
+    tenant_hosts = []
+    tenant_base = ""
     i = 0
     while i < count(args)
         a = args[i]
@@ -68,6 +72,21 @@ program main(args)
             force_draft = true
             i += 1
         else if a = "--root" then
+            i += 2
+        else if a = "--tenant" then
+            if i + 1 < count(args) then
+                tenant_id = args[i + 1]
+            end if
+            i += 2
+        else if a = "--host" then
+            if i + 1 < count(args) then
+                tenant_hosts = append(tenant_hosts, args[i + 1])
+            end if
+            i += 2
+        else if a = "--base" then
+            if i + 1 < count(args) then
+                tenant_base = args[i + 1]
+            end if
             i += 2
         else if a = "--promote" then
             if i + 1 < count(args) then
@@ -94,6 +113,80 @@ program main(args)
             i += 1
         end if
     end while
+
+    ' --- tenants (GDASH-15) -------------------------------------------------
+    '
+    ' The registry lives in the BASE deployment's config (--root, or the FHS
+    ' paths), and the CLI is the only API: an onboarding service calls these
+    ' verbs rather than writing gdash's files.
+    if verb = "tenant" then
+        sub = ""
+        if count(rest) > 0 then
+            sub = rest[0]
+        end if
+        tid = ""
+        if count(rest) > 1 then
+            tid = rest[1]
+        end if
+        if sub = "list" then
+            listed = gdash_tenants.tenant_list(p)
+            if count(listed) = 0 then
+                print("no tenants (" + gdash_paths.tenants_file(p) + ")")
+            end if
+            for each t in listed
+                print(t.id + "  " + t.status + "  " + join(t.hosts, ",") + "  " + t.root)
+            next
+            exit(0)
+        end if
+        if tid = "" or not contains(["create", "suspend", "resume", "delete"], sub) then
+            print to error "usage: gdash [--root <dir>] tenant create <id> --host <host> [--host <host>] [--base <dir>]"
+            print to error "       gdash [--root <dir>] tenant list | suspend <id> | resume <id> | delete <id>"
+            exit(2)
+        end if
+        if sub = "create" then
+            made = gdash_tenants.create_tenant(p, tid, tenant_hosts, tenant_base)
+            if not made.ok then
+                print to error "error: " + made.message
+                exit(1)
+            end if
+            print("created tenant " + tid + " at " + made.root)
+            print("  give it a first admin:  gdash --tenant " + tid + " user add <name> --admin")
+            exit(0)
+        end if
+        if sub = "suspend" or sub = "resume" then
+            st = "suspended"
+            if sub = "resume" then
+                st = "active"
+            end if
+            w = gdash_tenants.set_tenant_status(p, tid, st)
+            if not w.ok then
+                print to error "error: " + w.message
+                exit(1)
+            end if
+            print("tenant " + tid + " is " + st)
+            exit(0)
+        end if
+        gone = gdash_tenants.remove_tenant(p, tid)
+        if not gone.ok then
+            print to error "error: " + gone.message
+            exit(1)
+        end if
+        print("tenant " + tid + " removed from the registry and unreachable")
+        print("  its directory is kept: " + gone.root)
+        print("  remove it yourself once you are sure nothing in it is wanted")
+        exit(0)
+    end if
+
+    ' Every other verb, for one tenant: its root, from the registry. An
+    ' operator may act on a suspended tenant; only requests are refused.
+    if tenant_id != "" then
+        tr = gdash_tenants.roles_for(p, tenant_id)
+        if not tr.ok then
+            print to error "error: " + tr.message
+            exit(2)
+        end if
+        p = tr.p
+    end if
 
     ' --- a source, checked ------------------------------------------------
     '

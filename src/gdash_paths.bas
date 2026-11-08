@@ -247,6 +247,19 @@ library gdash_paths
         return _join(data_dir(p, name, mode), "version")
     end function
 
+    ' The tenant registry is SERVER-level (GDASH-15): it lives in the base
+    ' deployment's config, beside nothing a tenant owns. Its absence is the
+    ' single-tenant deployment.
+    function tenants_file(p)
+        return _join(p.config_dir, "tenants.json")
+    end function
+
+    ' Each tenant's own format stamp, inside its root, so a migration across
+    ' hundreds of roots knows what each one is.
+    function tenant_stamp(p)
+        return _join(p.config_dir, "tenant.json")
+    end function
+
     function connections_file(p)
         return _join(p.config_dir, "connections.json")
     end function

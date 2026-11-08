@@ -18,6 +18,7 @@ program main(args)
     load gdash_shadow from "gdash_shadow.bas"
     load gdash_paths from "gdash_paths.bas"
     load gdash_refresh from "gdash_refresh.bas"
+    load gdash_tenants from "gdash_tenants.bas"
 
     ' A bare-name `load` searches THIS directory, recursively, before the
     ' stdlib, so a stray crypto.bas here would be the password hasher. Loads
@@ -27,6 +28,23 @@ program main(args)
     shadows = gdash_shadow.enforce()
 
     p = gdash_paths.from_args(args)
+
+    ' One scheduler per tenant (gdash_saas_design.md §4), as a systemd
+    ' template unit: `gdash-scheduler@acme` runs this with `--tenant acme`.
+    ' Separate processes cannot stall each other, where a shared pool would
+    ' need fairness logic to approximate that.
+    j = 0
+    while j < count(args)
+        if args[j] = "--tenant" and j + 1 < count(args) then
+            tr = gdash_tenants.roles_for(p, args[j + 1])
+            if not tr.ok then
+                print to error "gdash scheduler: " + tr.message
+                exit(2)
+            end if
+            p = tr.p
+        end if
+        j += 1
+    end while
 
     period = 15
     once = false

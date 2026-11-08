@@ -1,0 +1,17 @@
+[Unit]
+Description=gdash refresh pass for tenant %i, on a period
+Documentation=file:/usr/local/share/doc/gdash/gdash_operations.md
+
+[Timer]
+Unit=gdash-scheduler@%i.service
+# Every minute is the granularity of the policies a record can express
+# (`interval` is in seconds, but a pass is cheap and a minute is the smallest
+# period worth a timer). Persistent= catches up one missed pass after a
+# reboot rather than every pass since the machine was last on.
+OnBootSec=1min
+OnUnitActiveSec=1min
+Persistent=true
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

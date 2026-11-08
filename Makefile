@@ -40,11 +40,14 @@ install:
 	$(INSTALL) -m 0644 packaging/gdash.service $(DESTDIR)$(UNITDIR)/
 	$(INSTALL) -m 0644 packaging/gdash-scheduler.service $(DESTDIR)$(UNITDIR)/
 	$(INSTALL) -m 0644 packaging/gdash-scheduler.timer $(DESTDIR)$(UNITDIR)/
+	$(INSTALL) -m 0644 packaging/gdash-scheduler@.service $(DESTDIR)$(UNITDIR)/
+	$(INSTALL) -m 0644 packaging/gdash-scheduler@.timer $(DESTDIR)$(UNITDIR)/
 	# A unit that names /usr/local when the operator asked for /opt is a unit
 	# that fails at start with a path nobody typed.
 	sed -i 's|@BINDIR@|$(BINDIR)|g; s|@DOCDIR@|$(DOCDIR)|g' \
 	    $(DESTDIR)$(UNITDIR)/gdash.service \
-	    $(DESTDIR)$(UNITDIR)/gdash-scheduler.service
+	    $(DESTDIR)$(UNITDIR)/gdash-scheduler.service \
+	    $(DESTDIR)$(UNITDIR)/gdash-scheduler@.service
 	# The data roles. systemd's StateDirectory= and friends create and chown
 	# these for the service, but the CLI is run by an administrator before the
 	# service has ever started, so they exist from the install onward.
@@ -77,6 +80,8 @@ uninstall:
 	rm -f $(DESTDIR)$(UNITDIR)/gdash.service
 	rm -f $(DESTDIR)$(UNITDIR)/gdash-scheduler.service
 	rm -f $(DESTDIR)$(UNITDIR)/gdash-scheduler.timer
+	rm -f $(DESTDIR)$(UNITDIR)/gdash-scheduler@.service
+	rm -f $(DESTDIR)$(UNITDIR)/gdash-scheduler@.timer
 	@echo
 	@echo "gdash removed. Left alone, deliberately:"
 	@echo "  $(CONFDIR)   your configuration"

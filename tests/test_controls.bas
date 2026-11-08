@@ -17,17 +17,17 @@ program main(args)
              ytd: "2026-01-01..2026-05-15", last_month: "2026-04-01..2026-04-30", last_quarter: "2026-01-01..2026-03-31",
              last_year: "2025-01-01..2025-12-31" }
     for each ex in keys(want)
-        r = gdash_controls.range(ex, t)
+        r = gdash_controls.range_dates(ex, t)
         s = gdash_test.eq(s, string(r.from) + ".." + string(r.to), want[ex], ex + " at 2026-05-15")
     next
     ' The edges that go wrong: the first of a year, and a leap February.
     jan {date}= "2026-01-01"
-    s = gdash_test.eq(s, string(gdash_controls.range("last_month", jan).from) + ".." + string(gdash_controls.range("last_month", jan).to), "2025-12-01..2025-12-31", "last_month on 1 January is last December")
-    s = gdash_test.eq(s, string(gdash_controls.range("last_quarter", jan).from), "2025-10-01", "and last_quarter is last year's fourth")
+    s = gdash_test.eq(s, string(gdash_controls.range_dates("last_month", jan).from) + ".." + string(gdash_controls.range_dates("last_month", jan).to), "2025-12-01..2025-12-31", "last_month on 1 January is last December")
+    s = gdash_test.eq(s, string(gdash_controls.range_dates("last_quarter", jan).from), "2025-10-01", "and last_quarter is last year's fourth")
     mar {date}= "2028-03-10"
-    s = gdash_test.eq(s, string(gdash_controls.range("last_month", mar).to), "2028-02-29", "a leap February ends on the 29th")
-    s = gdash_test.eq(s, type(gdash_controls.range("mtd", t).from), "datetime", "the bounds are date values, which bind as dates")
-    bad = gdash_controls.range("last_fortnight", t)
+    s = gdash_test.eq(s, string(gdash_controls.range_dates("last_month", mar).to), "2028-02-29", "a leap February ends on the 29th")
+    s = gdash_test.eq(s, type(gdash_controls.range_dates("mtd", t).from), "datetime", "the bounds are date values, which bind as dates")
+    bad = gdash_controls.range_dates("last_fortnight", t)
     s = gdash_test.ok(s, not bad.ok, "an expression outside the vocabulary is refused")
     s = gdash_test.contains_text(s, bad.message, "the ranges are today, last_7d", "naming the vocabulary")
 
