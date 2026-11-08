@@ -422,7 +422,10 @@ stays a decision. Nothing here is forgotten work.
 
 ### Blocked on something outside gdash
 
-- **TLS.** gdash refuses to start with `GDASH_TLS_CERT`/`KEY` set rather than
+- **TLS (unblocked 2026-11-08, and served).** gbasic `d643f9b1` honours a
+  configured pair and reports `tls` on the server record; gdash now serves
+  TLS directly and checks that flag before saying it is listening. What
+  follows is the history. gdash refused to start with `GDASH_TLS_CERT`/`KEY` set rather than
   serve cleartext, because the platform accepts the pair and then serves in the
   clear (`gdash8_platform_report_tls.md`). Terminating at a proxy is the
   documented answer, and under the SaaS design the proxy exists anyway — so this

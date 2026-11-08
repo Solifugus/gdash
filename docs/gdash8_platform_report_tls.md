@@ -1,3 +1,8 @@
+> **Resolved (2026-11-08).** Since gbasic `d643f9b1`, `web.configure`'s
+> cert/key pair is honoured (measured: HTTPS 200 and plain HTTP refused), and
+> the server record carries `tls`, read from the listener. gdash serves TLS
+> directly and verifies that flag; see `gdash_operations.md` §6.
+
 # For the gbasic session — two from gdash's deployment phase
 
 ## 1. `web.configure` accepts cert/key and `serve` ignores them

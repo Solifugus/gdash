@@ -205,26 +205,40 @@ program main( args )
         exit(2)
     end if
     if cert != "" then
-        ' REFUSING RATHER THAN SERVING IN THE CLEAR (finding G8-6).
-        '
-        ' `web.configure` accepts `cert` and `key` and stores them --
-        ' cfg.options carries them -- but `serve` reads TLS from the
-        ' pre-registered head instead, so a configured pair is silently
-        ' ignored and the server listens in cleartext. Verified both ways at
-        ' gbasic ca5df46: the same pair in the head gives HTTPS 200 and refuses
-        ' plain HTTP; via configure it gives HTTPS nothing and plain HTTP 200.
-        '
-        ' gdash cannot detect this from what serve returns -- the server record
-        ' has no TLS field -- so it cannot verify and must not pretend. An
-        ' operator who configured TLS and got cleartext is worse off than one
-        ' who was told to use a proxy: the first believes they are encrypted.
-        print to error "gdash: TLS is configured, and this build cannot honour it."
-        print to error "       web.configure accepts cert/key but serve ignores them (gbasic ca5df46),"
-        print to error "       so starting would listen in CLEARTEXT while looking encrypted."
-        print to error "       Terminate TLS at a reverse proxy until the platform carries it through."
-        exit(2)
+        ' A pair that cannot be read is refused by name, before anything
+        ' listens -- not handed to the platform to fail in its own words.
+        for each f in [cert, keyf]
+            if not gdash_paths.path_exists(f) then
+                print to error "gdash: TLS file " + f + " cannot be read; refusing to start rather than serve in cleartext"
+                exit(2)
+            end if
+        next
+        settings["cert"] = cert
+        settings["key"] = keyf
     end if
 
+    ' TLS FROM THE PLATFORM, VERIFIED (G8-6 closed). Until gbasic d643f9b1
+    ' `web.configure` stored a cert/key pair and `serve` listened in cleartext
+    ' anyway, with nothing on the server record to say so -- so gdash refused
+    ' to start under TLS at all. Configure now honours the pair, and the record
+    ' says whether the LISTENER terminates TLS, read from its own state rather
+    ' than from what was asked for. That flag is checked, not assumed: a server
+    ' asked for TLS that is not serving it stops at once.
+    on error goto next
     h = web.serve(web.configure(gdash_web, settings))
-    print("gdash: listening on " + string(h.port))
+    e = error
+    on error stop
+    if e then
+        print to error "gdash: the server could not start: " + e.message
+        exit(2)
+    end if
+    if cert != "" and default(h.tls, false) != true then
+        print to error "gdash: TLS was configured but the listener is not serving it; stopping rather than serve in cleartext"
+        exit(2)
+    end if
+    tls_note = ""
+    if default(h.tls, false) = true then
+        tls_note = " (TLS)"
+    end if
+    print("gdash: listening on " + string(h.port) + tls_note)
 end program

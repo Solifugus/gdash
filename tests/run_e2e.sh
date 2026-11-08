@@ -665,17 +665,29 @@ who="$(curl -s -b "$jarA" --max-time 10 "http://127.0.0.1:$PORT/whoami")"
 has "$who" '"authenticated":true' "the browser is now authenticated"
 has "$who" '"user":"ada"' "as the user who signed in"
 
-echo "--- TLS ---"
-# gdash refuses to start under a TLS configuration this platform cannot honour
-# (finding G8-6): web.configure accepts cert/key and serve ignores them, so
-# starting would listen in cleartext while looking encrypted.
-#
-# WHEN THIS ASSERTION FAILS, THE PLATFORM HAS PROBABLY BEEN FIXED. Re-measure
-# with tests in gdash8_platform_report_tls.md and remove the refusal.
-tls_out="$(GDASH_ROOT="$ROOT" GDASH_TLS_CERT=/nonexistent/cert.pem GDASH_TLS_KEY=/nonexistent/key.pem \
+echo "--- TLS, served directly and verified ---"
+# G8-6 is closed: until gbasic d643f9b1 web.configure accepted a cert/key pair
+# and serve listened in cleartext anyway, so gdash refused to start under TLS.
+# The pair is honoured now, and the server record says whether the LISTENER
+# terminates TLS -- which gdash checks before it says it is listening.
+openssl req -x509 -newkey rsa:2048 -nodes -keyout "$SCRATCH/tls_key.pem" -out "$SCRATCH/tls_cert.pem" \
+    -days 1 -subj "/CN=localhost" >/dev/null 2>&1
+TLSPORT=8786
+port_must_be_free "$TLSPORT"
+GDASH_ROOT="$ROOT" GDASH_PORT="$TLSPORT" GDASH_TLS_CERT="$SCRATCH/tls_cert.pem" GDASH_TLS_KEY="$SCRATCH/tls_key.pem" \
+    "$GBASIC" --line-buffered src/gdash_server.bas > "$SCRATCH/tls_server.log" 2>&1 &
+tlspid=$!
+for i in $(seq 1 40); do grep -q "listening" "$SCRATCH/tls_server.log" 2>/dev/null && break; sleep 0.25; done
+has "$(cat "$SCRATCH/tls_server.log")" "listening on $TLSPORT (TLS)" "the server says it is serving TLS, from the listener's own record"
+ok "a page is served over HTTPS" "$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "https://127.0.0.1:$TLSPORT/d/sales")" "200"
+ok "and plain HTTP on the same port gets nothing" "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$TLSPORT/d/sales")" "000"
+has "$(curl -sk -D - -o /dev/null --max-time 5 "https://127.0.0.1:$TLSPORT/login")" "Secure" "the session cookie is Secure over HTTPS"
+kill "$tlspid" 2>/dev/null; wait "$tlspid" 2>/dev/null
+
+missing="$(GDASH_ROOT="$ROOT" GDASH_PORT="$TLSPORT" GDASH_TLS_CERT=/nonexistent/cert.pem GDASH_TLS_KEY=/nonexistent/key.pem \
     "$GBASIC" src/gdash_server.bas 2>&1)"
-has "$tls_out" "cannot honour it" "a TLS configuration is refused rather than served in the clear"
-half="$(GDASH_ROOT="$ROOT" GDASH_TLS_CERT=/nonexistent/cert.pem "$GBASIC" src/gdash_server.bas 2>&1)"
+has "$missing" "cannot be read; refusing to start rather than serve in cleartext" "a pair that cannot be read is refused before anything listens"
+half="$(GDASH_ROOT="$ROOT" GDASH_TLS_CERT="$SCRATCH/tls_cert.pem" "$GBASIC" src/gdash_server.bas 2>&1)"
 has "$half" "refusing to start in cleartext" "and half a pair is refused for its own reason"
 
 echo "--- a guesser is slowed, a typist is not ---"

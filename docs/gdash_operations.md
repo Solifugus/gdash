@@ -290,12 +290,28 @@ default.
 
 ### TLS
 
-**Terminate TLS at a reverse proxy.** gdash refuses to start if
-`GDASH_TLS_CERT` and `GDASH_TLS_KEY` are set, because the platform accepts them
-and then serves in cleartext — it would look encrypted and would not be
-(`gdash8_platform_report_tls.md`). Refusing is deliberate: an operator who
-configured TLS and got cleartext is worse off than one who was told to use a
-proxy.
+**gdash serves TLS directly, or behind a reverse proxy.** To serve it directly, set both of these in
+`/etc/gdash/environment`:
+
+```
+GDASH_TLS_CERT=/etc/gdash/tls/cert.pem
+GDASH_TLS_KEY=/etc/gdash/tls/key.pem
+```
+
+The log line then reads `gdash: listening on 8780 (TLS)`. That is read from
+the listener's own record, not from what was asked for: if TLS was configured
+and the listener is not serving it, gdash stops instead of serving cleartext.
+It also refuses to start if either file cannot be read, or if only one of the
+pair is set. Plain HTTP on a TLS port gets no answer.
+
+Getting, renewing and rotating certificates is the deployment's job; gdash
+only passes the pair through. A renewed certificate takes effect on restart.
+For many tenants on subdomains (`gdash_saas_design.md`), a proxy holding the
+wildcard certificate is still the simpler answer.
+
+Until gbasic `d643f9b1` gdash refused to start under TLS at all, because the
+platform accepted the pair and served in cleartext anyway, with nothing to
+show it (`gdash8_platform_report_tls.md`).
 
 Design §6 recommends TLS rather than requiring it, and gdash sets the session
 cookie's `Secure` flag from `req.scheme` — so a proxy that speaks HTTPS to the
@@ -362,4 +378,6 @@ Honesty about the gap between this document and a running system:
   work. Starting them found a real defect the first time (G14-1).
 - **The install, refresh, publish, serve, backup and restore have all run** at
   real FHS paths as root, in a container, with no `GDASH_*` set.
-- **TLS has not been served by gdash**, because it cannot be yet (§6).
+- **TLS is served by gdash in the end-to-end suite** (HTTPS answered, plain
+  HTTP refused, `Secure` cookies). It has not yet run under the systemd units
+  with a real certificate.
