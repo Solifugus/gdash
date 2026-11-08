@@ -16,6 +16,8 @@
 '   fail:   ""  or a reason string    -- the transport half of the seam
 '   log:    <path>  -- the system and user prompts, so a test can assert what
 '                      gdash actually told the model rather than what it meant to
+'   usage:  { input, output }  -- tokens the call reports, for the budget
+'   price:  { currency, input, output }  -- as a model profile states it
 ' }
 '
 ' gBASIC has function references and not closures, so the plan travels as ctx,
@@ -39,7 +41,9 @@ library model_double
         if reason != "" then
             return { ok: false, text: "", reason: reason }
         end if
-        return { ok: true, text: string(default(ctx["reply"], "")), reason: "" }
+        ' `usage` is what a provider would report, for the budget's meter
+        ' (GDASH-16); a plan that sets none reports none, as a local model does.
+        return { ok: true, text: string(default(ctx["reply"], "")), reason: "", usage: ctx["usage"] }
     end function
 
     function saying(reply)

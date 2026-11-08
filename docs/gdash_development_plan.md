@@ -272,7 +272,23 @@ refused as tenant ids and as dashboard names, that an ATTACH never crosses
 roots, and that an unknown Host is refused. **Isolation that is not executed on
 every run is isolation nobody can vouch for a year from now.**
 
-### GDASH-16 — Limits
+### GDASH-16 — Limits  *(brief: gdash16_brief.md; built 2026-11-08; refresh tests wait on gBASIC 0.11.0)*
+
+**Built:**
+
+- the `access: open` gate, moved here from GDASH-17: off for a tenant until
+  the operator grants it;
+- a disk quota checked before the fetch and before the swap;
+- refresh slots, per root and server-wide, that defer rather than fail;
+- a measured ceiling of 1,000,000 cells, about 300 bytes each;
+- a monthly model budget, metered from reported usage, with tenants at zero
+  until one is set;
+- `tenant limits` and `tenant limit`.
+
+gBASIC asks B1 (memory limit on a child), B2 (row cap on a source query) and
+B3 (G-SQL space after a swap) are filed.
+
+The original scope follows.
 
 Nothing here exists, and none of it is conceptually hard; it is simply absent.
 It comes before opening the door because a limit added after the first incident
@@ -299,7 +315,7 @@ is a limit that was needed before it.
 - An operator-side event stream — sign-ins, refresh failures, spend — which is
   what tolerating downtime obliges, because a human is now the failover.
 - `gdash tenant migrate --all`, reading the format stamp.
-- A tenant-level policy gate on `access: open`, defaulting to forbidden.
+- ~~A tenant-level policy gate on `access: open`~~ — built in GDASH-16.
 
 ### GDASH-18 — The onboarding surface  *(shape only; not scheduled)*
 

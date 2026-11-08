@@ -11,6 +11,7 @@
 program main(args)
     load gdash_test from "gdash_test.bas"
     load model_double from "model_double.bas"
+    load gdash_spend from "../src/gdash_spend.bas"
     load gdash_paths from "../src/gdash_paths.bas"
     load gdash_store from "../src/gdash_store.bas"
     load gdash_ask from "../src/gdash_ask.bas"
@@ -410,6 +411,29 @@ program main(args)
 
     absent = gdash_ask.promote(p, "nosuchdashboard", "v", vis)
     s = gdash_test.ok(s, not absent.ok, "promoting into a dashboard that is not there is refused")
+
+    ' --- the model budget, through the pipeline (GDASH-16) ------------------
+    '
+    ' A priced model under a budget: the question that fits is charged, and
+    ' the one after the budget is spent is refused BEFORE the model is called
+    ' -- so the refusal itself costs nothing.
+    lf {file} = gdash_paths.limits_file(p)
+    write(lf, encode({ format: 1, root: { model_budget: { amount: "0.03", currency: "USD" } } }))
+    paid = { reply: "select count(*) as n from orders", usage: { input: 1000, output: 2000 },
+             price: { currency: "USD", input: "3.00", output: "15.00" }, log: root + "/paid.log" }
+    pw = { ctx: paid, complete: model_double.complete }
+    first = gdash_ask.ask(p, "sales", "draft", rec, "how many orders are there?", pw, {})
+    s = gdash_test.ok(s, first.ok, "under budget, a question is answered")
+    spent = gdash_spend.read_ledger(p, gdash_spend.this_month(), "USD")
+    s = gdash_test.eq(s, money.text(spent.spent), "0.033000", "and charged what its tokens cost")
+    calls_before = len(model_double.prompted(root + "/paid.log"))
+    second = gdash_ask.ask(p, "sales", "draft", rec, "how many orders are there?", pw, {})
+    s = gdash_test.eq(s, second.stage, "budget", "once spent, the next question stops at the budget")
+    s = gdash_test.contains_text(s, second.message, "spent its model budget", "saying so")
+    s = gdash_test.eq(s, len(model_double.prompted(root + "/paid.log")), calls_before, "and the model was never called")
+    unpriced = gdash_ask.ask(p, "sales", "draft", rec, "how many orders are there?", model_double.saying("select 1"), {})
+    s = gdash_test.contains_text(s, unpriced.message, "states no price", "under a budget, an unpriced model is refused rather than assumed free")
+    delete(lf)
 
     exit(gdash_test.report(s))
 end program

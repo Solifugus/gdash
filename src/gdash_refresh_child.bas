@@ -65,6 +65,21 @@ program main(args)
         exit(4)
     end if
 
+    ' THE DATASET-SIZE CEILING (GDASH-16), in cells, because a cell is what
+    ' memory scales with: about 300 bytes each at this child's peak, measured.
+    ' Checked here, before anything is written, so a refused dataset leaves
+    ' no staging table and the live one untouched. It cannot stop a fetch
+    ' too large to return at all; that wants a memory limit on this process
+    ' (GDASH-16 ask B1).
+    ceiling = default(job["max_cells"], 0)
+    if ceiling > 0 then
+        cells = count(got.rows) * count(got.columns)
+        if cells > ceiling then
+            print to error "the query returned " + string(count(got.rows)) + " rows of " + string(count(got.columns)) + " columns, " + string(cells) + " cells, above this site's ceiling of " + string(ceiling) + "; narrow the query or aggregate it at the source"
+            exit(7)
+        end if
+    end if
+
     plan = gdash_store.plan_columns(got.columns, got.rows, job["columns"])
 
     wrote = gdash_store.materialize(job["db"], job["table"], plan, got.rows)

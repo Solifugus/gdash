@@ -12,6 +12,7 @@ library gdash_app
     load gdash_render from "gdash_render.bas"
     load gdash_controls from "gdash_controls.bas"
     load gdash_tenants from "gdash_tenants.bas"
+    load gdash_limits from "gdash_limits.bas"
     load gdash_format from "gdash_format.bas"
     load gdash_refresh from "gdash_refresh.bas"
     load gdash_sched from "gdash_sched.bas"
@@ -271,8 +272,14 @@ library gdash_app
     ' Fails closed in every direction: a record naming no groups and no
     ' `access` is admins-only, an unauthenticated viewer gets nothing that is
     ' not explicitly open, and `edit` never falls back to `view`.
-    function allowed(rec, v, need)
-        if need = "view" and default(rec["access"], "") = "open" then
+    '
+    ' `open_ok` is this root's open_access limit (GDASH-16): in a tenant it is
+    ' false unless the operator granted it, so a tenant cannot publish to the
+    ' world by editing one line of a record. A record that says `open` where
+    ' open is not permitted is not open -- it falls through to the group
+    ' rules like any other, which is closed for an anonymous viewer.
+    function allowed(rec, v, need, open_ok)
+        if need = "view" and open_ok and default(rec["access"], "") = "open" then
             return true
         end if
         if not v.authed then
@@ -338,7 +345,7 @@ library gdash_app
             end if
             return { ok: false, rec: {}, p: p, mode: pub.mode, snapshot: pub.snapshot, pin_was: pin, viewer: v, response: _refuse(500, "dashboard is invalid: " + join(loaded.errors, "; ")) }
         end if
-        if not allowed(loaded.record, v, need) then
+        if not allowed(loaded.record, v, need, gdash_limits.for_root(p).open_access) then
             logged = gdash_audit.event(p, "access.denied", { dashboard: name, user: v.name, need: need })
             ' 404 for an anonymous viewer, not 403: on an intranet, the
             ' existence of a dashboard called "layoffs-q3" is itself
@@ -741,7 +748,7 @@ library gdash_app
     ' somebody else as a link.
 
     function _may_preview(got)
-        return gdash_auth.preview_allowed(got.mode, allowed(got.rec, got.viewer, "edit"))
+        return gdash_auth.preview_allowed(got.mode, allowed(got.rec, got.viewer, "edit", false))
     end function
 
     function _preview_for(p, v, name)
@@ -895,7 +902,7 @@ library gdash_app
             end if
             return { ok: false, rec: {}, p: p, viewer: v, response: _refuse(500, "dashboard is invalid: " + join(loaded.errors, "; ")) }
         end if
-        if not allowed(loaded.record, v, "edit") then
+        if not allowed(loaded.record, v, "edit", false) then
             logged = gdash_audit.event(p, "access.denied", { dashboard: name, user: v.name, need: "edit" })
             if not v.authed then
                 return { ok: false, rec: {}, p: p, viewer: v, response: _refuse(404, "no such dashboard: " + name) }
@@ -1123,7 +1130,7 @@ library gdash_app
     ' Editors get a way in. A feature nobody can find is a feature nobody has,
     ' and the CLI is not where a dashboard'"'"'s editors necessarily live.
     function _ask_link(got, name)
-        if not allowed(got.rec, got.viewer, "edit") then
+        if not allowed(got.rec, got.viewer, "edit", false) then
             return ""
         end if
         q = chr(34)
@@ -1602,6 +1609,7 @@ library gdash_app
     ' It therefore reuses `allowed` rather than re-deriving the rule. A second
     ' implementation of an access decision is a second thing to keep right.
     function _visible_dashboards(p, v)
+        open_ok = gdash_limits.for_root(p).open_access
         out = []
         names = gdash_refresh.dashboards(p)
         i = 0
@@ -1612,7 +1620,7 @@ library gdash_app
             ' in `gdash list`; a viewer has nothing to do about it, and a
             ' broken record is not a reason to disclose that it exists.
             if loaded.ok then
-                if allowed(loaded.record, v, "view") then
+                if allowed(loaded.record, v, "view", open_ok) then
                     out = concat(out, [{ name: names[i], title: string(default(loaded.record["title"], names[i])) }])
                 end if
             end if

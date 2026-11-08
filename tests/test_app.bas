@@ -103,18 +103,25 @@ program main(args)
     i = 0
     while i < count(cases)
         c = cases[i]
-        got = gdash_app.allowed(c.rec, c.who, c.need)
+        got = gdash_app.allowed(c.rec, c.who, c.need, true)
         s = gdash_test.eq(s, got, c.want, c.why)
         i += 1
     end while
 
+    ' Where the root may not publish to the world (a tenant, by default:
+    ' GDASH-16), `access: open` opens nothing. The groups still apply, so the
+    ' same record is an admins-only one rather than a broken one.
+    s = gdash_test.ok(s, not gdash_app.allowed(open_rec, anon, "view", false), "where open access is not permitted, an open record does not serve anonymous")
+    s = gdash_test.ok(s, not gdash_app.allowed(open_rec, outsider, "view", false), "nor a signed-in stranger")
+    s = gdash_test.ok(s, gdash_app.allowed(open_rec, boss, "view", false), "and an admin still sees it")
+
     ' An editor can always see what they may change; the reverse is not true,
     ' and `edit` never falls back to `view`.
     view_only = record_for("v", "", ["analysts"], ["managers"])
-    s = gdash_test.ok(s, gdash_app.allowed(view_only, member, "view"), "a view group may view")
-    s = gdash_test.ok(s, not gdash_app.allowed(view_only, member, "edit"), "and may not edit")
+    s = gdash_test.ok(s, gdash_app.allowed(view_only, member, "view", true), "a view group may view")
+    s = gdash_test.ok(s, not gdash_app.allowed(view_only, member, "edit", true), "and may not edit")
     edit_only = record_for("e", "", [], ["analysts"])
-    s = gdash_test.ok(s, gdash_app.allowed(edit_only, member, "view"), "an editor may view what they may change")
+    s = gdash_test.ok(s, gdash_app.allowed(edit_only, member, "view", true), "an editor may view what they may change")
 
     ' --- the same rules over a real request ------------------------------
     made = gdash_paths.ensure_dir(gdash_paths.dashboard_dir(p, "open"))

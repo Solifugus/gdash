@@ -21,6 +21,7 @@ library gdash_publish
     load gdash_channels from "gdash_channels.bas"
     load gdash_store from "gdash_store.bas"
     load gdash_sched from "gdash_sched.bas"
+    load gdash_limits from "gdash_limits.bas"
 
     function _pad4(n)
         s = string(n)
@@ -206,10 +207,33 @@ library gdash_publish
             return { ok: false, snapshot: "", message: "a visual names a column its query does not return; nothing was published", errors: chk.errors, notes: notes }
         end if
 
+        ' A TENANT MAY NOT PUBLISH TO THE WORLD unless the operator granted it
+        ' (GDASH-16). The page refuses to serve such a record as open anyway;
+        ' refusing the publish is what tells the author, rather than leaving
+        ' them to discover that their "public" dashboard asks for a sign-in.
+        lim = gdash_limits.for_root(p)
+        if default(loaded.record["access"], "") = "open" and not lim.open_access then
+            why = "this site may not publish a dashboard with access: open; name view_groups instead, or ask the operator to permit open access"
+            logged = gdash_audit.event(p, "publish.refused", { dashboard: name, reason: why })
+            return { ok: false, snapshot: "", message: why, errors: [why], notes: notes }
+        end if
+
         dplan = data_plan(p, name, loaded.record)
         if count(dplan.refuse) > 0 then
             logged = gdash_audit.event(p, "publish.refused", { dashboard: name, reason: join(dplan.refuse, "; ") })
             return { ok: false, snapshot: "", message: "a dataset's data cannot be carried across; nothing was published", errors: dplan.refuse, notes: notes }
+        end if
+
+        ' Carrying data is writing it, so the quota applies as it does to a
+        ' refresh. A publish that carries nothing -- a title, a colour -- is
+        ' never refused for disk.
+        if count(dplan.carry) > 0 then
+            quota = gdash_limits.disk_check(p, lim)
+            if not quota.ok then
+                why = "carrying the draft's data would add to a site over its disk quota (" + gdash_limits.bytes_text(quota.used) + " of " + gdash_limits.shown("disk_bytes", lim.disk_bytes) + "); nothing was published"
+                logged = gdash_audit.event(p, "publish.refused", { dashboard: name, reason: why })
+                return { ok: false, snapshot: "", message: why, errors: [why], notes: notes }
+            end if
         end if
 
         made = gdash_paths.ensure_dir(gdash_paths.snapshot_dir(p, name))

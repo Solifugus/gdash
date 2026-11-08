@@ -260,6 +260,26 @@ library gdash_paths
         return _join(p.config_dir, "tenant.json")
     end function
 
+    ' The server's limits (GDASH-16), the operator's, read from the BASE root.
+    ' A tenant's own etc/ never holds one: a limit a tenant could edit is not
+    ' a limit.
+    function limits_file(p)
+        return _join(p.config_dir, "limits.json")
+    end function
+
+    ' The refresh slots: one lock file per slot, taken without waiting.
+    ' In run/, because a slot is held by a live process and means nothing
+    ' after a reboot.
+    function slot_file(p, scope, i)
+        return _join(_join(p.run_dir, "slots"), scope + "-" + string(i) + ".lock")
+    end function
+
+    ' What a tenant has spent on models, one file a month. In the state
+    ' directory, because it is a record of money and must survive a reboot.
+    function spend_file(p, month)
+        return _join(_join(p.state_dir, "spend"), month + ".json")
+    end function
+
     function connections_file(p)
         return _join(p.config_dir, "connections.json")
     end function

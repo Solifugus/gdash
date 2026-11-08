@@ -15,8 +15,10 @@ libssl3 libxml2 libcrypt1 libgirepository-2.0-0 libpcre2-8-0
 ```
 
 gdash stages its data in G-SQL, which is part of the interpreter, so there is
-no database to install. It needs a gBASIC build at or after `c9be074e`
-(`gbasic --version` prints `0.10.0+<rev>`), and builds since then link PCRE2.
+no database to install. It needs **gBASIC 0.11.0** or later, for the
+non-blocking lock the refresh limits are built on (GDASH-16). On an earlier
+build every refresh fails and names the missing lock. Builds since `c9be074e`
+link PCRE2.
 `libsqlite3` is still linked by the interpreter; gdash itself no longer uses
 it.
 
@@ -346,9 +348,87 @@ directory that resolves outside the base (a symlink out, say) is refused.
 **Deleting.** `delete` makes a tenant unreachable at once and keeps its
 directory; remove the directory yourself once nothing in it is wanted.
 
-**Before onboarding real tenants:** `access: open` on a dashboard means the
-open internet in a multi-tenant deployment, and there is not yet a
-tenant-level gate on it (GDASH-16).
+## 6c. Limits (GDASH-16)
+
+Five limits govern what a root may do. Each is the operator's: none can be
+set from inside a tenant.
+
+| limit | single root | tenant default | what happens at it |
+|---|---|---|---|
+| `open_access` | `true` | **`false`** | an `access: open` record is not open: an anonymous viewer gets 404, and publishing one is refused |
+| `disk_bytes` | `none` | 1 GiB | a refresh is refused, before the fetch and again before the swap, and the previous data stays served; a publish that would carry data is refused |
+| `refresh_children` | 4 | 2 | the refresh is **deferred**, not failed, and the next pass runs it |
+| `max_cells` | 1,000,000 | 1,000,000 | the refresh is refused; rows × columns is what a refresh child's memory scales with |
+| `model_budget` | `none` | **0.00 USD** | a question is refused before the model is called |
+
+There is also one server-wide limit, `server.refresh_children` (default 4),
+which caps every root's refresh children together.
+
+**A tenant cannot ask questions until it has a budget.** The default of zero
+is deliberate: a question costs money and a tenant spends it.
+
+```sh
+gdash tenant limits acme                          # what governs acme now, its disk use, this month's spend
+gdash tenant limit acme open_access true          # let acme publish to the internet
+gdash tenant limit acme model_budget 25.00USD     # a month, UTC calendar month
+gdash tenant limit acme disk_bytes 5368709120     # or "none"
+```
+
+**Where they live.**
+- The defaults and the server-wide cap are in the server's own
+  `etc/limits.json`. It is optional, and every section is too:
+
+  ```json
+  { "format": 1,
+    "server":  { "refresh_children": 4 },
+    "root":    { "max_cells": 500000 },
+    "tenants": { "disk_bytes": 2147483648, "refresh_children": 1 } }
+  ```
+
+- One tenant's overrides are in its registry entry, under `limits`, and are
+  written by `tenant limit`.
+- A tenant's root is found from its stamp, `etc/tenant.json`, which names the
+  registry. Every entry point therefore reaches the same limits, including an
+  operator's bare `--root`.
+
+**They fail closed.** Each of these gives the most restrictive answer: no
+open access, no refresh, no questions.
+- `limits.json` does not read.
+- A tenant's limits entry has a wrong value.
+- A tenant's stamp names a registry that does not list it.
+- The registry places the tenant at another directory, as with a copied
+  tenant directory.
+
+The refusal says which of these happened.
+
+**The dataset ceiling, measured.** A refresh child peaks at about **300 bytes
+a cell** (68 MB at 10,000 ten-column rows, 191 MB at 50,000). A million cells
+is therefore about 300 MB per child, and four children at once about 1.2 GB.
+Set `max_cells` × `server.refresh_children` × 300 bytes below what the host
+can spare. The ceiling is checked once the fetch returns. A query too large to
+return at all is not yet stopped; that needs a memory limit on the child
+process (gBASIC ask B1).
+
+**Disk is measured, not estimated.** The quota counts what `lib/`, `cache/`
+and `log/` hold on the volume. `run/` is not counted. Between compactions a
+G-SQL database holds 2 to 16 times its live data after repeated refreshes
+(gBASIC ask B3), so set a quota with that headroom until B3 lands. The audit
+log is never refused for disk: a sign-in is not refused because a refresh
+filled the volume.
+
+**Model spend.** A model profile states its price per million tokens, as
+decimal text:
+
+```json
+"price": { "currency": "USD", "input": "3.00", "output": "15.00" }
+```
+
+Under a budget, a profile with no price is refused rather than assumed to be
+free. A question that reports no token usage is charged an estimate, high on
+purpose: one token per two characters in, and `max_tokens` out. The ledger is
+`lib/spend/<YYYY-MM>.json`. Two questions asked at the same moment can both
+pass the check, so a month can end above its budget by at most one question
+per worker.
 
 ## 7. Upgrades
 

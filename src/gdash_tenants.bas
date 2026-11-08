@@ -247,6 +247,25 @@ library gdash_tenants
         return { ok: true, message: "" }
     end function
 
+    ' Public for gdash_limits, which changes a tenant's limits the same way.
+    function write_registry(base_p, reg)
+        return _write(base_p, reg)
+    end function
+
+    ' The registry's canonical path, for a tenant's stamp.
+    function _registry_path(base_p)
+        path = gdash_paths.tenants_file(base_p)
+        on error goto next
+        rp = real_path(base_p.config_dir)
+        if error then
+        end if
+        on error stop
+        if type(rp) = "string" then
+            return rp + "/tenants.json"
+        end if
+        return path
+    end function
+
     function _current(base_p, base)
         loaded = load_registry(base_p)
         if loaded.present and not loaded.ok then
@@ -299,7 +318,9 @@ library gdash_tenants
         ' looking at. One root never needed this; hundreds will.
         on error goto next
         sf {file} = gdash_paths.tenant_stamp(tp)
-        write(sf, encode({ format: 1, tenant: id }))
+        ' It names the registry, so a root reached by a bare --root still finds
+        ' the limits that govern it (GDASH-16).
+        write(sf, encode({ format: 1, tenant: id, registry: _registry_path(base_p) }))
         if error then
             return { ok: false, root: root, message: "cannot write the tenant's format stamp" }
         end if

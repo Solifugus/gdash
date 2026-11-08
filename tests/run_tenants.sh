@@ -86,6 +86,20 @@ GDASH_ROOT="$BASE" GDASH_PORT="$PORT" "$GBASIC" --line-buffered src/gdash_server
 for i in $(seq 1 60); do grep -q "listening" "$SCRATCH/server.log" 2>/dev/null && break; sleep 0.25; done
 get(){ curl -s --max-time 10 -H "Host: $1" "http://127.0.0.1:$PORT$2"; }
 code(){ curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Host: $1" "http://127.0.0.1:$PORT$2"; }
+# --- access: open is the operator's to grant in a tenant (GDASH-16) ---
+# Both records say `access: open`. Until the operator permits it, a tenant's
+# open record serves nobody anonymous, and publishing one is refused.
+ok "a tenant's open record is NOT open until the operator grants it" "$(code acme.example.test /d/sales)" "404"
+out="$(CLI --tenant acme publish sales 2>&1)"; rc=$?
+ok "and publishing one is refused" "$rc" "1"
+has "$out" "may not publish a dashboard with access: open" "saying why, and what to do instead"
+has "$(CLI tenant limits acme 2>&1)" "open_access  false" "tenant limits shows the gate closed by default"
+CLI tenant limit acme open_access true >/dev/null 2>&1
+CLI tenant limit globex open_access true >/dev/null 2>&1
+has "$(CLI tenant limits acme 2>&1)" "open_access  true" "and open once granted"
+out="$(CLI tenant limit acme open_access yes 2>&1)"; rc=$?
+ok "a limit that is not its kind is refused" "$rc" "1"
+
 a="$(get acme.example.test /d/sales)"; g="$(get globex.example.test /d/sales)"
 has "$a" "Sales of acme" "acme's host serves acme's dashboard"
 has "$g" "Sales of globex" "globex's host serves globex's dashboard of the same name"

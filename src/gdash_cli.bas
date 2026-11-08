@@ -36,6 +36,8 @@ program main(args)
     load gdash_refresh from "gdash_refresh.bas"
     load gdash_store from "gdash_store.bas"
     load gdash_tenants from "gdash_tenants.bas"
+    load gdash_limits from "gdash_limits.bas"
+    load gdash_spend from "gdash_spend.bas"
     load gdash_channels from "gdash_channels.bas"
     load gdash_publish from "gdash_publish.bas"
     load gdash_diff from "gdash_diff.bas"
@@ -138,10 +140,55 @@ program main(args)
             next
             exit(0)
         end if
-        if tid = "" or not contains(["create", "suspend", "resume", "delete"], sub) then
+        if tid = "" or not contains(["create", "suspend", "resume", "delete", "limits", "limit"], sub) then
             print to error "usage: gdash [--root <dir>] tenant create <id> --host <host> [--host <host>] [--base <dir>]"
             print to error "       gdash [--root <dir>] tenant list | suspend <id> | resume <id> | delete <id>"
+            print to error "       gdash [--root <dir>] tenant limits <id> | limit <id> <name> <value>"
             exit(2)
+        end if
+        ' --- limits (GDASH-16) ---
+        ' `limits` shows what governs the tenant now, defaults included, and
+        ' this month's model spend; `limit` sets one in its registry entry.
+        if sub = "limit" then
+            if count(rest) < 4 then
+                print to error "usage: gdash tenant limit <id> <name> <value>   (names: " + join(gdash_limits.limit_names(), ", ") + ")"
+                exit(2)
+            end if
+            w = gdash_limits.set_tenant_limit(p, tid, rest[2], rest[3])
+            if not w.ok then
+                print to error "error: " + w.message
+                exit(1)
+            end if
+            print("tenant " + tid + ": " + rest[2] + " set")
+            exit(0)
+        end if
+        if sub = "limits" then
+            tr = gdash_tenants.roles_for(p, tid)
+            if not tr.ok then
+                print to error "error: " + tr.message
+                exit(1)
+            end if
+            lim = gdash_limits.for_root(tr.p)
+            if not lim.ok then
+                print to error "error: " + lim.message
+                exit(1)
+            end if
+            for each nm in gdash_limits.limit_names()
+                print(nm + "  " + gdash_limits.shown(nm, lim[nm]))
+            next
+            print("server refresh_children  " + string(lim.server_children))
+            print("disk used  " + gdash_limits.bytes_text(gdash_limits.disk_used(tr.p)))
+            cur = "USD"
+            if lim.model_budget != "none" then
+                cur = string(lim.model_budget["currency"])
+            end if
+            led = gdash_spend.read_ledger(tr.p, gdash_spend.this_month(), cur)
+            if default(led["unreadable"], false) then
+                print("model spend " + gdash_spend.this_month() + "  unreadable")
+            else
+                print("model spend " + gdash_spend.this_month() + "  " + money.text(led.spent, 2) + " " + led.currency + " over " + string(led.calls) + " questions")
+            end if
+            exit(0)
         end if
         if sub = "create" then
             made = gdash_tenants.create_tenant(p, tid, tenant_hosts, tenant_base)
@@ -507,7 +554,7 @@ program main(args)
             print(result.notes[j])
             j += 1
         end while
-        print("schedule: " + string(result.checked) + " checked, " + string(result.refreshed) + " refreshed, " + string(result.unchanged) + " unchanged, " + string(result.failed) + " failed, " + string(result.swept) + " sessions swept")
+        print("schedule: " + string(result.checked) + " checked, " + string(result.refreshed) + " refreshed, " + string(result.unchanged) + " unchanged, " + string(result.failed) + " failed, " + string(result.deferred) + " deferred, " + string(result.swept) + " sessions swept")
         if result.failed > 0 then
             exit(1)
         end if

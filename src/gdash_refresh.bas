@@ -24,6 +24,7 @@ library gdash_refresh
     load gdash_session_files from "gdash_session_files.bas"
     load gdash_throttle from "gdash_throttle.bas"
     load gdash_record from "gdash_record.bas"
+    load gdash_limits from "gdash_limits.bas"
 
     ' `process.self()` reports the ABSOLUTE path of the running interpreter and
     ' script, however the process was invoked. That is what makes both of these
@@ -102,7 +103,35 @@ library gdash_refresh
     end function
 
     ' The lock is held around this. Everything it touches is one dataset's.
-    function _fetch_and_swap(p, dashboard, mode, rec, dataset, profile, st, now)
+    '
+    ' THE LIMITS COME FIRST (GDASH-16), and in this order: a root over its
+    ' disk quota is refused, because more data is exactly what it cannot
+    ' take; then a refresh slot is taken, from the server's set and this
+    ' root's, WITHOUT WAITING -- with none free the refresh is DEFERRED, not
+    ' failed, because nothing is wrong with it and the next pass will run it.
+    ' A deferral writes no state, so it neither backs the dataset off nor
+    ' says it failed.
+    function _fetch_and_swap(p, dashboard, mode, rec, dataset, profile, st, now, lim)
+        vfile = gdash_paths.version_file(p, dashboard, mode)
+        statepath = gdash_paths.dataset_state(p, dashboard, mode, dataset)
+        quota = gdash_limits.disk_check(p, lim)
+        if not quota.ok then
+            return _fail(p, dashboard, mode, dataset, st, now, quota.message, vfile, statepath)
+        end if
+        slots = gdash_limits.take_slots(p, lim)
+        if not slots.ok and not slots.deferred then
+            return _fail(p, dashboard, mode, dataset, st, now, slots.message, vfile, statepath)
+        end if
+        if not slots.ok then
+            logged = gdash_audit.event(p, "refresh.deferred", { dashboard: dashboard, mode: mode, dataset: dataset, reason: slots.message })
+            return { ok: true, message: slots.message, version: gdash_store.read_version(vfile), rows: st.rows, unchanged: true, skipped: true, deferred: true }
+        end if
+        outcome = _child_and_swap(p, dashboard, mode, rec, dataset, profile, st, now, lim)
+        released = gdash_limits.release_slots(slots.held)
+        return outcome
+    end function
+
+    function _child_and_swap(p, dashboard, mode, rec, dataset, profile, st, now, lim)
         ds = rec["datasets"][dataset]
         db = gdash_paths.stage_db(p, dashboard, mode)
         vfile = gdash_paths.version_file(p, dashboard, mode)
@@ -114,7 +143,7 @@ library gdash_refresh
             return _fail(p, dashboard, mode, dataset, st, now, "cannot clear a stale staging table", vfile, statepath)
         end if
 
-        job = { sql: ds["sql"], table: dataset, db: db, profile: profile, columns: ds["columns"] }
+        job = { sql: ds["sql"], table: dataset, db: db, profile: profile, columns: ds["columns"], max_cells: lim.max_cells }
         token = dashboard + "-" + mode + "-" + dataset
         jobpath = gdash_paths.job_file(p, token)
 
@@ -178,6 +207,15 @@ library gdash_refresh
             wrote = gdash_sched.write_state(statepath, after)
             logged = gdash_audit.event(p, "refresh.unchanged", { dashboard: dashboard, mode: mode, dataset: dataset, rows: said.rows })
             return { ok: true, message: "", version: gdash_store.read_version(vfile), rows: said.rows, unchanged: true, skipped: false }
+        end if
+
+        ' The quota again, now the new data is on disk beside the old: a
+        ' refresh that would take the root over is refused before it swaps,
+        ' so the old dataset is still what is served.
+        quota = gdash_limits.disk_check(p, lim)
+        if not quota.ok then
+            cleared = gdash_store.discard_staging(db, dataset)
+            return _fail(p, dashboard, mode, dataset, st, now, quota.message, vfile, statepath)
         end if
 
         ' The swap is one transaction; the version file bumps AFTER, so a
@@ -246,10 +284,15 @@ library gdash_refresh
             end if
         end if
 
+        lim = gdash_limits.for_root(p)
+        if not lim.ok then
+            return { ok: false, message: "this site's limits cannot be read, so nothing refreshes: " + lim.message, version: 0, rows: 0, unchanged: false, skipped: false }
+        end if
+
         outcome = { ok: false, message: "could not take the dataset lock", version: 0, rows: 0, unchanged: false, skipped: false }
 
-        ' There is no non-blocking advisory lock (finding G2-6): lock(f) is
-        ' flock(LOCK_EX). So the lock serializes, and the RE-READ of the state
+        ' The dataset lock WAITS -- the refresh slots in gdash_limits are the
+        ' ones that do not -- so it serializes, and the RE-READ of the state
         ' after acquiring it is what removes the duplicate fetch -- which is
         ' the right place for it anyway, since it also covers two refreshers
         ' that never overlapped inside the lock at all.
@@ -260,7 +303,7 @@ library gdash_refresh
             if not verdict.due then
                 outcome = { ok: true, message: verdict.reason, version: gdash_store.read_version(vfile), rows: st.rows, unchanged: true, skipped: true }
             else
-                outcome = _fetch_and_swap(p, dashboard, mode, rec, dataset, profile, st, now)
+                outcome = _fetch_and_swap(p, dashboard, mode, rec, dataset, profile, st, now, lim)
             end if
         end with
 
@@ -291,7 +334,7 @@ library gdash_refresh
     ' not refused per dataset, skipped -- because a draft has no policy that
     ' can fire (design §3) and walking one would only produce noise.
     '
-    ' Returns { checked, refreshed, unchanged, failed, notes }. It never
+    ' Returns { checked, refreshed, unchanged, failed, deferred, notes }. It never
     ' raises: a scheduler that dies on one bad dashboard stops refreshing
     ' every good one.
     function pass(p)
@@ -301,6 +344,7 @@ library gdash_refresh
         refreshed = 0
         unchanged = 0
         failed = 0
+        deferred = 0
         notes = []
         i = 0
         while i < count(names)
@@ -339,6 +383,9 @@ library gdash_refresh
                             if not r.ok then
                                 failed += 1
                                 notes = concat(notes, [name + "." + ds[j] + ": " + r.message])
+                            else if default(r["deferred"], false) then
+                                deferred += 1
+                                notes = append(notes, name + "." + ds[j] + ": " + r.message)
                             else if r.skipped then
                                 unchanged += 0
                             else if r.unchanged then
@@ -374,7 +421,7 @@ library gdash_refresh
         if swept > 0 then
             notes = concat(notes, ["swept " + string(swept) + " expired session(s)"])
         end if
-        return { checked: checked, refreshed: refreshed, unchanged: unchanged, failed: failed, notes: notes, swept: swept }
+        return { checked: checked, refreshed: refreshed, unchanged: unchanged, failed: failed, deferred: deferred, notes: notes, swept: swept }
     end function
 
     ' Connection profiles are server-level and never live in a record

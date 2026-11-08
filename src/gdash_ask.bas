@@ -40,6 +40,8 @@ library gdash_ask
     load gdash_sched from "gdash_sched.bas"
     load gdash_record from "gdash_record.bas"
     load gdash_format from "gdash_format.bas"
+    load gdash_limits from "gdash_limits.bas"
+    load gdash_spend from "gdash_spend.bas"
     load nlq
 
     ' --- the model profile -------------------------------------------------
@@ -125,7 +127,9 @@ library gdash_ask
         if is_unknown(m) then
             return { ok: false, text: "", reason: "the model profile is not usable" }
         end if
-        answer = llm.ask(m, system, user)
+        ' `chat` rather than `ask`, for the usage: what a question cost is
+        ' counted against the site's model budget (GDASH-16).
+        r = llm.chat(m, system, [{ role: "user", content: user }])
         if error then
             ' llm RAISES on transport and provider failure, including auth
             ' rejection and 429/5xx after its retry budget. A raise inside a
@@ -133,12 +137,13 @@ library gdash_ask
             ' stops here and becomes a value like every other outcome.
             return { ok: false, text: "", reason: "the model could not be reached" }
         end if
-        if is_unknown(answer) then
+        usage = r.usage
+        if is_unknown(r.text) then
             ' An empty completion is llm's `unknown`, and it is not an error:
-            ' the model was reached and said nothing useful.
-            return { ok: false, text: "", reason: "the model returned nothing" }
+            ' the model was reached and said nothing useful -- and was paid.
+            return { ok: false, text: "", reason: "the model returned nothing", usage: usage }
         end if
-        return { ok: true, text: string(answer), reason: "" }
+        return { ok: true, text: string(r.text), reason: "", usage: usage }
     end function
 
     ' A profile is a record, so the handle is built rather than stored. The key
@@ -399,7 +404,20 @@ library gdash_ask
             return _stop("ground", q, "this dashboard has no data that could answer that" + words, { as_of: stamps })
         end if
 
+        ' THE BUDGET, checked before the model is called and charged after
+        ' (GDASH-16). A refusal here has cost nothing.
+        lim = gdash_limits.for_root(p)
+        gate = gdash_spend.check_budget(p, lim, wire.ctx)
+        if not gate.ok then
+            return _stop("budget", q, gate.message, { key: plan.key, as_of: stamps })
+        end if
         got = wire.complete(wire.ctx, plan.system, plan.user)
+        ' Charged whether or not the answer was usable: a model that replied
+        ' with prose was still paid. A transport failure reports no usage and
+        ' the call never reached a model, so it is not charged.
+        if got.ok or not is_unknown(got["usage"]) then
+            charged = gdash_spend.charge(p, wire.ctx, got["usage"], len(plan.system) + len(plan.user))
+        end if
         if not got.ok then
             return _stop("model", q, got.reason, { key: plan.key, as_of: stamps, units_told: units_told })
         end if
