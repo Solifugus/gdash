@@ -515,6 +515,45 @@ library gdash_store
         return out
     end function
 
+    ' One dataset copied from one dashboard database to another -- the draft's
+    ' to the published, on publish (G11-11, ruled 2026-11-08). Read with the
+    ' kinds, currencies and display scales `_gdash_meta` recorded, written
+    ' through `materialize` and `swap` exactly as a refresh writes, so a reader
+    ' of the destination never sees a half-copied table and the copy's date
+    ' coverage is recomputed from the rows it holds. { ok, rows, message }
+    function copy_dataset(src_db, dst_db, table)
+        desc = describe_datasets(src_db)
+        if not desc.ok or is_unknown(desc.datasets[table]) then
+            return { ok: false, rows: 0, message: "dataset '" + table + "' has no data to carry" }
+        end if
+        plan = []
+        for each c in desc.datasets[table].columns
+            plan = append(plan, { name: c.name, kind: c.kind, scale: c.scale, currency: c.currency })
+        next
+        got = _read(src_db, "select * from " + _quote_ident(table), [])
+        if not got.ok then
+            return { ok: false, rows: 0, message: "cannot read dataset '" + table + "': " + got.message }
+        end if
+        rows = []
+        for each rec in got.rows
+            row = []
+            for each entry in plan
+                row = append(row, rec[entry.name])
+            next
+            rows = append(rows, row)
+        next
+        m = materialize(dst_db, table, plan, rows)
+        if not m.ok then
+            return { ok: false, rows: 0, message: m.message }
+        end if
+        sw = swap(dst_db, table)
+        if not sw.ok then
+            gone = discard_staging(dst_db, table)
+            return { ok: false, rows: 0, message: sw.message }
+        end if
+        return { ok: true, rows: count(rows), message: "" }
+    end function
+
     ' A date column's coverage, as recorded at its last refresh:
     ' { known, lo, hi }. `known` is false when no refresh has recorded it --
     ' which a control must say as "coverage unknown", never as a guessed

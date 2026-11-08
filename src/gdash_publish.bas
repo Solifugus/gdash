@@ -19,6 +19,8 @@ library gdash_publish
     load gdash_record from "gdash_record.bas"
     load gdash_audit from "gdash_audit.bas"
     load gdash_channels from "gdash_channels.bas"
+    load gdash_store from "gdash_store.bas"
+    load gdash_sched from "gdash_sched.bas"
 
     function _pad4(n)
         s = string(n)
@@ -99,6 +101,87 @@ library gdash_publish
     end function
 
     ' Returns { ok, snapshot, message, errors }.
+    ' --- carrying the draft's data across (G11-11, ruled 2026-11-08) -----------
+    '
+    ' A published dashboard used to be empty until something refreshed it,
+    ' because publish copied the record and nothing else. It now carries the
+    ' draft's data -- per dataset, and not blindly, because a draft refreshes
+    ' only when someone asks while a published dataset may refresh every few
+    ' minutes, and republishing a title must not swap fresh data for stale:
+    '
+    '   published has none                     -> carry the draft's
+    '   the definition changed                 -> carry the draft's, which was
+    '                                             fetched under the new one
+    '   unchanged, both have data              -> keep the more recent
+    '   changed, and the draft never fetched
+    '   it under the new definition            -> REFUSE, by name: old data
+    '                                             under a new definition is the
+    '                                             wrong answer to a new question
+    '
+    ' "Definition" is gdash_sched.definition_of: profile, SQL and declared
+    ' columns, as recorded with the data when it was fetched.
+    function data_plan(p, name, rec)
+        carry = []
+        keep = []
+        empty = []
+        refuse = []
+        ddb = gdash_paths.stage_db(p, name, "draft")
+        pdb = gdash_paths.stage_db(p, name, "published")
+        for each dn in sort(keys(rec["datasets"]))
+            ds = rec["datasets"][dn]
+            want = gdash_sched.definition_of(ds)
+            dst = gdash_sched.read_state(gdash_paths.dataset_state(p, name, "draft", dn))
+            pst = gdash_sched.read_state(gdash_paths.dataset_state(p, name, "published", dn))
+            draft_ok = gdash_store.has_dataset(ddb, dn) and dst.definition = want
+            pub_has = gdash_store.has_dataset(pdb, dn)
+            if not pub_has then
+                if draft_ok then
+                    carry = append(carry, dn)
+                else
+                    empty = append(empty, dn)
+                end if
+            else if pst.definition != want then
+                if draft_ok then
+                    carry = append(carry, dn)
+                else
+                    refuse = append(refuse, "dataset '" + dn + "' has a new definition and the draft has not fetched it under that definition; refresh the draft first (gdash refresh " + name + " --draft)")
+                end if
+            else if draft_ok and dst.last_success > pst.last_success then
+                carry = append(carry, dn)
+            else
+                keep = append(keep, dn)
+            end if
+        next
+        return { carry: carry, keep: keep, empty: empty, refuse: refuse }
+    end function
+
+    ' One dataset's draft data and its state into the published side, under
+    ' the published dataset's own lock -- the one a refresh takes -- so a
+    ' scheduler refresh and a publish never write it at once.
+    function _carry(p, name, dn)
+        made = gdash_paths.ensure_dir(gdash_paths.data_dir(p, name, "published"))
+        lockpath = gdash_paths.dataset_lock(p, name, "published", dn)
+        on error goto next
+        lf {file} = lockpath
+        if not gdash_paths.path_exists(lockpath) then
+            write(lf, "")
+        end if
+        if error then
+            return { ok: false, rows: 0, message: "cannot create the lock " + lockpath }
+        end if
+        on error stop
+        got = { ok: false, rows: 0, message: "could not take the dataset lock" }
+        with lock(lf)
+            got = gdash_store.copy_dataset(gdash_paths.stage_db(p, name, "draft"), gdash_paths.stage_db(p, name, "published"), dn)
+            if got.ok then
+                st = gdash_sched.read_state(gdash_paths.dataset_state(p, name, "draft", dn))
+                carried = { format: 1, last_attempt: st.last_attempt, last_success: st.last_success, last_error: "", rows: st.rows, hash: st.hash, requested: 0, definition: st.definition }
+                wrote = gdash_sched.write_state(gdash_paths.dataset_state(p, name, "published", dn), carried)
+            end if
+        end with
+        return got
+    end function
+
     function publish(p, name)
         draft = gdash_paths.record_file(p, name)
         loaded = gdash_record.load_file(draft)
@@ -123,6 +206,12 @@ library gdash_publish
             return { ok: false, snapshot: "", message: "a visual names a column its query does not return; nothing was published", errors: chk.errors, notes: notes }
         end if
 
+        dplan = data_plan(p, name, loaded.record)
+        if count(dplan.refuse) > 0 then
+            logged = gdash_audit.event(p, "publish.refused", { dashboard: name, reason: join(dplan.refuse, "; ") })
+            return { ok: false, snapshot: "", message: "a dataset's data cannot be carried across; nothing was published", errors: dplan.refuse, notes: notes }
+        end if
+
         made = gdash_paths.ensure_dir(gdash_paths.snapshot_dir(p, name))
         leaf = _next_leaf(p, name)
         dest = gdash_paths.snapshot_file(p, name, leaf)
@@ -142,10 +231,31 @@ library gdash_publish
             return { ok: false, snapshot: "", message: "cannot write snapshot " + leaf, errors: [], notes: notes }
         end if
 
+        ' The data before the pointer: a viewer who opens the new snapshot the
+        ' moment `current` moves finds the data it was published with.
+        for each dn in dplan.carry
+            c = _carry(p, name, dn)
+            if not c.ok then
+                return { ok: false, snapshot: "", message: "dataset '" + dn + "' could not be carried across: " + c.message + "; snapshot " + leaf + " was written but not made current", errors: [], notes: notes }
+            end if
+            notes = append(notes, "carried dataset '" + dn + "' from the draft (" + string(c.rows) + " rows)")
+        next
+        for each dn in dplan.keep
+            notes = append(notes, "kept the published data for '" + dn + "', which is as recent as the draft's")
+        next
+        for each dn in dplan.empty
+            notes = append(notes, "dataset '" + dn + "' has no data yet on either side; refresh it to fill it")
+        next
+
         if not _repoint(p, name, leaf) then
             return { ok: false, snapshot: "", message: "snapshot " + leaf + " was written but `current` could not be repointed", errors: [], notes: notes }
         end if
-        logged = gdash_audit.event(p, "publish", { dashboard: name, snapshot: leaf })
+        if count(dplan.carry) > 0 then
+            ' Open published pages reload onto the carried data.
+            vfile = gdash_paths.version_file(p, name, "published")
+            v = gdash_store.bump_version(vfile, vfile + ".tmp")
+        end if
+        logged = gdash_audit.event(p, "publish", { dashboard: name, snapshot: leaf, carried: dplan.carry })
         return { ok: true, snapshot: leaf, message: "", errors: [], notes: notes }
     end function
 

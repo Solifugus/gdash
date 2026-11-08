@@ -364,6 +364,17 @@ gdash schedule                   # one refresh pass, by hand
 Authoring is the record file itself: edit `draft.json`, `gdash validate`, then
 `gdash publish`. There is no designer UI and no second way to publish.
 
+**Publish carries the draft's data with it**, dataset by dataset, and says
+what it did:
+
+- **"carried"**: the published side had none, or the definition changed;
+- **"kept"**: the published copy is at least as recent as the draft's;
+- **"no data yet"**: neither side has any.
+
+It refuses, naming the dataset, when a dataset's definition changed and the
+draft has not been refreshed since. Run `gdash refresh <name> --draft` and
+publish again.
+
 ## 10. What has not been run
 
 Honesty about the gap between this document and a running system:

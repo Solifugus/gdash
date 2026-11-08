@@ -122,12 +122,18 @@ library gdash_sched
         return st.last_success
     end function
 
-    ' What produced the data now on disk: the fetch query and the profile it
-    ' came from. A published record can be rolled back to a version whose
-    ' dataset asks a different question, and then the file on disk is the
-    ' answer to a question nobody is asking any more (GDASH-3 brief §2.3).
+    ' What produced the data now on disk: the fetch query, the profile it came
+    ' from, and the declared columns it was stored under. A published record
+    ' can be rolled back to a version whose dataset asks a different question,
+    ' and then the data on disk is the answer to a question nobody is asking
+    ' any more (GDASH-3 brief §2.3).
+    '
+    ' THE COLUMNS JOINED IN 2026-11-08. A money column's currency or a `date`
+    ' declaration changes what is STORED (GDASH-20, GDASH-19), so data fetched
+    ' under the old declaration is not this dataset's data either -- and
+    ' publish uses this to decide whether the draft's data can be carried.
     function definition_of(ds)
-        return crypto.sha256_hex(string(ds["profile"]) + chr(31) + string(ds["sql"]))
+        return crypto.sha256_hex(string(ds["profile"]) + chr(31) + string(ds["sql"]) + chr(31) + encode(default(ds["columns"], {})))
     end function
 
     ' True when there IS data and it predates the definition now in force. A

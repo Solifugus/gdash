@@ -447,10 +447,11 @@ plus the four that need a decision before there is a sentence to write.
 
 - **§5's SSE sentence** names a carrier gdash no longer uses. Wrong in
   mechanism, right in principle (GDASH-11).
-- **Whether publish should carry the draft's data across** (G11-11). §7
-  authorises copying the record and is silent on the data, so a published
-  dashboard is empty until something refreshes it. Three defensible answers are
-  written out in the findings.
+- ~~**Whether publish should carry the draft's data across** (G11-11).~~
+  **Ruled 2026-11-08 and built:** per dataset. The draft's data is carried when
+  the published side has none or the definition changed; the more recent copy
+  is kept when nothing changed; publish refuses when a definition changed and
+  the draft has not fetched it. Design §7 says so.
 - **§8's `memberOf` sentence**, `password_hash` naming, and local-provider-first.
 - **§4's money headroom and the render path; §2's content-hash.**
 - **The design document says nothing about asking questions in English**
@@ -458,11 +459,9 @@ plus the four that need a decision before there is a sentence to write.
   session's arguments rather than a ruling: that a question edits the draft and
   so the draft's edit groups govern it; that the draft rides the session between
   asking and promoting; that promotion places the visual on the first tab.
-- **§4 is silent on what the renderer does when one result set spans two
-  scales** (GDASH-13). It now refuses. If the intended answer was a per-visual
-  scale declaration, that is a record-format change. The same ruling covers
-  G13-5, where "the primary wins a column-name collision" was reversed on the
-  grounds that it can only be silently wrong.
+- ~~**§4 is silent on what the renderer does when one result set spans two
+  scales** (GDASH-13).~~ **Ruled 2026-11-07 (G20-9):** with exact money only the
+  number of places is ambiguous, and it falls back to the currency's own.
 - **Multi-tenancy itself**: `gdash_saas_design.md` §9 lists the four sections
   that would need a sentence.
 

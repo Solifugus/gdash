@@ -537,22 +537,40 @@ out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" snapshots timed 2>&1)"
 has "$out" "0001.json" "snapshots lists every version"
 has "$out" "* 0003.json" "marking the one in force"
 
-# Publish a version whose dataset asks a DIFFERENT question. The data on disk
-# was fetched for the old query, so it now answers a question nobody is asking.
-python3 - "$ROOT" <<'PYEOF'
+# Publish a version whose dataset asks a DIFFERENT question. Since G11-11
+# (ruled 2026-11-08) publish carries the draft's data -- and a new definition
+# the draft has not fetched has no data to carry, so it is REFUSED by name
+# rather than published over data that answers the old question.
+newq(){ python3 - "$ROOT" "$1" <<'PYEOF'
 import json,sys
 p=sys.argv[1]+'/lib/dashboards/timed/draft.json'
 d=json.load(open(p))
-d['datasets']['orders']['sql']="select region, month, amount from sales.orders where region <> 'nowhere'"
+d['datasets']['orders']['sql']=sys.argv[2]
 d['datasets']['orders']['refresh']='manual'
-del d['datasets']['orders']['every']
+d['datasets']['orders'].pop('every', None)
 json.dump(d,open(p,'w'),indent=2)
 PYEOF
+}
+newq "select region, month, amount from sales.orders where region <> 'nowhere'"
 out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" publish timed 2>&1)"
-has "$out" "published timed as 0004.json" "a version with a different query is published"
+has "$out" "dataset 'orders' has a new definition" "a new query the draft never fetched is refused, naming the dataset"
+has "$out" "refresh the draft first" "and saying what to do"
 
+"$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh timed --draft >/dev/null 2>&1
+out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" publish timed 2>&1)"
+has "$out" "published timed as 0004.json" "once the draft has fetched it, the version publishes"
+has "$out" "carried dataset 'orders' from the draft" "carrying the data fetched under the new query"
+fresh_page="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/timed")"
+hasnt "$fresh_page" "definition changed" "so the record and its data agree from the moment it is published"
+
+# A stale definition on the published side can now arise only by rollback.
+newq "select region, month, amount from sales.orders where region <> 'elsewhere'"
+"$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh timed --draft >/dev/null 2>&1
+out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" publish timed 2>&1)"
+has "$out" "published timed as 0005.json" "a second query publishes the same way"
+out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" rollback timed 0004.json 2>&1)"
 changed_page="$(curl -s --max-time 10 "http://127.0.0.1:$PORT/d/timed")"
-has "$changed_page" "definition changed" "the page says the data predates the record now serving it"
+has "$changed_page" "definition changed" "after a rollback the page says the data predates the record now serving it"
 has "$changed_page" "<svg" "while every visual keeps rendering the data there is"
 
 # The dataset is `manual`, so the scheduler must NOT go behind the author's
@@ -565,7 +583,7 @@ has "$still" "definition changed" "so it still says so"
 # A person asking refreshes what the dashboard SERVES -- the published data,
 # not the draft, which is the only way a published manual dataset ever moves.
 out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh timed 2>&1)"
-# The new query returns the same rows, so the CONTENT is unchanged even though
+# The query returns the same rows, so the CONTENT is unchanged even though
 # the definition is not: no swap, no version bump, no reload for anyone -- and
 # the definition is recorded anyway, which is what clears the warning.
 has "$out" "unchanged timed.orders" "a person can refresh a published manual dataset"

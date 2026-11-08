@@ -264,7 +264,7 @@
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:529",
+      "where": "src/gdash_store.bas:568",
       "sql": "select lo, hi from _gdash_bounds where dataset = $1 and column_name = $2",
       "binds": true
     },
@@ -273,7 +273,7 @@
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:595",
+      "where": "src/gdash_store.bas:634",
       "sql": "select distinct \"<column>\" as v from \"<ds>\" where \"<column>\" is not null limit <limit>",
       "binds": false
     },
@@ -282,7 +282,7 @@
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:623",
+      "where": "src/gdash_store.bas:662",
       "sql": "<sql>",
       "binds": true,
       "note": "<sql> is ask or visual SQL, run inside begin(\"read\") so the engine refuses any write."

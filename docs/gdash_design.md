@@ -241,6 +241,15 @@ Immutable published snapshots + one mutable draft:
   numbers the CFO saw Tuesday and today") — a headline feature for free.
 - Self-contained records are what keep publish trivial; a draft edit cannot
   leak into production.
+- **Publish carries the draft's data across, per dataset** (ruled 2026-11-08),
+  so a published dashboard is not empty until something refreshes it. It
+  carries the draft's data when the published side has none, or when the
+  dataset's definition (profile, SQL, declared columns) changed and the draft
+  fetched it under the new one. It keeps whichever copy is more recent when
+  nothing changed, so a republish never replaces fresher published data with
+  an older draft's. It refuses when a definition changed and the draft has not
+  fetched it: old data under a new definition is the wrong answer. The copy
+  goes through the same staging-and-swap as a refresh, before `current` moves.
 
 ## 8. Identity, authorization, personalization
 
