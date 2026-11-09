@@ -20,7 +20,6 @@ GBASIC="${GDASH_GBASIC:-$HOME/development/gbasic/gbasic}"
 export GDASH_GBASIC="$GBASIC"
 
 PORT=8780
-port_must_be_free "$PORT"
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/gdash-races-XXXXXX")"
 ROOT="$SCRATCH/root"
 mkdir -p "$ROOT/etc" "$ROOT/lib/dashboards/sales" "$ROOT/cache" "$ROOT/log" "$ROOT/run"
@@ -56,6 +55,9 @@ port_must_be_free(){
         exit 2
     fi
 }
+# Called after the definition: bash has no hoisting, and called before it
+# the check was "command not found" and the run went on regardless.
+port_must_be_free "$PORT"
 
 
 cp dashboards/sales/draft.json "$ROOT/lib/dashboards/sales/draft.json"
