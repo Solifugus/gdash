@@ -24,7 +24,7 @@ program main(args)
     s = gdash_test.eq(s, gdash_source_odbc.connection_string({ connection: "  Driver=X  " }), "Driver=X", "a target is trimmed")
 
     ' --- a profile that names nothing is refused before any driver is asked --
-    got = gdash_source_odbc.fetch({}, "select 1")
+    got = gdash_source_odbc.fetch({}, "select 1", 0)
     s = gdash_test.ok(s, not got.ok, "a profile with no target does not reach a driver")
     s = gdash_test.contains_text(s, got.message, "neither 'connection' nor 'dsn'", "and says which keys it wanted")
     s = gdash_test.eq(s, count(got.rows), 0, "with no rows")
@@ -37,7 +37,7 @@ program main(args)
     ' asserts the same thing about the driver's own message, because a driver
     ' is third-party code.
     secret = "Driver=NoSuchDriverAnywhere;UID=app;PWD=hunter2-must-not-appear"
-    leaky = gdash_source_odbc.fetch({ connection: secret }, "select 1")
+    leaky = gdash_source_odbc.fetch({ connection: secret }, "select 1", 0)
     s = gdash_test.ok(s, not leaky.ok, "an unusable driver fails")
     s = gdash_test.ok(s, not contains(leaky.message, "hunter2-must-not-appear"), "and the password is not in the message")
     s = gdash_test.ok(s, not contains(leaky.message, "PWD="), "nor any part of the connection string")

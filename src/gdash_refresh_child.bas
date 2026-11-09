@@ -41,6 +41,12 @@ program main(args)
 
     profile = job["profile"]
     kind = profile["kind"]
+    ' The row cap a source query stops at (GDASH-16, gbasic B2). The column
+    ' count is not known until rows arrive, so the cap is the ceiling itself
+    ' -- a row has at least one cell -- and the exact cell count is checked
+    ' below. Between the two, the memory limit this process runs under is
+    ' what stops a wide result.
+    max_rows = default(job["max_cells"], 0)
 
     if kind = "fixture" then
         got = gdash_source_fixture.fetch(profile, job["sql"])
@@ -48,13 +54,13 @@ program main(args)
         ' Loaded only on the branch that needs it: a hermetic run must not
         ' require the pg module to be present or a server to exist.
         load gdash_source_pg from "gdash_source_pg.bas"
-        got = gdash_source_pg.fetch(profile, job["sql"])
+        got = gdash_source_pg.fetch(profile, job["sql"], max_rows)
     else if kind = "odbc" then
         ' Loaded only on the branch that needs it, as postgres is: a hermetic
         ' run must not require the odbc module, and a build without unixODBC
         ' must still serve dashboards from the sources it does have.
         load gdash_source_odbc from "gdash_source_odbc.bas"
-        got = gdash_source_odbc.fetch(profile, job["sql"])
+        got = gdash_source_odbc.fetch(profile, job["sql"], max_rows)
     else
         print to error "unknown profile kind: " + string(kind)
         exit(3)
@@ -62,15 +68,18 @@ program main(args)
 
     if not got.ok then
         print to error got.message
+        if default(got["capped"], false) then
+            exit(7)
+        end if
         exit(4)
     end if
 
     ' THE DATASET-SIZE CEILING (GDASH-16), in cells, because a cell is what
     ' memory scales with: about 300 bytes each at this child's peak, measured.
     ' Checked here, before anything is written, so a refused dataset leaves
-    ' no staging table and the live one untouched. It cannot stop a fetch
-    ' too large to return at all; that wants a memory limit on this process
-    ' (GDASH-16 ask B1).
+    ' no staging table and the live one untouched. A fetch too large to
+    ' return at all is stopped by the row cap above, or by the memory limit
+    ' the parent started this process under.
     ceiling = default(job["max_cells"], 0)
     if ceiling > 0 then
         cells = count(got.rows) * count(got.columns)

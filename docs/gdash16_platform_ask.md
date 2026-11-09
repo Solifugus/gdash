@@ -9,7 +9,7 @@ refreshes, dataset size, and model spend. Two of them work today. One waits on
 three asks below are what stands between the other limits and the numbers
 they are supposed to keep. They are in priority order.
 
-## B1. A memory limit on a child process
+## B1. A memory limit on a child process. **Done: gbasic `decd684b`**, used by every refresh child
 
 **Need.** `process.start({ command, args, limits: { memory: <bytes> } })`,
 setting `RLIMIT_AS` (or `RLIMIT_DATA`) in the child before `exec`. A child
@@ -29,7 +29,7 @@ child. gdash can count cells once a fetch returns. Only a limit set before
 above the ceiling. That refuses a dataset that fits in memory but is over the
 ceiling. It does not protect against one that does not fit.
 
-## B2. A row cap on a source query that does not buffer past it
+## B2. A row cap on a source query that does not buffer past it. **Done: gbasic `decd684b`**, used by the Postgres and ODBC sources
 
 **Need.** `pg.query(conn, sql, params, { max_rows: N })`, and the same on
 `odbc`, using libpq's single-row mode (or a cursor) so that no more than N+1
@@ -43,7 +43,7 @@ limit can only say "the refresh ran out of memory". gdash could wrap the SQL
 in `select * from (...) limit N+1`. That works on Postgres and is wrong on
 SQL Server, and the dialect is the source's, not gdash's.
 
-## B3. A swapped-out table's space, and a reading of a database's size
+## B3. A swapped-out table's space, and a reading of a database's size. **Tables done: gbasic `ac37c5a3`.** The logs (about 40 MB per idle database) wait on the maintainer's ruling; gdash prefers flushing and truncating at close
 
 **Measured.** Twelve swaps of the same 20,000-row table (drop `live`, rename
 `s` to `live`, one transaction, each `s` written by `gsql.insert` in

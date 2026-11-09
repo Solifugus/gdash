@@ -158,7 +158,11 @@ library gdash_refresh
         ' directory anyone can traverse.
         locked = gdash_paths.restrict(jobpath)
 
-        h = process.start({ command: _interpreter(), args: [_child_script(), jobpath] })
+        ' UNDER A MEMORY LIMIT (GDASH-16, gbasic B1), so a result too large
+        ' for the machine kills the child that fetched it, not whatever the
+        ' kernel's OOM killer would have chosen.
+        memory = gdash_limits.child_memory(lim)
+        h = process.start({ command: _interpreter(), args: [_child_script(), jobpath], limits: { memory: memory } })
         if error then
             return _fail(p, dashboard, mode, dataset, st, now, "cannot start refresh child: " + error.message, vfile, statepath)
         end if
@@ -182,6 +186,12 @@ library gdash_refresh
             detail = ""
             if not is_unknown(out) then
                 detail = trim(string(out.stderr))
+            end if
+            ' The kernel records no verdict, only evidence: a gBASIC child that
+            ' fails an allocation dies by SIGABRT, and its peak says why.
+            if default(result["signal"], 0) = 6 and not is_unknown(result["memory_limit"]) then
+                cleared = gdash_store.discard_staging(db, dataset)
+                return _fail(p, dashboard, mode, dataset, st, now, "the refresh ran out of its memory limit of " + gdash_limits.bytes_text(memory) + " (peak " + gdash_limits.bytes_text(default(result["peak_memory"], 0)) + "); the result is too large for this site -- narrow the query or aggregate it at the source", vfile, statepath)
             end if
             ' The live table is untouched: stale-but-coherent.
             cleared = gdash_store.discard_staging(db, dataset)

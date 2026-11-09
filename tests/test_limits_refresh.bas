@@ -37,6 +37,26 @@ program main(args)
     s = gdash_test.ok(s, first.ok, "under the ceiling it refreshes -- " + first.message)
     n0 = gdash_store.select_rows(db, "select count(*) as n from orders", {}).rows[0].n
 
+    ' --- the memory limit (gbasic B1): a child that runs out dies alone ---
+    ' 16 MB is well above where this interpreter can start (gbasic measured
+    ' its floor at about 3.5 MB, and it varies by build), and well below what
+    ' 40,000 rows need: the child starts, grows, and fails an allocation.
+    ' The message is only given for SIGABRT under a limit, so a child that
+    ' could not start at all (exit 127) fails this test instead of passing it.
+    grown = []
+    for i = 1 to 40000
+        grown = append(grown, ["region-" + string(i), "2026-01", string(i) + ".25"])
+    next
+    bigpath = root + "/orders_big.json"
+    write({file}bigpath, encode({ columns: ["region", "month", "amount"], rows: grown }))
+    write(lf, encode({ format: 1, root: { refresh_memory: 16000000 } }))
+    sleep(1.1)
+    oom = gdash_refresh.run(p, "l", "draft", rec, "orders", { kind: "fixture", path: bigpath }, "manual")
+    s = gdash_test.ok(s, not oom.ok, "a refresh child past its memory limit fails")
+    s = gdash_test.contains_text(s, oom.message, "ran out of its memory limit", "and the refresh says it ran out of memory -- " + oom.message)
+    s = gdash_test.eq(s, gdash_store.select_rows(db, "select count(*) as n from orders", {}).rows[0].n, n0, "the server, and the live data, are untouched")
+    write(lf, encode({ format: 1 }))
+
     ' --- the quota, before the fetch: a site already over it fetches nothing ---
     write(lf, encode({ format: 1, root: { disk_bytes: 1 } }))
     sleep(1.1)

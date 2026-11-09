@@ -15,9 +15,10 @@ libssl3 libxml2 libcrypt1 libgirepository-2.0-0 libpcre2-8-0
 ```
 
 gdash stages its data in G-SQL, which is part of the interpreter, so there is
-no database to install. It needs **gBASIC 0.11.0** or later, for the
-non-blocking lock the refresh limits are built on (GDASH-16). On an earlier
-build every refresh fails and names the missing lock. Builds since `c9be074e`
+no database to install. It needs a gBASIC build at or after `decd684b`, for the
+non-blocking lock, the child memory limit and the row cap that the refresh
+limits are built on (GDASH-16; gbasic `decd684b` or later). On a build
+without the lock, every refresh fails and names the missing lock. Builds since `c9be074e`
 link PCRE2.
 `libsqlite3` is still linked by the interpreter; gdash itself no longer uses
 it.
@@ -359,6 +360,7 @@ set from inside a tenant.
 | `disk_bytes` | `none` | 1 GiB | a refresh is refused, before the fetch and again before the swap, and the previous data stays served; a publish that would carry data is refused |
 | `refresh_children` | 4 | 2 | the refresh is **deferred**, not failed, and the next pass runs it |
 | `max_cells` | 1,000,000 | 1,000,000 | the refresh is refused; rows × columns is what a refresh child's memory scales with |
+| `refresh_memory` | `auto` | `auto` | the refresh child is killed by its own memory limit, and the refresh fails saying so |
 | `model_budget` | `none` | **0.00 USD** | a question is refused before the model is called |
 
 There is also one server-wide limit, `server.refresh_children` (default 4),
@@ -405,14 +407,27 @@ The refusal says which of these happened.
 a cell** (68 MB at 10,000 ten-column rows, 191 MB at 50,000). A million cells
 is therefore about 300 MB per child, and four children at once about 1.2 GB.
 Set `max_cells` × `server.refresh_children` × 300 bytes below what the host
-can spare. The ceiling is checked once the fetch returns. A query too large to
-return at all is not yet stopped; that needs a memory limit on the child
-process (gBASIC ask B1).
+can spare. The ceiling is enforced in three layers:
+- **Row cap.** A Postgres or ODBC query is cancelled one row past
+  `max_cells` rows, so it never holds more. (The column count is not known
+  until rows arrive, so the cap counts rows as if each had one cell.)
+- **Cell count.** The exact cell count is checked once the rows are in.
+- **Memory limit.** Every refresh child runs under its own memory limit.
+  `auto` is 128 MiB plus 600 bytes a cell (twice the measured cost) at
+  `max_cells`, about 730 MB at the default. A wide result, or a driver that
+  buffers its whole result before the cap can act (the SQLite ODBC driver
+  does), kills only the child that fetched it. The refresh then fails with
+  the limit and the peak.
+
+Set `refresh_memory` to a number of bytes to override `auto`.
 
 **Disk is measured, not estimated.** The quota counts what `lib/`, `cache/`
 and `log/` hold on the volume. `run/` is not counted. Between compactions a
 G-SQL database holds 2 to 16 times its live data after repeated refreshes
-(gBASIC ask B3), so set a quota with that headroom until B3 lands. The audit
+(gBASIC ask B3). Since gbasic `ac37c5a3` the tables come back to about their
+live size. The two logs, up to ~20 MB each per database, remain until the
+log half of B3 lands. Each dashboard has two databases (draft and published),
+so allow about 80 MB a dashboard over its data until then. The audit
 log is never refused for disk: a sign-in is not refused because a refresh
 filled the volume.
 

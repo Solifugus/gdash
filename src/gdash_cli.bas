@@ -288,7 +288,7 @@ program main(args)
         else
             print("  configured DSNs: none -- name a Driver= in the connection string")
         end if
-        got = gdash_source_odbc.fetch(prof, "select 1 as probe")
+        got = gdash_source_odbc.fetch(prof, "select 1 as probe", 0)
         if not got.ok then
             print to error "  FAILED: " + got.message
             exit(1)

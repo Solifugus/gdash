@@ -7,6 +7,7 @@
 '   disk_bytes        what the root may hold on disk before a refresh is refused
 '   refresh_children  how many refresh children this root may run at once
 '   max_cells         the dataset-size ceiling, rows x columns, measured
+'   refresh_memory    the memory a refresh child may use: "auto", from max_cells
 '   model_budget      what this root may spend on models in a calendar month
 '
 ' plus one for the whole server, `refresh_children` under "server", which caps
@@ -35,7 +36,7 @@ library gdash_limits
     load gdash_tenants from "gdash_tenants.bas"
 
     function limit_names()
-        return ["open_access", "disk_bytes", "refresh_children", "max_cells", "model_budget"]
+        return ["open_access", "disk_bytes", "refresh_children", "max_cells", "refresh_memory", "model_budget"]
     end function
 
     ' The measured ceiling (GDASH-16 step 0): a refresh child costs about 300
@@ -46,15 +47,15 @@ library gdash_limits
             return { refresh_children: 4 }
         end if
         if scope = "tenant" then
-            return { open_access: false, disk_bytes: 1073741824, refresh_children: 2, max_cells: 1000000,
+            return { open_access: false, disk_bytes: 1073741824, refresh_children: 2, max_cells: 1000000, refresh_memory: "auto",
                      model_budget: { amount: "0.00", currency: "USD" } }
         end if
-        return { open_access: true, disk_bytes: "none", refresh_children: 4, max_cells: 1000000, model_budget: "none" }
+        return { open_access: true, disk_bytes: "none", refresh_children: 4, max_cells: 1000000, refresh_memory: "auto", model_budget: "none" }
     end function
 
     ' The most restrictive answer, for a root whose limits cannot be known.
     function closed(message)
-        return { ok: false, scope: "tenant", tenant: "", open_access: false, disk_bytes: 0, refresh_children: 0, max_cells: 0,
+        return { ok: false, scope: "tenant", tenant: "", open_access: false, disk_bytes: 0, refresh_children: 0, max_cells: 0, refresh_memory: 1,
                  model_budget: { amount: "0.00", currency: "USD" }, server_children: 0, base: {}, message: message }
     end function
 
@@ -80,6 +81,10 @@ library gdash_limits
             else if k = "disk_bytes" then
                 if not (v = "none" or _whole(v, 1)) then
                     errs = append(errs, where + " 'disk_bytes' must be a whole number of bytes, at least 1, or \"none\"")
+                end if
+            else if k = "refresh_memory" then
+                if not (v = "auto" or _whole(v, 1)) then
+                    errs = append(errs, where + " 'refresh_memory' must be a whole number of bytes, at least 1, or \"auto\"")
                 end if
             else if k = "refresh_children" or k = "max_cells" then
                 if not _whole(v, 1) then
@@ -181,7 +186,7 @@ library gdash_limits
 
     function _answer(scope, tenant, lim, server_children, base_p)
         out = { ok: true, scope: scope, tenant: tenant, open_access: lim["open_access"], disk_bytes: lim["disk_bytes"],
-                refresh_children: lim["refresh_children"], max_cells: lim["max_cells"], model_budget: lim["model_budget"],
+                refresh_children: lim["refresh_children"], max_cells: lim["max_cells"], refresh_memory: lim["refresh_memory"], model_budget: lim["model_budget"],
                 server_children: server_children, base: base_p, message: "" }
         return out
     end function
@@ -293,6 +298,9 @@ library gdash_limits
             end if
             return { ok: false, value: unknown, message: "model_budget is \"none\" or an amount and its currency, such as 25.00USD" }
         end if
+        if nm = "refresh_memory" and t = "auto" then
+            return { ok: true, value: "auto", message: "" }
+        end if
         if nm = "disk_bytes" and t = "none" then
             return { ok: true, value: "none", message: "" }
         end if
@@ -339,6 +347,9 @@ library gdash_limits
             end if
             return string(v["amount"]) + " " + string(v["currency"]) + " a month"
         end if
+        if nm = "refresh_memory" and v != "auto" then
+            return bytes_text(v)
+        end if
         if nm = "disk_bytes" then
             if v = "none" then
                 return "none"
@@ -346,6 +357,18 @@ library gdash_limits
             return bytes_text(v)
         end if
         return string(v)
+    end function
+
+    ' The memory limit a refresh child runs under (gbasic B1). "auto" is
+    ' the interpreter's baseline with room to spare, plus TWICE the measured
+    ' 300 bytes a cell at max_cells: generous enough that a dataset at the
+    ' ceiling never meets it, tight enough that a result far above the
+    ' ceiling dies in its own process rather than in the server's cgroup.
+    function child_memory(lim)
+        if lim.refresh_memory = "auto" then
+            return 134217728 + lim.max_cells * 600
+        end if
+        return lim.refresh_memory
     end function
 
     function bytes_text(n)

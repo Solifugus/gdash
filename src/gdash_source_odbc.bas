@@ -41,7 +41,11 @@ library gdash_source_odbc
         return "DSN=" + d
     end function
 
-    function fetch(profile, sql)
+    ' `max_rows` as the Postgres source's (GDASH-16, gbasic B2). The cursor
+    ' is closed one row past it -- though a driver that buffers its whole
+    ' result has already held it, which is what the child's memory limit is
+    ' for.
+    function fetch(profile, sql, max_rows)
         target = connection_string(profile)
         if target = "" then
             return { ok: false, columns: [], rows: [], message: "odbc profile has neither 'connection' nor 'dsn'" }
@@ -59,10 +63,18 @@ library gdash_source_odbc
             return { ok: false, columns: [], rows: [], message: "cannot connect to source: " + error.message }
         end if
 
-        rows = odbc.query(conn, sql, [])
+        if max_rows > 0 then
+            rows = odbc.query(conn, sql, [], { max_rows: max_rows })
+        else
+            rows = odbc.query(conn, sql, [])
+        end if
         if error then
             msg = error.message
+            capped = string(default(error.details["code"], "")) = "MAX_ROWS"
             closed = odbc.close(conn)
+            if capped then
+                return { ok: false, capped: true, columns: [], rows: [], message: "the query returned more than " + string(max_rows) + " rows, above this site's ceiling; narrow the query or aggregate it at the source" }
+            end if
             return { ok: false, columns: [], rows: [], message: "source query failed: " + msg }
         end if
         closed = odbc.close(conn)

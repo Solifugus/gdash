@@ -142,6 +142,19 @@ ok "a live value USD cannot store is refused" "$?" "1"
 after="$("$GBASIC" tests/pg_sum.bas "$ROOT/cache/sales/draft/data.gsql" '*' 2>&1)"
 ok "rejected refresh left the previous data intact" "$after" "4939.395600"
 
+# THE ROW CAP (GDASH-16, gbasic B2): a query far above the ceiling is
+# cancelled one row past it, rather than fetched whole and counted after.
+# A ceiling of 3 cells caps the fetch at 3 rows; the orders table has more.
+cat > "$ROOT/etc/limits.json" <<'JSON'
+{ "format": 1, "root": { "max_cells": 3 } }
+JSON
+out="$("$GBASIC" src/gdash_cli.bas --root "$ROOT" refresh sales orders 2>&1)"
+case "$out" in *"more than 3 rows"*) ok "a live query past the row cap is stopped at the cap" "0" "0" ;;
+                                  *) ok "a live query past the row cap is stopped at the cap" "$out" "more than 3 rows" ;; esac
+capped="$("$GBASIC" tests/pg_sum.bas "$ROOT/cache/sales/draft/data.gsql" '*' 2>&1)"
+ok "and the previous data is still served" "$capped" "4939.395600"
+rm -f "$ROOT/etc/limits.json"
+
 psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDB" -q -c "drop schema gdash_spike cascade;" >/dev/null 2>&1
 wait_for_gsql_owners "$SCRATCH"; rm -rf "$SCRATCH"
 echo "postgres: $pass passed, $fail failed"

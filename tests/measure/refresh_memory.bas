@@ -13,7 +13,7 @@ program main(args)
              database: default(env("GDASH_PG_DB"), "gdash_test"), user: env("GDASH_PG_USER"), password: env("GDASH_PG_PASSWORD") }
     sql = "select g as id, 'region-' || (g % 50) as region, 'product-' || (g % 997) as product, (g * 1.37)::numeric(12,2) as amount, (g % 13) as qty, date '2026-01-01' + (g % 365) as day, md5(g::text) as ref, (g % 2 = 0) as flag, g * 0.5 as ratio, 'note for row ' || g as note from generate_series(1, " + string(n) + ") g"
     t0 = monotonic()
-    got = gdash_source_pg.fetch(prof, sql)
+    got = gdash_source_pg.fetch(prof, sql, 0)
     if not got.ok then
         print to error got.message
         exit(1)

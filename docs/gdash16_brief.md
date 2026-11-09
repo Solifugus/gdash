@@ -1,7 +1,7 @@
 # GDASH-16 — Limits
 
-**Status:** built (2026-11-08). The refresh tests are waiting on gBASIC
-0.11.0 being installed (see "Blocked").
+**Status:** built (2026-11-08) and committed locally. B1/B2 wiring is waiting
+on gbasic `decd684b` being installed.
 **Authority:** `gdash_design.md` outranks this brief. What it implements is
 `gdash_saas_design.md` §6 (the `access: open` gate) and §7 (limits).
 
@@ -140,13 +140,27 @@ that must exist before any real tenant is onboarded.
   - the minimum gBASIC is now 0.11.0;
   - platform ask `gdash16_platform_ask.md` (B1–B3).
 
-## Blocked
+## Verified
 
-- **gBASIC 0.11.0, for `lock(f, { wait: false })`.** Every refresh takes a
-  slot, so on 0.10.0 every refresh fails and names the missing lock. So
-  `test_limits_refresh`, `test_carry`, `test_refresh` and every runner that
-  refreshes are waiting for that install. `test_limits`, `test_ask`,
-  `test_app` and `test_tenants` pass on 0.10.0.
+- **On gbasic `10d13da2`** (the non-blocking lock): the full suite, 44/44,
+  with `run_tenants` at 51. Committed as `726b6e8` and `bc687c7`.
+- **The B1/B2 wiring below** needs gbasic `decd684b`. Until that is
+  installed, a refresh child started with `limits` is refused, so it is
+  uncommitted.
+
+## Added once gbasic delivered B1 and B2 (`decd684b`)
+
+- **The row cap.** The Postgres and ODBC sources pass
+  `{ max_rows: max_cells }`, and a `MAX_ROWS` raise is a refusal that names
+  the cap. Child exit 7 is the same as the ceiling's.
+- **The memory limit.** Every refresh child runs under
+  `gdash_limits.child_memory(lim)`. `auto` is 128 MiB plus 600 bytes a cell
+  at `max_cells`; `refresh_memory` names bytes instead. A child that dies by
+  SIGABRT while limited fails the refresh with the limit and its peak.
+- **Tests:** `test_limits_refresh` runs a 40,000-row refresh under a 16 MB
+  limit, well above the interpreter's ~3.5 MB startup floor, and checks that the
+  refresh fails saying so with the live data untouched. `run_postgres` caps
+  a live query at 3 rows.
 
 ## Findings
 
@@ -161,10 +175,6 @@ that must exist before any real tenant is onboarded.
 
 ## Deliberately not built
 
-- **A memory limit on the refresh child** (ask B1), and **a row cap that
-  stops the fetch** (ask B2). Until these land, a query too large to return
-  at all is not stopped; only one that returns and is over the ceiling is
-  refused.
 - **Reserving a question's worst-case cost** before calling the model.
 - **The operator-side event stream** (GDASH-17). Deferrals, quota refusals
   and budget refusals are in each tenant's audit log, and nowhere central.
