@@ -178,8 +178,6 @@ that must exist before any real tenant is onboarded.
 - **Reserving a question's worst-case cost** before calling the model.
 - **The operator-side event stream** (GDASH-17). Deferrals, quota refusals
   and budget refusals are in each tenant's audit log, and nowhere central.
-- **Design-document edits.** `gdash_design.md` §8 says `access: open` is a
-  per-dashboard opt-in. It would need a sentence saying that in a
-  multi-tenant deployment the operator must permit it per tenant, and §3
-  would need the refresh-concurrency limit. Both are the maintainer's to
-  make.
+- **Design-document edits** were ruled 2026-11-08 and applied: §8 makes
+  `access: open` a tenant-level permission in a multi-tenant deployment, and
+  §3 caps refresh children and puts each under a memory limit.

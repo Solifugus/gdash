@@ -134,6 +134,12 @@ Credentials reach the child via 0600 temp file, never argv. A reader inside a
 read transaction keeps the snapshot it began with until it finishes; the next
 read sees the new table.
 
+Refresh children are **capped**, per root and server-wide, by slots taken
+without waiting: a refresh that finds none free is deferred to the next pass,
+not failed. Each child runs under its own memory limit, so a result too large
+for the machine kills only the child that fetched it. *(Ruled 2026-11-08,
+GDASH-16.)*
+
 Draft datasets refresh manually only. Published datasets follow their policy.
 
 ## 4. Money — exact by construction
@@ -271,7 +277,10 @@ the gbasic site as second — two consumers is the promotion bar.
 **Authorization is coarse and per-dashboard:** the record names view groups
 and edit groups; optional folder defaults later. `access: open` is a
 **per-dashboard opt-in, never a server default** — a half-configured server
-must fail closed. Provider configuration is necessarily server-level;
+must fail closed. In a multi-tenant deployment it is also a **tenant-level
+permission, off by default**: the operator grants `open_access`, and a record
+saying `open` where it is not granted is served as if it named no access.
+*(Ruled 2026-11-08, GDASH-16.)* Provider configuration is necessarily server-level;
 everything else rides in the record.
 
 **Personalization** is the injected `user_*` params — a "my performance"
