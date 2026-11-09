@@ -839,6 +839,37 @@ program main(args)
             targets = [rest[1]]
         end if
 
+        ' THE WHOLE DASHBOARD IS ONE REFRESH (G57): staged together, swapped
+        ' in one transaction, one version. Naming a dataset refreshes that
+        ' one alone, which is what an author fixing one query wants.
+        if count(rest) <= 1 then
+            for each dn in targets
+                if is_unknown(profiles[rec["datasets"][dn]["profile"]]) then
+                    print to error "no connection profile named '" + string(rec["datasets"][dn]["profile"]) + "'"
+                    print to error "  dataset '" + dn + "' of dashboard '" + name + "' asks for it"
+                    print to error "  profiles are defined in " + gdash_paths.connections_file(p)
+                    print to error "  `gdash source check` lists the ones that are"
+                    exit(1)
+                end if
+            next
+            u = gdash_refresh.run_together(p, name, target.mode, rec, targets, profiles, "manual")
+            if not u.ok then
+                print to error "refresh failed: " + u.message
+                exit(1)
+            end if
+            if u.deferred then
+                print(u.message)
+                exit(0)
+            end if
+            for each dn in sort(u.unchanged)
+                print("unchanged " + name + "." + dn + " (" + string(u.rows[dn]) + " rows, version " + string(u.version) + " stands)")
+            next
+            for each dn in sort(u.refreshed)
+                print("refreshed " + name + "." + dn + " -> version " + string(u.version))
+            next
+            exit(0)
+        end if
+
         j = 0
         while j < count(targets)
             dn = targets[j]
@@ -865,7 +896,9 @@ program main(args)
                 print to error "refresh failed: " + r.message
                 exit(1)
             end if
-            if r.unchanged then
+            if default(r["deferred"], false) then
+                print(r.message)
+            else if r.unchanged then
                 print("unchanged " + name + "." + dn + " (" + string(r.rows) + " rows, version " + string(r.version) + " stands)")
             else
                 print("refreshed " + name + "." + dn + " -> version " + string(r.version))

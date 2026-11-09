@@ -503,7 +503,16 @@ plus the four that need a decision before there is a sentence to write.
   GDASH-20 a dashboard's datasets are tables in one database, so a whole-
   dashboard refresh can stage every dataset and swap them all in one
   transaction, with one version bump. That is "staged together, swapped
-  together". Recorded 2026-11-08; priority is the maintainer's.
+  together". Recorded 2026-11-08. **Built 2026-11-08** (ruled "do G57
+  next"):
+  - `gdash_refresh.run_together` takes every dataset lock in name order and
+    one refresh slot, stages the due datasets, and swaps the changed ones
+    with `gdash_store.swap_all` in one transaction, with one version bump;
+  - the scheduler pass, `refresh <dashboard>` and the page's button use it,
+    and `refresh <dashboard> <dataset>` still refreshes one dataset alone;
+  - one failure swaps nothing and records the failure only against the
+    dataset that failed;
+  - `test_together`, 25 assertions.
 
 ### Deferred features, with the reason attached
 

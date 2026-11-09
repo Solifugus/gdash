@@ -417,21 +417,37 @@ library gdash_store
     ' and the version file bumps AFTER, so a notified reader always finds
     ' complete data (design §3).
     function swap(db_path, table)
+        return swap_all(db_path, [table])
+    end function
+
+    ' Several datasets' staging tables over their live ones IN ONE
+    ' TRANSACTION (G57): a reader sees every one of them old or every one of
+    ' them new, never a dashboard with this extract's orders under the last
+    ' extract's rates. Any failure rolls all of them back.
+    function swap_all(db_path, tables)
         db = connect(db_path, false)
         if is_unknown(db) then
             return { ok: false, message: "the staging database is not there: " + db_path }
         end if
-        staging = staging_name(table)
         on error goto next
         _ensure_meta(db)
         gsql.begin(db)
-        gsql.exec(db, "drop table if exists " + _quote_ident(table))
-        gsql.exec(db, "alter table " + _quote_ident(staging) + " rename to " + _quote_ident(table))
-        gsql.exec(db, "delete from _gdash_meta where dataset = $1", [table])
-        gsql.exec(db, "update _gdash_meta set dataset = $1 where dataset = $2", [table, staging])
-        gsql.exec(db, "delete from _gdash_bounds where dataset = $1", [table])
-        gsql.exec(db, "update _gdash_bounds set dataset = $1 where dataset = $2", [table, staging])
         e = error
+        for each table in tables
+            ' Checked per table: gBASIC holds one pending error, and a second
+            ' raise while one is unacknowledged escapes the frame.
+            if e then
+                break
+            end if
+            staging = staging_name(table)
+            gsql.exec(db, "drop table if exists " + _quote_ident(table))
+            gsql.exec(db, "alter table " + _quote_ident(staging) + " rename to " + _quote_ident(table))
+            gsql.exec(db, "delete from _gdash_meta where dataset = $1", [table])
+            gsql.exec(db, "update _gdash_meta set dataset = $1 where dataset = $2", [table, staging])
+            gsql.exec(db, "delete from _gdash_bounds where dataset = $1", [table])
+            gsql.exec(db, "update _gdash_bounds set dataset = $1 where dataset = $2", [table, staging])
+            e = error
+        next
         if e then
             _rollback(db)
             _close(db)

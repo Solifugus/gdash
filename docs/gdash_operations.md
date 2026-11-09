@@ -489,6 +489,19 @@ gdash source check [profile]     # which drivers the host has, and whether it co
 gdash schedule                   # one refresh pass, by hand
 ```
 
+**A dashboard refreshes as one.** `refresh <name>`, the page's refresh button
+and each scheduler pass do the same thing:
+1. stage every dataset that is due;
+2. swap them all in one transaction;
+3. bump the version once.
+
+A viewer sees all of the old data or all of the new, never one dataset from
+this extract beside another from the last. If any dataset fails, none is
+swapped and the dashboard keeps its previous data. Only the failed dataset
+records a failure, so on a schedule it backs off and the others refresh
+together without it on the next pass. `refresh <name> <dataset>` still
+refreshes that one dataset alone.
+
 Authoring is the record file itself: edit `draft.json`, `gdash validate`, then
 `gdash publish`. There is no designer UI and no second way to publish.
 

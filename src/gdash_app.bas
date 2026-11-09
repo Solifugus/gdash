@@ -1332,27 +1332,26 @@ library gdash_app
 
         profiles = gdash_refresh.load_profiles(p)
         ds_names = keys(rec["datasets"])
-        done = []
-        i = 0
-        while i < count(ds_names)
-            dn = ds_names[i]
+        for each dn in ds_names
             pname = rec["datasets"][dn]["profile"]
-            prof = profiles[pname]
-            if is_unknown(prof) then
+            if is_unknown(profiles[pname]) then
                 return _refuse(500, "no connection profile named '" + string(pname) + "'")
             end if
-            ' A person pressed the button, so the trigger is manual whatever
-            ' the policy says -- including on a draft, which is the only way a
-            ' draft ever refreshes at all (design §3).
-            r = gdash_refresh.run(p, name, mode, rec, dn, prof, "manual")
-            if not r.ok then
-                ' The old dataset is still there and still correct.
-                return _refuse(502, r.message)
-            end if
-            done = concat(done, [dn])
-            i += 1
-        end while
-        return _json({ refreshed: done })
+        next
+        ' A person pressed the button, so the trigger is manual whatever the
+        ' policy says -- including on a draft, which is the only way a draft
+        ' ever refreshes at all (design §3). And the dashboard is ONE refresh
+        ' (G57): every dataset staged, then all swapped together, so the page
+        ' that reloads shows one extract, never two.
+        u = gdash_refresh.run_together(p, name, mode, rec, ds_names, profiles, "manual")
+        if not u.ok then
+            ' The old datasets are still there and still agree with each other.
+            return _refuse(502, u.message)
+        end if
+        if u.deferred then
+            return _refuse(503, u.message)
+        end if
+        return _json({ refreshed: concat(u.refreshed, u.unchanged), changed: u.refreshed, version: u.version })
     end function
 
     ' The two texts and the diff between them. Design §7's "what changed
