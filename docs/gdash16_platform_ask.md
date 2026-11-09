@@ -45,6 +45,13 @@ SQL Server, and the dialect is the source's, not gdash's.
 
 ## B3. A swapped-out table's space, and a reading of a database's size. **Tables done: gbasic `ac37c5a3`.** The logs (about 40 MB per idle database) wait on the maintainer's ruling; gdash prefers flushing and truncating at close
 
+> **Correction, 2026-11-08.** The script below passed `slice` an end where it
+> takes a count, so each swap inserted 110,000 rows, about 18 MB of live
+> tables, not the 20,000 rows and 5.5 MB stated. The directory sizes are as
+> measured; the amplification was about 2.6-5x, not 2-16x. Fixed script, on
+> `bc694e29`: a closed 20,000-row database is 1,706,039 bytes, of which
+> 1,705,558 are tables and 0 are logs.
+
 **Measured.** Twelve swaps of the same 20,000-row table (drop `live`, rename
 `s` to `live`, one transaction, each `s` written by `gsql.insert` in
 1,000-row calls). The live data is about 5.5 MB of `.sst`. The directory

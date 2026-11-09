@@ -15,9 +15,9 @@ libssl3 libxml2 libcrypt1 libgirepository-2.0-0 libpcre2-8-0
 ```
 
 gdash stages its data in G-SQL, which is part of the interpreter, so there is
-no database to install. It needs a gBASIC build at or after `decd684b`, for the
+no database to install. It needs a gBASIC build at or after `bc694e29`, for the
 non-blocking lock, the child memory limit and the row cap that the refresh
-limits are built on (GDASH-16; gbasic `decd684b` or later). On a build
+limits are built on (GDASH-16), and a closed database that keeps no logs. On a build
 without the lock, every refresh fails and names the missing lock. Builds since `c9be074e`
 link PCRE2.
 `libsqlite3` is still linked by the interpreter; gdash itself no longer uses
@@ -422,14 +422,17 @@ can spare. The ceiling is enforced in three layers:
 Set `refresh_memory` to a number of bytes to override `auto`.
 
 **Disk is measured, not estimated.** The quota counts what `lib/`, `cache/`
-and `log/` hold on the volume. `run/` is not counted. Between compactions a
-G-SQL database holds 2 to 16 times its live data after repeated refreshes
-(gBASIC ask B3). Since gbasic `ac37c5a3` the tables come back to about their
-live size. The two logs, up to ~20 MB each per database, remain until the
-log half of B3 lands. Each dashboard has two databases (draft and published),
-so allow about 80 MB a dashboard over its data until then. The audit
-log is never refused for disk: a sign-in is not refused because a refresh
-filled the volume.
+and `log/` hold on the volume. `run/` is not counted. Since gbasic `bc694e29`,
+a database that is **closed** holds its live tables and under 1 KB more. A
+gdash database closes 30 s after its last use, so an idle dashboard costs
+about what its data holds. While a database is **open** its logs can add up
+to 64 MB on top: measured, a 20,000-row table refreshed twelve times grew its
+open directory from 3.2 MB to 20 MB, and was 1.7 MB once closed. Each
+dashboard has two databases (draft and published), so a tenant whose
+dashboards are all in use at once can briefly need up to 128 MB a dashboard
+over its data. `gdash tenant limits` shows the split between tables and
+logs. The audit log is never refused for disk: a sign-in is not refused
+because a refresh filled the volume.
 
 **Model spend.** A model profile states its price per million tokens, as
 decimal text:

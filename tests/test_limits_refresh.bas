@@ -36,6 +36,12 @@ program main(args)
     first = gdash_refresh.run(p, "l", "draft", rec, "orders", orders, "manual")
     s = gdash_test.ok(s, first.ok, "under the ceiling it refreshes -- " + first.message)
     n0 = gdash_store.select_rows(db, "select count(*) as n from orders", {}).rows[0].n
+    ' What the store says the root holds, once its database has closed
+    ' (linger is 0 here): the dataset's tables, and no logs (gbasic bc694e29).
+    sleep(0.5)
+    split = gdash_limits.disk_split(p)
+    s = gdash_test.ok(s, split.tables > 0, "the root's disk is split into its datasets' tables")
+    s = gdash_test.eq(s, split.logs, 0, "and a closed database holds no logs")
 
     ' --- the memory limit (gbasic B1): a child that runs out dies alone ---
     ' 16 MB is well above where this interpreter can start (gbasic measured

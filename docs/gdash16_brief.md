@@ -30,11 +30,13 @@ that must exist before any real tenant is onboarded.
   90 s to fetch; with `append` it takes 15.9 s. The ODBC source already used
   `append`.
 - **G-SQL does not give back a swapped-out table's space promptly (G16-2,
-  ask B3).** Twelve swaps of a 5.5 MB table took its directory from 9.9 to
-  89.7 MB, down to 46 MB once compaction caught up, and 65.8 MB after a
-  reopen. The quota counts the volume, so the operations guide says to set it
-  with that headroom. gbasic treats this as a defect against
-  `gsql_storage_design` §5.
+  ask B3).** Twelve swaps took a database's directory to 89.7 MB, against
+  about 18 MB of live tables, and 47-66 MB after a close. *(Corrected
+  2026-11-08: the measurement script passed `slice` an end where it takes a
+  count, so each swap was 110,000 rows rather than the 20,000 it claimed. The
+  first report said 5.5 MB live and 2-16x; the truth was 2.6-5x.)* Fixed in
+  gbasic `ac37c5a3` (tables) and `bc694e29` (logs freed at close). A closed
+  20,000-row database is now 1.7 MB: its tables plus about 500 bytes.
 - **Walking a root's disk use is free at this scale:** 0.1 ms over a
   database directory. It is done on every refresh, twice.
 - **Model usage is reported.** `llm.chat` returns `usage: {input, output}`,
@@ -165,7 +167,8 @@ that must exist before any real tenant is onboarded.
 ## Findings
 
 - **G16-1:** the Postgres source's fetch was quadratic. Fixed.
-- **G16-2:** G-SQL's space after a swap, 2–16x the live data. gBASIC ask B3.
+- **G16-2:** G-SQL's space after a swap, 2.6-5x the live data (first reported, wrongly, as 2-16x). Fixed by gBASIC ask B3.
+- **G16-5:** gdash's own measurement script misread `slice(a, at, count)` as `slice(a, from, to)`, which inflated G16-2's first numbers. Fixed; nothing in `src/` calls `slice`.
 - **G16-3:** `plan_columns` infers a kind by scanning every cell of every
   undeclared column. That is most of the write phase's time apart from the
   insert itself. Not fixed here; it is the next cost to take out of a large

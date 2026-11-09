@@ -97,6 +97,7 @@ has "$(CLI tenant limits acme 2>&1)" "open_access  false" "tenant limits shows t
 CLI tenant limit acme open_access true >/dev/null 2>&1
 CLI tenant limit globex open_access true >/dev/null 2>&1
 has "$(CLI tenant limits acme 2>&1)" "open_access  true" "and open once granted"
+has "$(CLI tenant limits acme 2>&1)" "(datasets " "tenant limits splits disk use into datasets and the logs of open databases"
 out="$(CLI tenant limit acme open_access yes 2>&1)"; rc=$?
 ok "a limit that is not its kind is refused" "$rc" "1"
 

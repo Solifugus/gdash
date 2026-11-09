@@ -416,6 +416,21 @@ library gdash_store
     ' inside `begin("read")` keeps reading the old table until it finishes,
     ' and the version file bumps AFTER, so a notified reader always finds
     ' complete data (design §3).
+    ' What a database holds on disk, { total, logs, tables } in bytes, read
+    ' from its directory without starting an owner (gbasic bc694e29). Unknown
+    ' when there is no database there.
+    function space(db_path)
+        if not gdash_paths.path_exists(db_path) then
+            return unknown
+        end if
+        on error goto next
+        got = gsql.space(db_path)
+        if error then
+            return unknown
+        end if
+        return got
+    end function
+
     function swap(db_path, table)
         return swap_all(db_path, [table])
     end function

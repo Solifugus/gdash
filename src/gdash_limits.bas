@@ -34,6 +34,7 @@ library gdash_limits
 
     load gdash_paths from "gdash_paths.bas"
     load gdash_tenants from "gdash_tenants.bas"
+    load gdash_store from "gdash_store.bas"
 
     function limit_names()
         return ["open_access", "disk_bytes", "refresh_children", "max_cells", "refresh_memory", "model_budget"]
@@ -411,6 +412,32 @@ library gdash_limits
 
     function disk_used(p)
         return _du(p.state_dir) + _du(p.cache_dir) + _du(p.log_dir)
+    end function
+
+    ' The part of a root's disk its G-SQL databases account for, split the
+    ' way the store reports it: { tables, logs } in bytes, summed over every
+    ' dashboard's draft and published database. A closed database has no
+    ' logs, so logs are what open databases are holding right now.
+    function disk_split(p)
+        out = { tables: 0, logs: 0 }
+        on error goto next
+        dashes = list(p.cache_dir)
+        if error then
+            return out
+        end if
+        on error stop
+        for each d in dashes
+            if d.type = "folder" then
+                for each mode in ["draft", "published"]
+                    sp = gdash_store.space(gdash_paths.stage_db(p, d.name, mode))
+                    if type(sp) = "record" then
+                        out.tables += default(sp["tables"], 0)
+                        out.logs += default(sp["logs"], 0)
+                    end if
+                next
+            end if
+        next
+        return out
     end function
 
     ' { ok, used, message }: ok when the root is within its quota.

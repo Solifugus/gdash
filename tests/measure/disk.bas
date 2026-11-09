@@ -24,7 +24,7 @@ program main(args)
         gsql.exec(g, "create table s (id integer, note string)")
         k = 0
         while k < 20000
-            gsql.insert(g, "s", slice(rows, k, k + 1000))
+            gsql.insert(g, "s", slice(rows, k, 1000))
             k += 1000
         end while
         gsql.begin(g)

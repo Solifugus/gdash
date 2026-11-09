@@ -177,7 +177,8 @@ program main(args)
                 print(nm + "  " + gdash_limits.shown(nm, lim[nm]))
             next
             print("server refresh_children  " + string(lim.server_children))
-            print("disk used  " + gdash_limits.bytes_text(gdash_limits.disk_used(tr.p)))
+            split = gdash_limits.disk_split(tr.p)
+            print("disk used  " + gdash_limits.bytes_text(gdash_limits.disk_used(tr.p)) + "  (datasets " + gdash_limits.bytes_text(split.tables) + ", logs of open databases " + gdash_limits.bytes_text(split.logs) + ")")
             cur = "USD"
             if lim.model_budget != "none" then
                 cur = string(lim.model_budget["currency"])

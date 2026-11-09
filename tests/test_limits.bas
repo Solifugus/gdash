@@ -97,6 +97,8 @@ program main(args)
     s = gdash_test.ok(s, not over.ok, "a byte over is not")
     s = gdash_test.contains_text(s, over.message, "the previous data is still served", "and the refusal says the old data stands")
     s = gdash_test.ok(s, gdash_limits.disk_check(d, { disk_bytes: "none" }).ok, "none is no quota")
+    nosplit = gdash_limits.disk_split(d)
+    s = gdash_test.eq(s, nosplit.tables + nosplit.logs, 0, "a cache directory that holds no database has no tables or logs to report")
 
     ' --- the model budget ---
     sp = gdash_paths.roles(root + "/spend")
