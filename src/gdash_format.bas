@@ -35,7 +35,7 @@ library gdash_format
             return "never"
         end if
         on error goto next
-        t = from_epoch(at)
+        t = to_zone(from_epoch(at), "local")
         if error then
             ' Unformattable is still information -- better the raw number than
             ' a blank where a timestamp should be.

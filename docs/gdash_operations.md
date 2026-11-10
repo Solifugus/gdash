@@ -15,9 +15,12 @@ libssl3 libxml2 libcrypt1 libgirepository-2.0-0 libpcre2-8-0
 ```
 
 gdash stages its data in G-SQL, which is part of the interpreter, so there is
-no database to install. It needs a gBASIC build at or after `bc694e29`, for the
+no database to install. It needs a gBASIC build at or after `461b1a94`, for the
 non-blocking lock, the child memory limit and the row cap that the refresh
-limits are built on (GDASH-16), and a closed database that keeps no logs. On a build
+limits are built on (GDASH-16), a closed database that keeps no logs, and the
+clock in UTC with a `"local"` zone: model spend is counted by the UTC month,
+while "today" in a date range and the timestamps a person reads are the
+server's local time. On a build
 without the lock, every refresh fails and names the missing lock. Builds since `c9be074e`
 link PCRE2.
 `libsqlite3` is still linked by the interpreter; gdash itself no longer uses

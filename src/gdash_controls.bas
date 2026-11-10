@@ -85,9 +85,10 @@ library gdash_controls
         return { ok: false, from: unknown, to: unknown, message: "'" + string(expr) + "' is not a range; the ranges are " + join(range_vocabulary(), ", ") }
     end function
 
-    ' Today, as a date. The one place the wall clock enters.
+    ' Today, as a date. The one place the wall clock enters -- the server's
+    ' calendar day, not UTC's, since "this month" is read by a person.
     function today()
-        d {date}= now()
+        d {date}= now("local")
         return d
     end function
 
