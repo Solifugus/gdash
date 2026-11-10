@@ -177,6 +177,12 @@ program main(args)
                 print(nm + "  " + gdash_limits.shown(nm, lim[nm]))
             next
             print("server refresh_children  " + string(lim.server_children))
+            vol = gdash_limits.volume_check(tr.p, lim)
+            avail = "unreadable"
+            if not is_unknown(vol.available) then
+                avail = gdash_limits.bytes_text(vol.available)
+            end if
+            print("server disk_reserve  " + gdash_limits.shown("disk_bytes", lim.disk_reserve) + "  (available " + avail + ")")
             split = gdash_limits.disk_split(tr.p)
             print("disk used  " + gdash_limits.bytes_text(gdash_limits.disk_used(tr.p)) + "  (datasets " + gdash_limits.bytes_text(split.tables) + ", logs of open databases " + gdash_limits.bytes_text(split.logs) + ")")
             cur = "USD"

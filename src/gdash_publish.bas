@@ -231,6 +231,9 @@ library gdash_publish
             quota = gdash_limits.disk_check(p, lim)
             if not quota.ok then
                 why = "carrying the draft's data would add to a site over its disk quota (" + gdash_limits.bytes_text(quota.used) + " of " + gdash_limits.shown("disk_bytes", lim.disk_bytes) + "); nothing was published"
+                if quota.kind = "volume" then
+                    why = "carrying the draft's data was refused: " + gdash_limits.volume_check(p, lim).why + "; nothing was published"
+                end if
                 logged = gdash_audit.event(p, "publish.refused", { dashboard: name, reason: why })
                 return { ok: false, snapshot: "", message: why, errors: [why], notes: notes }
             end if

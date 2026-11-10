@@ -84,6 +84,20 @@ program main(args)
     s = gdash_test.eq(s, gdash_store.select_rows(db, "select count(*) as n from orders", {}).rows[0].n, n0, "before the swap: the old data is still live")
     s = gdash_test.ok(s, not gdash_store.has_staging(db, "orders"), "and the new data is not left behind")
 
+    ' --- the volume: a server short of disk refreshes nothing ---
+    ' Every root's quota can hold while the disk they share fills. The
+    ' refresh is refused before it writes, cleanly, rather than breaking
+    ' halfway through a swap.
+    write(lf, encode({ format: 1, server: { disk_reserve: 1000000000000000000 } }))
+    sleep(1.1)
+    v1 = gdash_refresh.run(p, "l", "draft", rec, "orders", moved, "manual")
+    s = gdash_test.ok(s, not v1.ok, "a server short of disk is refused a refresh")
+    s = gdash_test.contains_text(s, v1.message, "the server is low on disk space", "saying so -- " + v1.message)
+    s = gdash_test.eq(s, gdash_store.select_rows(db, "select count(*) as n from orders", {}).rows[0].n, n0, "and the previous data is what is served")
+    s = gdash_test.contains_text(s, gdash_sched.read_state(statepath).last_error, "low on disk space", "the dataset's state records why")
+    vt = gdash_refresh.run_together(p, "l", "draft", rec, ["orders"], { w: moved }, "manual")
+    s = gdash_test.contains_text(s, vt.message, "the server is low on disk space", "a whole-dashboard refresh is refused the same way")
+
     ' --- the slots: none free is DEFERRED, not failed ---
     write(lf, encode({ format: 1, root: { refresh_children: 1 } }))
     marker = root + "/held"

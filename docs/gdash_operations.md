@@ -366,26 +366,39 @@ set from inside a tenant.
 | `refresh_memory` | `auto` | `auto` | the refresh child is killed by its own memory limit, and the refresh fails saying so |
 | `model_budget` | `none` | **0.00 USD** | a question is refused before the model is called |
 
-There is also one server-wide limit, `server.refresh_children` (default 4),
-which caps every root's refresh children together.
+There are also two server-wide limits:
+- `server.refresh_children` (default 4) caps every root's refresh children
+  together.
+- `server.disk_reserve` (default 1 GiB, or `"none"`) is the space the volume
+  holding the cache must keep **available** before a refresh may write to it.
+  Below it, every refresh on the server is refused before the fetch and again
+  before the swap, and the previous data stays served. A publish that would
+  carry data is refused too.
+
+Each root's quota can hold while the disk they share fills. The reserve means
+a full disk shows as a refusal, not as a refresh that fails partway through a
+write. `available` is what the service account may still use, which on ext4 is
+5% less than `free`. An operator, or a single root, is told the numbers. A
+tenant is told only that the server is low on disk space. If the volume cannot
+be read, refreshes are refused.
 
 **A tenant cannot ask questions until it has a budget.** The default of zero
 is deliberate: a question costs money and a tenant spends it.
 
 ```sh
-gdash tenant limits acme                          # what governs acme now, its disk use, this month's spend
+gdash tenant limits acme                          # what governs acme now, its disk use, the server's reserve, this month's spend
 gdash tenant limit acme open_access true          # let acme publish to the internet
 gdash tenant limit acme model_budget 25.00USD     # a month, UTC calendar month
 gdash tenant limit acme disk_bytes 5368709120     # or "none"
 ```
 
 **Where they live.**
-- The defaults and the server-wide cap are in the server's own
+- The defaults and the server-wide limits are in the server's own
   `etc/limits.json`. It is optional, and every section is too:
 
   ```json
   { "format": 1,
-    "server":  { "refresh_children": 4 },
+    "server":  { "refresh_children": 4, "disk_reserve": 1073741824 },
     "root":    { "max_cells": 500000 },
     "tenants": { "disk_bytes": 2147483648, "refresh_children": 1 } }
   ```

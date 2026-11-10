@@ -10,8 +10,9 @@
 '   refresh_memory    the memory a refresh child may use: "auto", from max_cells
 '   model_budget      what this root may spend on models in a calendar month
 '
-' plus one for the whole server, `refresh_children` under "server", which caps
-' every root's children together.
+' plus two for the whole server, under "server": `refresh_children`, which caps
+' every root's children together, and `disk_reserve`, the space the volume
+' must keep available before a refresh may write to it.
 '
 ' THE LIMITS ARE FOUND FROM THE ROOT, NOT HANDED DOWN. A tenant's root carries
 ' its stamp (etc/tenant.json), and the stamp is what says "this root is a
@@ -45,7 +46,7 @@ library gdash_limits
     ' children at once about 1.2 GB.
     function builtin(scope)
         if scope = "server" then
-            return { refresh_children: 4 }
+            return { refresh_children: 4, disk_reserve: 1073741824 }
         end if
         if scope = "tenant" then
             return { open_access: false, disk_bytes: 1073741824, refresh_children: 2, max_cells: 1000000, refresh_memory: "auto",
@@ -57,7 +58,7 @@ library gdash_limits
     ' The most restrictive answer, for a root whose limits cannot be known.
     function closed(message)
         return { ok: false, scope: "tenant", tenant: "", open_access: false, disk_bytes: 0, refresh_children: 0, max_cells: 0, refresh_memory: 1,
-                 model_budget: { amount: "0.00", currency: "USD" }, server_children: 0, base: {}, message: message }
+                 model_budget: { amount: "0.00", currency: "USD" }, server_children: 0, disk_reserve: "none", base: {}, message: message }
     end function
 
     function _whole(v, least)
@@ -157,10 +158,13 @@ library gdash_limits
                 errs = append(errs, path + " 'server' must be an object")
             else
                 for each k in keys(lf["server"])
-                    if k != "refresh_children" then
-                        errs = append(errs, path + " 'server' sets '" + k + "'; the server-wide limit is refresh_children")
-                    else if not _whole(lf["server"][k], 1) then
+                    v = lf["server"][k]
+                    if not contains(["refresh_children", "disk_reserve"], k) then
+                        errs = append(errs, path + " 'server' sets '" + k + "'; the server-wide limits are refresh_children and disk_reserve")
+                    else if k = "refresh_children" and not _whole(v, 1) then
                         errs = append(errs, path + " 'server' 'refresh_children' must be a whole number, at least 1")
+                    else if k = "disk_reserve" and not (v = "none" or _whole(v, 0)) then
+                        errs = append(errs, path + " 'server' 'disk_reserve' must be a whole number of bytes, or \"none\"")
                     end if
                 next
             end if
@@ -185,10 +189,10 @@ library gdash_limits
         return out
     end function
 
-    function _answer(scope, tenant, lim, server_children, base_p)
+    function _answer(scope, tenant, lim, server, base_p)
         out = { ok: true, scope: scope, tenant: tenant, open_access: lim["open_access"], disk_bytes: lim["disk_bytes"],
                 refresh_children: lim["refresh_children"], max_cells: lim["max_cells"], refresh_memory: lim["refresh_memory"], model_budget: lim["model_budget"],
-                server_children: server_children, base: base_p, message: "" }
+                server_children: server["refresh_children"], disk_reserve: server["disk_reserve"], base: base_p, message: "" }
         return out
     end function
 
@@ -225,8 +229,8 @@ library gdash_limits
     end function
 
     ' This root's limits. { ok, scope, tenant, open_access, disk_bytes,
-    ' refresh_children, max_cells, model_budget, server_children, base,
-    ' message }. Never raises.
+    ' refresh_children, max_cells, model_budget, server_children, disk_reserve,
+    ' base, message }. Never raises.
     function for_root(p)
         st = _stamp(p)
         if not st.stamped then
@@ -236,7 +240,7 @@ library gdash_limits
             end if
             server = _over(builtin("server"), lf.file["server"])
             lim = _over(builtin("root"), lf.file["root"])
-            return _answer("root", "", lim, server["refresh_children"], p)
+            return _answer("root", "", lim, server, p)
         end if
         if not st.ok or st.tenant = "" then
             return closed("this root's tenant stamp does not read")
@@ -272,7 +276,7 @@ library gdash_limits
         end if
         server = _over(builtin("server"), lf.file["server"])
         lim = _over(_over(builtin("tenant"), lf.file["tenants"]), own)
-        return _answer("tenant", st.tenant, lim, server["refresh_children"], base_p)
+        return _answer("tenant", st.tenant, lim, server, base_p)
     end function
 
     ' Setting one tenant's limit: validated, then the whole registry written
@@ -440,16 +444,70 @@ library gdash_limits
         return out
     end function
 
-    ' { ok, used, message }: ok when the root is within its quota.
+    ' { ok, kind, used, message }: ok when the root is within its quota and
+    ' the volume it writes to keeps its reserve. `kind` says which refused:
+    ' "quota" or "volume".
     function disk_check(p, lim)
-        if lim.disk_bytes = "none" then
-            return { ok: true, used: 0, message: "" }
+        used = 0
+        if lim.disk_bytes != "none" then
+            used = disk_used(p)
+            if used > lim.disk_bytes then
+                return { ok: false, kind: "quota", used: used, message: "this site is over its disk quota (" + bytes_text(used) + " of " + bytes_text(lim.disk_bytes) + "); the refresh was refused and the previous data is still served" }
+            end if
         end if
-        used = disk_used(p)
-        if used > lim.disk_bytes then
-            return { ok: false, used: used, message: "this site is over its disk quota (" + bytes_text(used) + " of " + bytes_text(lim.disk_bytes) + "); the refresh was refused and the previous data is still served" }
+        vol = volume_check(p, lim)
+        if not vol.ok then
+            return { ok: false, kind: "volume", used: used, message: vol.message }
         end if
-        return { ok: true, used: used, message: "" }
+        return { ok: true, kind: "", used: used, message: "" }
+    end function
+
+    ' The volume, not the root: every root on a server shares it, so a quota
+    ' each root keeps can still add up to a full disk. A refresh writes its
+    ' new extract beside the old, so it is refused while the volume holding
+    ' the cache has less than `disk_reserve` available -- refused cleanly,
+    ' the old data still served, rather than failing halfway through a write.
+    '
+    ' `available`, not `free`: free counts root's reserve, which a service
+    ' account cannot use. A volume that cannot be read refuses, as every
+    ' limit here does when it cannot be known.
+    '
+    ' { ok, available, why, message }. The numbers are the operator's: a tenant is
+    ' told the server is short of space, not how short.
+    function volume_check(p, lim)
+        if lim.disk_reserve = "none" then
+            return { ok: true, available: unknown, why: "", message: "" }
+        end if
+        at = _existing(p.cache_dir)
+        on error goto next
+        ds = disk_space(at)
+        if error then
+            why = "the server's free disk space could not be read (" + string(at) + ")"
+            return { ok: false, available: unknown, why: why, message: why + "; the refresh was refused and the previous data is still served" }
+        end if
+        on error stop
+        if ds.available < lim.disk_reserve then
+            why = "the server is low on disk space"
+            if default(lim["scope"], "root") != "tenant" then
+                why = why + " (" + bytes_text(ds.available) + " available on the volume holding " + string(at) + ", which keeps " + bytes_text(lim.disk_reserve) + " in reserve)"
+            end if
+            return { ok: false, available: ds.available, why: why, message: why + "; the refresh was refused and the previous data is still served" }
+        end if
+        return { ok: true, available: ds.available, why: "", message: "" }
+    end function
+
+    ' The nearest folder that is there, from `dir` upward: a root's cache is
+    ' made by its first refresh, and the volume is the same either way.
+    function _existing(dir)
+        at = string(dir)
+        while at != "" and not gdash_paths.path_exists(at)
+            nxt = gdash_paths.dir_of(at)
+            if nxt = at then
+                break
+            end if
+            at = nxt
+        end while
+        return at
     end function
 
     ' --- refresh slots --------------------------------------------------------

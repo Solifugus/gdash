@@ -279,6 +279,9 @@ every run is isolation nobody can vouch for a year from now.**
 - the `access: open` gate, moved here from GDASH-17: off for a tenant until
   the operator grants it;
 - a disk quota checked before the fetch and before the swap;
+- a server-wide disk reserve (2026-11-10): below 1 GiB available on the
+  volume, a refresh is refused cleanly instead of failing partway through a
+  write;
 - refresh slots, per root and server-wide, that defer rather than fail;
 - a measured ceiling of 1,000,000 cells, about 300 bytes each;
 - a monthly model budget, metered from reported usage, with tenants at zero
