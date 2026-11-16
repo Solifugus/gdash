@@ -218,7 +218,7 @@
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:478",
+      "where": "src/gdash_store.bas:494",
       "sql": "drop table if exists \"<table>\"",
       "binds": false
     },
@@ -227,7 +227,7 @@
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:479",
+      "where": "src/gdash_store.bas:495",
       "sql": "alter table \"<staging>\" rename to \"<table>\"",
       "binds": false,
       "note": "The swap: drop the live table and rename the staging one, with its _gdash_meta rows, in one transaction."
@@ -237,7 +237,7 @@
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:481",
+      "where": "src/gdash_store.bas:497",
       "sql": "update _gdash_meta set dataset = $1 where dataset = $2",
       "binds": true
     },
@@ -246,7 +246,7 @@
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:483",
+      "where": "src/gdash_store.bas:499",
       "sql": "update _gdash_bounds set dataset = $1 where dataset = $2",
       "binds": true
     },
@@ -255,7 +255,7 @@
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:524",
+      "where": "src/gdash_store.bas:540",
       "sql": "select dataset, column_name, kind, currency, scale, position from _gdash_meta order by dataset, position",
       "binds": false
     },
@@ -264,7 +264,7 @@
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:619",
+      "where": "src/gdash_store.bas:635",
       "sql": "select lo, hi from _gdash_bounds where dataset = $1 and column_name = $2",
       "binds": true
     },
@@ -273,7 +273,7 @@
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:685",
+      "where": "src/gdash_store.bas:701",
       "sql": "select distinct \"<column>\" as v from \"<ds>\" where \"<column>\" is not null limit <limit>",
       "binds": false
     },
@@ -282,7 +282,7 @@
       "kind": "store internal",
       "runs_on": "store",
       "origin": "code template",
-      "where": "src/gdash_store.bas:713",
+      "where": "src/gdash_store.bas:729",
       "sql": "<sql>",
       "binds": true,
       "note": "<sql> is ask or visual SQL, run inside begin(\"read\") so the engine refuses any write."
