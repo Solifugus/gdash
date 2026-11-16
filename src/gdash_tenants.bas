@@ -247,7 +247,29 @@ library gdash_tenants
         return { ok: true, message: "" }
     end function
 
-    ' Public for gdash_limits, which changes a tenant's limits the same way.
+    ' EVERY CHANGE TO THE REGISTRY IS MADE UNDER ONE LOCK (G18-1). A change
+    ' reads the registry, edits it and writes it whole; two at once each wrote
+    ' their own edit over the other's. Measured: eight `tenant create`s at
+    ' once registered five, and left three directories no entry named. A
+    ' provisioning service retries and runs in parallel, so this is the
+    ' ordinary case, not a corner. The lock is a file beside the registry,
+    ' taken by every mutator, gdash_limits' included; reads take none, since
+    ' the registry is replaced by rename and a reader sees one whole version.
+    function registry_lock(base_p)
+        made = gdash_paths.ensure_dir(base_p.config_dir)
+        on error goto next
+        f {file} = gdash_paths.tenants_file(base_p) + ".lock"
+        if not exists(f) then
+            write(f, "")
+        end if
+        if error then
+            return unknown
+        end if
+        return f
+    end function
+
+    ' Public for gdash_limits, which changes a tenant's limits the same way,
+    ' and takes registry_lock around it.
     function write_registry(base_p, reg)
         return _write(base_p, reg)
     end function
@@ -294,6 +316,19 @@ library gdash_tenants
     ' tenant half-created is unreachable rather than half-open -- the shape
     ' publish uses: write the snapshot, then move the pointer.
     function create_tenant(base_p, id, hosts, base)
+        lf = registry_lock(base_p)
+        if is_unknown(lf) then
+            m = "cannot lock the tenant registry (" + gdash_paths.tenants_file(base_p) + ".lock)"
+            return { ok: false, root: "", message: m }
+        end if
+        out = {}
+        with lock(lf)
+            out = _create_tenant(base_p, id, hosts, base)
+        end with
+        return out
+    end function
+
+    function _create_tenant(base_p, id, hosts, base)
         cur = _current(base_p, base)
         if not cur.ok then
             return { ok: false, root: "", message: cur.message }
@@ -419,6 +454,19 @@ library gdash_tenants
 
     ' The entry, written: what makes a tenant resolvable, so always last.
     function register(base_p, id, entry)
+        lf = registry_lock(base_p)
+        if is_unknown(lf) then
+            m = "cannot lock the tenant registry (" + gdash_paths.tenants_file(base_p) + ".lock)"
+            return { ok: false, message: m }
+        end if
+        out = {}
+        with lock(lf)
+            out = _register(base_p, id, entry)
+        end with
+        return out
+    end function
+
+    function _register(base_p, id, entry)
         cur = _current(base_p, "")
         if not cur.ok then
             return { ok: false, message: cur.message }
@@ -432,6 +480,19 @@ library gdash_tenants
     end function
 
     function set_tenant_status(base_p, id, status)
+        lf = registry_lock(base_p)
+        if is_unknown(lf) then
+            m = "cannot lock the tenant registry (" + gdash_paths.tenants_file(base_p) + ".lock)"
+            return { ok: false, message: m }
+        end if
+        out = {}
+        with lock(lf)
+            out = _set_tenant_status(base_p, id, status)
+        end with
+        return out
+    end function
+
+    function _set_tenant_status(base_p, id, status)
         cur = _current(base_p, "")
         if not cur.ok then
             return { ok: false, message: cur.message }
@@ -449,6 +510,19 @@ library gdash_tenants
     ' asks for it to go too: an entry is easy to recreate, a tenant's data is
     ' not, and the order -- unreachable first -- is the same either way.
     function remove_tenant(base_p, id)
+        lf = registry_lock(base_p)
+        if is_unknown(lf) then
+            m = "cannot lock the tenant registry (" + gdash_paths.tenants_file(base_p) + ".lock)"
+            return { ok: false, root: "", message: m }
+        end if
+        out = {}
+        with lock(lf)
+            out = _remove_tenant(base_p, id)
+        end with
+        return out
+    end function
+
+    function _remove_tenant(base_p, id)
         cur = _current(base_p, "")
         if not cur.ok then
             return { ok: false, root: "", message: cur.message }

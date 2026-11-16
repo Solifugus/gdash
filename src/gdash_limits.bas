@@ -289,6 +289,18 @@ library gdash_limits
     end function
 
     function set_tenant_limit(base_p, id, nm, text)
+        lf = gdash_tenants.registry_lock(base_p)
+        if is_unknown(lf) then
+            return { ok: false, message: "cannot lock the tenant registry (" + gdash_paths.tenants_file(base_p) + ".lock)" }
+        end if
+        out = {}
+        with lock(lf)
+            out = _set_tenant_limit(base_p, id, nm, text)
+        end with
+        return out
+    end function
+
+    function _set_tenant_limit(base_p, id, nm, text)
         if not contains(limit_names(), nm) then
             return { ok: false, message: "'" + string(nm) + "' is not a limit; the limits are " + join(limit_names(), ", ") }
         end if

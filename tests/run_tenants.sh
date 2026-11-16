@@ -50,6 +50,21 @@ ok "and closed to every other local user (0700)" "$(stat -c %a "$TROOTS/acme" "$
 DBASE="$SCRATCH/defaultbase"; mkdir -p "$DBASE/etc"
 out="$("$GBASIC" src/gdash_cli.bas --root "$DBASE" tenant create solo --host solo.example.test 2>&1)"
 has "$out" "created tenant solo at $(cd "$DBASE" && pwd -P)/lib/tenants/solo" "with no --base, a tenant goes under the state directory's tenants/"
+# G18-1: every change reads the registry, edits it and writes it whole. Without
+# a lock, eight creates at once registered five and orphaned three
+# directories. A provisioning service retries and runs jobs in parallel.
+CBASE="$SCRATCH/concurrent"; mkdir -p "$CBASE/etc"
+"$GBASIC" src/gdash_cli.bas --root "$CBASE" tenant create c0 --host c0.example.test >/dev/null 2>&1
+for i in $(seq 1 10); do
+    "$GBASIC" src/gdash_cli.bas --root "$CBASE" tenant create "c$i" --host "c$i.example.test" >/dev/null 2>&1 &
+    "$GBASIC" src/gdash_cli.bas --root "$CBASE" tenant limit c0 max_cells "$((1000 + i))" >/dev/null 2>&1 &
+done
+wait
+ok "concurrent creates and limit changes lose none of each other (G18-1)" \
+   "$(python3 -c "import json,sys;print(len(json.load(open(sys.argv[1]))['tenants']))" "$CBASE/etc/tenants.json")" "11"
+ok "and leave no directory unregistered" "$(ls "$CBASE/lib/tenants" | wc -l | tr -d ' ')" "11"
+yes_c0="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['tenants']['c0'].get('limits',{}).get('max_cells',''))" "$CBASE/etc/tenants.json")"
+ok "and the last limit set is kept" "$([[ "$yes_c0" =~ ^10(0[1-9]|10)$ ]] && echo kept)" "kept"
 out="$(CLI tenant create globex --host globex.example.test --host bi.globex.test 2>&1)"
 has "$out" "created tenant globex" "a second tenant joins the registry"
 for bad in ".." "../x" "ACME" "a.b" "-x" "x-" "a/b"; do

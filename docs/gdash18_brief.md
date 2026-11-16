@@ -1,8 +1,12 @@
 # GDASH-18 — The onboarding surface
 
-**Status:** step 0 run (2026-11-16). **Stopped**: what gcorp expects of a
-product installation decides this phase's shape, and the two designs
-disagree.
+**Status:** step 0 run (2026-11-16); the model ruled the same day; G18-1
+fixed. The rest of the build has not started.
+
+**Ruled 2026-11-16:** gcorp operates gdash's own multi-tenancy, many
+tenants to a server, each tenant with any number of dashboards. A
+single-site installation is a single root: one organisation, no registry.
+So the proposal below "under gdash's own tenants" is the one to build.
 **Authority:** `gdash_design.md` outranks this brief. The plan's entry: "an
 admin endpoint in front of the same code the CLI calls, for a remote
 onboarding service to drive … the CLI is the API".
@@ -56,7 +60,9 @@ tenant.
 
 ## Proposed, under gdash's own tenants
 
-- **G18-1 fixed:** every registry change takes a lock.
+- **G18-1 fixed (2026-11-16):** every registry change, `tenant limit`
+  included, takes one lock file beside the registry. Ten creates run
+  alongside ten limit changes now lose none (`run_tenants`).
 - **A machine-readable CLI**, the surface gcorp's host service calls:
   `--json` on every tenant verb, one JSON object on stdout, and exit codes
   that separate "refused" from "failed".
