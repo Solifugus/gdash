@@ -357,6 +357,38 @@ library gdash_tenants
         return { ok: true, message: "" }
     end function
 
+    ' The stamp, read without trusting it: { stamped, ok, tenant, registry }.
+    function read_stamp(p)
+        path = gdash_paths.tenant_stamp(p)
+        if not gdash_paths.path_exists(path) then
+            return { stamped: false, ok: true, tenant: "", registry: "" }
+        end if
+        on error goto next
+        f {file} = path
+        got = try_decode(read(f))
+        if error or not got.ok or type(got.value) != "record" then
+            return { stamped: true, ok: false, tenant: "", registry: "" }
+        end if
+        on error stop
+        return { stamped: true, ok: true, tenant: string(default(got.value["tenant"], "")), registry: string(default(got.value["registry"], "")) }
+    end function
+
+    ' The base roles a stamped root answers to. A stamp written since
+    ' GDASH-16 names its registry; one written before names none, and its
+    ' base is then the root's parent, which is where `<base>/<id>` put it.
+    function base_of(p, stamp)
+        if stamp.registry != "" then
+            ' Under FHS the registry is /etc/gdash/tenants.json, which is no
+            ' `<root>/etc/` -- the installed roles are the base.
+            fhs = gdash_paths.roles("")
+            if stamp.registry = gdash_paths.tenants_file(fhs) then
+                return fhs
+            end if
+            return gdash_paths.roles(gdash_paths.dir_of(gdash_paths.dir_of(stamp.registry)))
+        end if
+        return gdash_paths.roles(gdash_paths.dir_of(p.root))
+    end function
+
     ' Whether `id` could join the registry with `entry`, before anything is
     ' written: a valid id, not taken, hosts nobody else has, a root inside
     ' the base. { ok, root, message }.
@@ -435,6 +467,79 @@ library gdash_tenants
         reg["tenants"] = kept
         w = _write(base_p, reg)
         return { ok: w.ok, root: root, message: w.message }
+    end function
+
+    ' --- migration (GDASH-17) ---------------------------------------------------
+    '
+    ' Every upgrade must migrate every tenant, and with hundreds an operator
+    ' cannot open each one. The stamp says what each root is.
+    function current_format()
+        return 1
+    end function
+
+    ' One step from `from` to `from + 1`, given the tenant's roles. There are
+    ' none: format 1 is the only one there has been. A format 2 adds its step
+    ' here, and `migrate` already walks a tenant through every step between.
+    function _step(from, tp)
+        return { ok: false, message: "no step is known from format " + string(from) }
+    end function
+
+    ' [{ id, from, to, status, message }], status one of current, migrated,
+    ' newer (this build is older than the tenant), unreadable, failed.
+    function migrate(base_p, ids)
+        out = []
+        loaded = load_registry(base_p)
+        if not loaded.present or not loaded.ok then
+            return out
+        end if
+        for each id in ids
+            row = { id: id, from: unknown, to: current_format(), status: "unreadable", message: "" }
+            tr = roles_for(base_p, id)
+            if not tr.ok then
+                row.message = tr.message
+            else
+                st = read_stamp(tr.p)
+                f = unknown
+                if st.stamped and st.ok then
+                    got = try_decode(read({file}gdash_paths.tenant_stamp(tr.p)))
+                    if got.ok and type(got.value["format"]) = "number" then
+                        f = got.value["format"]
+                    end if
+                end if
+                row.from = f
+                if is_unknown(f) then
+                    row.message = "its stamp " + gdash_paths.tenant_stamp(tr.p) + " does not say a format"
+                else if f > current_format() then
+                    row.status = "newer"
+                    row.message = "format " + string(f) + " is newer than this build's " + string(current_format()) + "; this tenant needs a newer gdash"
+                else if f = current_format() then
+                    row.status = "current"
+                else
+                    at = f
+                    ok = true
+                    while at < current_format() and ok
+                        stp = _step(at, tr.p)
+                        if stp.ok then
+                            at += 1
+                        else
+                            ok = false
+                            row.status = "failed"
+                            row.message = stp.message
+                        end if
+                    end while
+                    if ok then
+                        w = write_stamp(base_p, tr.p, id, current_format())
+                        row.status = "migrated"
+                        if not w.ok then
+                            row.status = "failed"
+                            row.message = w.message
+                        end if
+                    end if
+                end if
+            end if
+            out = append(out, row)
+        next
+        return out
     end function
 
     function tenant_list(base_p)

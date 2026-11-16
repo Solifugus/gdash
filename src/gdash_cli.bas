@@ -161,6 +161,41 @@ program main(args)
             next
             exit(0)
         end if
+        ' --- migrate (GDASH-17) ---
+        if sub = "migrate" then
+            ids = []
+            if tid = "--all" then
+                for each t in gdash_tenants.tenant_list(p)
+                    ids = append(ids, t.id)
+                next
+            else if tid != "" then
+                ids = [tid]
+            else
+                print to error "usage: gdash tenant migrate --all | <id>"
+                exit(2)
+            end if
+            bad = 0
+            for each r in gdash_tenants.migrate(p, ids)
+                line = r.id + "  " + r.status
+                if not is_unknown(r.from) then
+                    line = line + "  format " + string(r.from)
+                    if r.status = "migrated" then
+                        line = line + " -> " + string(r.to)
+                    end if
+                end if
+                if r.message != "" then
+                    line = line + "  (" + r.message + ")"
+                end if
+                print(line)
+                if not contains(["current", "migrated"], r.status) then
+                    bad += 1
+                end if
+            next
+            if bad > 0 then
+                exit(1)
+            end if
+            exit(0)
+        end if
         if tid = "" or not contains(["create", "suspend", "resume", "delete", "limits", "limit", "export", "import"], sub) then
             print to error "usage: gdash [--root <dir>] tenant create <id> --host <host> [--host <host>] [--base <dir>]   (the base defaults to " + gdash_paths.tenants_base(p) + ")"
             print to error "       gdash [--root <dir>] tenant list | suspend <id> | resume <id> | delete <id>"
@@ -168,6 +203,7 @@ program main(args)
             print to error "       gdash [--root <dir>] tenant export <id> <dir> [--without-data]"
             print to error "       gdash [--root <dir>] tenant import <dir> [--as <id>] [--host <host> ...]"
             print to error "       gdash [--root <dir>] tenant delete <id> --purge --backup <export dir>"
+            print to error "       gdash [--root <dir>] tenant migrate --all | <id>"
             exit(2)
         end if
         ' --- export, import, purge (GDASH-17) ---

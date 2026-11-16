@@ -196,43 +196,13 @@ library gdash_limits
         return out
     end function
 
-    ' The stamp, read without trusting it: { stamped, ok, tenant, registry }.
-    function _stamp(p)
-        path = gdash_paths.tenant_stamp(p)
-        if not gdash_paths.path_exists(path) then
-            return { stamped: false, ok: true, tenant: "", registry: "" }
-        end if
-        on error goto next
-        f {file} = path
-        got = try_decode(read(f))
-        if error or not got.ok or type(got.value) != "record" then
-            return { stamped: true, ok: false, tenant: "", registry: "" }
-        end if
-        on error stop
-        return { stamped: true, ok: true, tenant: string(default(got.value["tenant"], "")), registry: string(default(got.value["registry"], "")) }
-    end function
 
-    ' The base roles a stamped root answers to. A stamp written since
-    ' GDASH-16 names its registry; one written before names none, and its
-    ' base is then the root's parent, which is where `<base>/<id>` put it.
-    function _base_of(p, stamp)
-        if stamp.registry != "" then
-            ' Under FHS the registry is /etc/gdash/tenants.json, which is no
-            ' `<root>/etc/` -- the installed roles are the base.
-            fhs = gdash_paths.roles("")
-            if stamp.registry = gdash_paths.tenants_file(fhs) then
-                return fhs
-            end if
-            return gdash_paths.roles(gdash_paths.dir_of(gdash_paths.dir_of(stamp.registry)))
-        end if
-        return gdash_paths.roles(gdash_paths.dir_of(p.root))
-    end function
 
     ' This root's limits. { ok, scope, tenant, open_access, disk_bytes,
     ' refresh_children, max_cells, model_budget, server_children, disk_reserve,
     ' base, message }. Never raises.
     function for_root(p)
-        st = _stamp(p)
+        st = gdash_tenants.read_stamp(p)
         if not st.stamped then
             lf = load_limits_file(p)
             if not lf.ok then
@@ -245,7 +215,7 @@ library gdash_limits
         if not st.ok or st.tenant = "" then
             return closed("this root's tenant stamp does not read")
         end if
-        base_p = _base_of(p, st)
+        base_p = gdash_tenants.base_of(p, st)
         loaded = gdash_tenants.load_registry(base_p)
         if not loaded.present or not loaded.ok then
             return closed("tenant '" + st.tenant + "' has no readable registry at " + gdash_paths.tenants_file(base_p))

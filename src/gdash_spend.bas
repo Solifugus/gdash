@@ -25,6 +25,7 @@
 library gdash_spend
 
     load gdash_paths from "gdash_paths.bas"
+    load gdash_audit from "gdash_audit.bas"
 
     function month_of(t)
         d {datetime}= t
@@ -184,6 +185,14 @@ library gdash_spend
                 on error stop
             end if
         end with
+        ' The money, for the operator's stream: cost and tokens, never the
+        ' profile, which holds the key.
+        shown_cost = "unpriced"
+        if c.priced then
+            shown_cost = money.text(c.cost)
+        end if
+        logged = gdash_audit.event(p, "spend", { cost: shown_cost, currency: c.currency, priced: c.priced, estimated: c.estimated,
+                                                  input_tokens: c.input_tokens, output_tokens: c.output_tokens })
         return c
     end function
 

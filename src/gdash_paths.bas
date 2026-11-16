@@ -306,6 +306,12 @@ library gdash_paths
         return _join(p.log_dir, "audit.log")
     end function
 
+    ' The operator's stream (GDASH-17): what has happened across every tenant,
+    ' in the BASE deployment's log. A tenant never reads it.
+    function events_log(p)
+        return _join(p.log_dir, "events.log")
+    end function
+
     ' No chmod builtin exists, so the mode is set by calling out. Lives here
     ' because gdash_refresh and gdash_users both need it and two copies of a
     ' permission-setting call is two places for one of them to be forgotten.

@@ -42,6 +42,7 @@ library gdash_ask
     load gdash_format from "gdash_format.bas"
     load gdash_limits from "gdash_limits.bas"
     load gdash_spend from "gdash_spend.bas"
+    load gdash_audit from "gdash_audit.bas"
     load nlq
 
     ' --- the model profile -------------------------------------------------
@@ -409,6 +410,7 @@ library gdash_ask
         lim = gdash_limits.for_root(p)
         gate = gdash_spend.check_budget(p, lim, wire.ctx)
         if not gate.ok then
+            logged = gdash_audit.event(p, "ask.refused", { reason: "budget", message: gate.message })
             return _stop("budget", q, gate.message, { key: plan.key, as_of: stamps })
         end if
         got = wire.complete(wire.ctx, plan.system, plan.user)

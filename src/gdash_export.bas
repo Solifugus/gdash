@@ -47,7 +47,7 @@ library gdash_export
     end function
 
     function stamp_format()
-        return 1
+        return gdash_tenants.current_format()
     end function
 
     function _chunk()
