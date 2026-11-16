@@ -121,6 +121,9 @@ PY
 chown -R gdash:gdash /var/lib/gdash
 runuser -u gdash -- env GDASH_GBASIC=/gbasic /usr/local/bin/gdash refresh timed >/dev/null 2>&1
 runuser -u gdash -- env GDASH_GBASIC=/gbasic /usr/local/bin/gdash publish timed >/dev/null 2>&1' >/dev/null 2>&1
+# The publish carried fresh data; a pass inside the same second finds nothing
+# due and processes nothing, which is right and would read as a failure here.
+sh_ct 'sleep 1.2' >/dev/null 2>&1
 cur="$(cursor_now)"
 inct systemctl start gdash-scheduler.service >/dev/null 2>&1
 ok "the scheduler oneshot succeeds under full hardening" "$(inct systemctl show gdash-scheduler -p Result --value)" "success"
@@ -207,6 +210,72 @@ echo "--- the timer ---"
 inct systemctl enable --now gdash-scheduler.timer >/dev/null 2>&1
 ok "the timer is active" "$(inct systemctl is-active gdash-scheduler.timer)" "active"
 yes_ "and systemd lists when it next runs" "$(inct systemctl list-timers gdash-scheduler.timer --no-pager 2>/dev/null | grep -o 'gdash-scheduler.timer')"
+
+echo "--- a tenant, under the per-tenant scheduler unit (GDASH-17) ---"
+# Every unit runs under ProtectSystem=strict, which makes everything outside
+# its *Directory= paths read-only. GDASH-15 put tenants at /srv/gdash and
+# never started a unit against one: every refresh failed and sign-in was a
+# 500 (G17-1). The default base is now /var/lib/gdash/tenants, which the
+# units can write. GDASH_SYSTEMD_TENANT_BASE=/srv/gdash runs the other
+# documented shape: a base elsewhere, with the drop-in operations §6b gives.
+TBASE="${GDASH_SYSTEMD_TENANT_BASE:-}"
+G='runuser -u gdash -- env GDASH_GBASIC=/gbasic /usr/local/bin/gdash'
+if [[ -n "$TBASE" ]]; then
+    sh_ct "mkdir -p $TBASE && chown gdash:gdash $TBASE
+for u in gdash.service gdash-scheduler@.service; do
+  mkdir -p /etc/systemd/system/\$u.d
+  printf '[Service]\nReadWritePaths=$TBASE\n' > /etc/systemd/system/\$u.d/tenants.conf
+done
+systemctl daemon-reload && systemctl restart gdash" >/dev/null 2>&1
+    sleep 3
+    BASEFLAG="--base $TBASE"; TROOT="$TBASE/acme"
+else
+    BASEFLAG=""; TROOT="/var/lib/gdash/tenants/acme"
+fi
+sh_ct "cd /var/lib/gdash
+$G tenant create acme --host acme.test $BASEFLAG
+$G tenant limit acme open_access true
+mkdir -p $TROOT/lib/dashboards/timed
+cp /var/lib/gdash/dashboards/timed/draft.json $TROOT/lib/dashboards/timed/draft.json
+cp /etc/gdash/connections.json $TROOT/etc/connections.json
+chown -R gdash:gdash $TROOT
+$G --tenant acme refresh timed
+$G --tenant acme publish timed" >/dev/null 2>&1
+ok "the tenant was created where the base says" "$(sh_ct "test -f $TROOT/etc/tenant.json && echo yes")" "yes"
+ok "and closed to other users" "$(sh_ct "stat -c %a $TROOT")" "700"
+sh_ct 'sleep 1.2' >/dev/null 2>&1
+cur="$(cursor_now)"
+inct systemctl start gdash-scheduler@acme.service >/dev/null 2>&1
+tjrnl="$(since_cursor "$cur" gdash-scheduler@acme)"
+echo "  measured: $(grep -oE 'schedule: [0-9]+ checked[^"]*' <<<"$tjrnl" | tail -1)"
+ok "the tenant's scheduler oneshot succeeds under full hardening" "$(inct systemctl show gdash-scheduler@acme -p Result --value)" "success"
+yes_ "and refreshes the tenant's dataset" \
+     "$(grep -oE 'timed\.(orders|regions): (refreshed [0-9]+ rows|unchanged)' <<<"$tjrnl" | head -1)"
+no_ "with nothing refused for a read-only file system" "$(grep -oiE 'read-only file system' <<<"$tjrnl" | head -1)"
+cur="$(cursor_now)"
+tcode="$(sh_ct 'curl -s -o /dev/null -w "%{http_code}" --max-time 10 -H "Host: acme.test" http://127.0.0.1:8780/login')"
+[[ "$tcode" == "200" ]] || { echo "  the server's journal for that request:"; since_cursor "$cur" gdash | tail -8 | sed 's/^/    /'; }
+ok "the server signs the tenant's viewers in (it can write their sessions)" "$tcode" "200"
+ok "and serves its dashboard" "$(sh_ct 'curl -s -o /dev/null -w "%{http_code}" --max-time 10 -H "Host: acme.test" http://127.0.0.1:8780/d/timed')" "200"
+ok "and refuses a host it does not know" \
+   "$(sh_ct 'curl -s -o /dev/null -w "%{http_code}" --max-time 10 -H "Host: nobody.test" http://127.0.0.1:8780/login')" "404"
+yes_ "the operator's events.log names the tenant" "$(sh_ct 'grep -o "\"tenant\":\"acme\"" /var/log/gdash/events.log 2>/dev/null | head -1')"
+
+echo "--- the tenant restored: export, destroy, import (GDASH-17) ---"
+sh_ct "mkdir -p /var/backups/gdash && chown gdash:gdash /var/backups/gdash
+cd /var/lib/gdash && $G tenant export acme /var/backups/gdash/acme" >/dev/null 2>&1
+ok "the export was made live, while the server serves" "$(sh_ct 'test -f /var/backups/gdash/acme/manifest.json && echo yes')" "yes"
+sh_ct "cd /var/lib/gdash && $G tenant delete acme --purge --backup /var/backups/gdash/acme" >/dev/null 2>&1
+ok "the tenant is gone: purged" "$(sh_ct "test -e $TROOT && echo present || echo gone")" "gone"
+ok "and its host is refused" "$(sh_ct 'curl -s -o /dev/null -w "%{http_code}" --max-time 10 -H "Host: acme.test" http://127.0.0.1:8780/d/timed')" "404"
+sh_ct "cd /var/lib/gdash && $G tenant import /var/backups/gdash/acme" >/dev/null 2>&1
+ok "restored from the export alone, it serves again" "$(sh_ct 'curl -s -o /dev/null -w "%{http_code}" --max-time 10 -H "Host: acme.test" http://127.0.0.1:8780/d/timed')" "200"
+yes_ "with its data, before any refresh" "$(sh_ct 'curl -s --max-time 10 -H "Host: acme.test" http://127.0.0.1:8780/d/timed' | grep -o 'Ada Okonjo' | head -1)"
+sh_ct 'sleep 1.2' >/dev/null 2>&1
+cur="$(cursor_now)"
+inct systemctl start gdash-scheduler@acme.service >/dev/null 2>&1
+ok "and its scheduler runs against the restored root" "$(inct systemctl show gdash-scheduler@acme -p Result --value)" "success"
+no_ "without a read-only refusal" "$(since_cursor "$cur" gdash-scheduler@acme | grep -oiE 'read-only file system|[1-9][0-9]* failed' | head -1)"
 
 echo "--- stop, and what a stop takes with it ---"
 inct systemctl stop gdash >/dev/null 2>&1

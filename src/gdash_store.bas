@@ -431,6 +431,22 @@ library gdash_store
         return got
     end function
 
+    ' Whether, within `seconds`, no owner holds the database: nothing is
+    ' writing it, so its directory may be removed. A path with no database is
+    ' idle. Before a tenant's directory is deleted (GDASH-17), because an
+    ' owner still serving a deleted database is still serving it.
+    function wait_idle(db_path, seconds)
+        if not gdash_paths.path_exists(db_path) then
+            return true
+        end if
+        on error goto next
+        got = gsql.wait_for_owner(db_path, seconds)
+        if error then
+            return false
+        end if
+        return got
+    end function
+
     ' A consistent copy of a database as of now, made while it stays in use
     ' (GDASH-17: a tenant's export). The copy is an ordinary database: a
     ' restore is using it. `dest` must not hold anything else.

@@ -490,10 +490,37 @@ library gdash_export
 
     ' --- delete, for good ---------------------------------------------------
     '
-    ' The registry entry first, so the tenant is unreachable before any of it
-    ' goes; then the directory. Refused unless `backup` is a whole export of
-    ' THIS tenant: a deletion nobody can undo is made undoable by the one
-    ' thing that can be checked here.
+    ' Refused unless `backup` is a whole export of THIS tenant: a deletion
+    ' nobody can undo is made undoable by the one thing that can be checked
+    ' here. Then, in order:
+    '   1. suspend, so no request opens a database of it again;
+    '   2. wait for every database's owner to exit. An owner keeps serving a
+    '      database whose directory is deleted under it, and a tenant imported
+    '      to the same path then meets it (measured in run_systemd.sh: a
+    '      restored dashboard rendered without its data). At the deadline the
+    '      tenant is left suspended, whole, and the operator told;
+    '   3. the registry entry, then the directory.
+    function _databases(tp)
+        out = []
+        on error goto next
+        dashes = list(tp.cache_dir)
+        if error then
+            return out
+        end if
+        on error stop
+        for each d in dashes
+            if d.type = "folder" then
+                for each mode in ["draft", "published"]
+                    db = gdash_paths.stage_db(tp, d.name, mode)
+                    if gdash_paths.path_exists(db) then
+                        out = append(out, db)
+                    end if
+                next
+            end if
+        next
+        return out
+    end function
+
     function purge_tenant(base_p, id, backup)
         out = { ok: false, root: "", made: "", message: "" }
         chk = check_export(backup)
@@ -504,6 +531,21 @@ library gdash_export
         if chk.manifest["tenant"] != id then
             out.message = "refused: " + backup + " is an export of '" + string(chk.manifest["tenant"]) + "', not '" + string(id) + "'"
             return out
+        end if
+        tr = gdash_tenants.roles_for(base_p, id)
+        if tr.ok then
+            sus = gdash_tenants.set_tenant_status(base_p, id, "suspended")
+            if not sus.ok then
+                out.message = sus.message
+                return out
+            end if
+            deadline = gdash_store.linger() + 15
+            for each db in _databases(tr.p)
+                if not gdash_store.wait_idle(db, deadline) then
+                    out.message = "tenant '" + id + "' is suspended and nothing was deleted: " + db + " is still open after " + string(deadline) + " s. Stop its scheduler (systemctl disable --now gdash-scheduler@" + id + ".timer) and run the purge again"
+                    return out
+                end if
+            next
         end if
         gone = gdash_tenants.remove_tenant(base_p, id)
         if not gone.ok then
