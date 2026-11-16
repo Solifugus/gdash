@@ -330,23 +330,73 @@ library gdash_tenants
                 return { ok: false, root: root, message: "cannot restrict " + d + " to its owner" }
             end if
         next
-        ' A format stamp per tenant, so a later migration knows what it is
-        ' looking at. One root never needed this; hundreds will.
-        on error goto next
-        sf {file} = gdash_paths.tenant_stamp(tp)
-        ' It names the registry, so a root reached by a bare --root still finds
-        ' the limits that govern it (GDASH-16).
-        write(sf, encode({ format: 1, tenant: id, registry: _registry_path(base_p) }))
-        if error then
-            return { ok: false, root: root, message: "cannot write the tenant's format stamp" }
+        st = write_stamp(base_p, tp, id, 1)
+        if not st.ok then
+            return { ok: false, root: root, message: st.message }
         end if
-        on error stop
         reg["tenants"][id] = { hosts: norm, status: "active", format: 1 }
         w = _write(base_p, reg)
         if not w.ok then
             return { ok: false, root: root, message: w.message }
         end if
         return { ok: true, root: root, message: "" }
+    end function
+
+    ' A format stamp per tenant, so a later migration knows what it is
+    ' looking at. One root never needed this; hundreds will. It names the
+    ' registry, so a root reached by a bare --root still finds the limits that
+    ' govern it (GDASH-16) -- which is why an imported tenant's stamp is
+    ' rewritten for the server it now lives on.
+    function write_stamp(base_p, tp, id, format)
+        on error goto next
+        sf {file} = gdash_paths.tenant_stamp(tp)
+        write(sf, encode({ format: format, tenant: id, registry: _registry_path(base_p) }))
+        if error then
+            return { ok: false, message: "cannot write the tenant's format stamp " + gdash_paths.tenant_stamp(tp) }
+        end if
+        return { ok: true, message: "" }
+    end function
+
+    ' Whether `id` could join the registry with `entry`, before anything is
+    ' written: a valid id, not taken, hosts nobody else has, a root inside
+    ' the base. { ok, root, message }.
+    function can_register(base_p, id, entry)
+        cur = _current(base_p, "")
+        if not cur.ok then
+            return { ok: false, root: "", message: cur.message }
+        end if
+        reg = cur.registry
+        if not valid_id(id) then
+            return { ok: false, root: "", message: "'" + string(id) + "' is not a valid tenant id (lowercase letters, digits and inner hyphens, at most 40)" }
+        end if
+        if not is_unknown(reg["tenants"][id]) then
+            return { ok: false, root: "", message: "tenant '" + id + "' already exists here; import --as another id" }
+        end if
+        reg["tenants"][id] = entry
+        errs = validate_registry(reg)
+        if count(errs) > 0 then
+            return { ok: false, root: "", message: join(errs, "; ") }
+        end if
+        made = gdash_paths.ensure_dir(string(reg["base"]))
+        root = root_of(reg, id)
+        if root = "" then
+            return { ok: false, root: "", message: "tenant '" + id + "' would resolve outside " + string(reg["base"]) }
+        end if
+        return { ok: true, root: root, message: "" }
+    end function
+
+    ' The entry, written: what makes a tenant resolvable, so always last.
+    function register(base_p, id, entry)
+        cur = _current(base_p, "")
+        if not cur.ok then
+            return { ok: false, message: cur.message }
+        end if
+        reg = cur.registry
+        if not is_unknown(reg["tenants"][id]) then
+            return { ok: false, message: "tenant '" + id + "' already exists" }
+        end if
+        reg["tenants"][id] = entry
+        return _write(base_p, reg)
     end function
 
     function set_tenant_status(base_p, id, status)

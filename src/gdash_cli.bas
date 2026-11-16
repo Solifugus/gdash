@@ -36,6 +36,7 @@ program main(args)
     load gdash_refresh from "gdash_refresh.bas"
     load gdash_store from "gdash_store.bas"
     load gdash_tenants from "gdash_tenants.bas"
+    load gdash_export from "gdash_export.bas"
     load gdash_limits from "gdash_limits.bas"
     load gdash_spend from "gdash_spend.bas"
     load gdash_channels from "gdash_channels.bas"
@@ -67,6 +68,10 @@ program main(args)
     tenant_id = ""
     tenant_hosts = []
     tenant_base = ""
+    without_data = false
+    import_as = ""
+    purge = false
+    purge_backup = ""
     i = 0
     while i < count(args)
         a = args[i]
@@ -83,6 +88,22 @@ program main(args)
         else if a = "--host" then
             if i + 1 < count(args) then
                 tenant_hosts = append(tenant_hosts, args[i + 1])
+            end if
+            i += 2
+        else if a = "--without-data" then
+            without_data = true
+            i += 1
+        else if a = "--purge" then
+            purge = true
+            i += 1
+        else if a = "--as" then
+            if i + 1 < count(args) then
+                import_as = args[i + 1]
+            end if
+            i += 2
+        else if a = "--backup" then
+            if i + 1 < count(args) then
+                purge_backup = args[i + 1]
             end if
             i += 2
         else if a = "--base" then
@@ -140,11 +161,56 @@ program main(args)
             next
             exit(0)
         end if
-        if tid = "" or not contains(["create", "suspend", "resume", "delete", "limits", "limit"], sub) then
+        if tid = "" or not contains(["create", "suspend", "resume", "delete", "limits", "limit", "export", "import"], sub) then
             print to error "usage: gdash [--root <dir>] tenant create <id> --host <host> [--host <host>] [--base <dir>]   (the base defaults to " + gdash_paths.tenants_base(p) + ")"
             print to error "       gdash [--root <dir>] tenant list | suspend <id> | resume <id> | delete <id>"
             print to error "       gdash [--root <dir>] tenant limits <id> | limit <id> <name> <value>"
+            print to error "       gdash [--root <dir>] tenant export <id> <dir> [--without-data]"
+            print to error "       gdash [--root <dir>] tenant import <dir> [--as <id>] [--host <host> ...]"
+            print to error "       gdash [--root <dir>] tenant delete <id> --purge --backup <export dir>"
             exit(2)
+        end if
+        ' --- export, import, purge (GDASH-17) ---
+        ' Backup, moving between servers and deletion are one directory
+        ' operation. An export holds the tenant's credentials.
+        if sub = "export" then
+            if count(rest) < 3 then
+                print to error "usage: gdash tenant export <id> <dir> [--without-data]"
+                exit(2)
+            end if
+            ex = gdash_export.export_tenant(p, tid, rest[2], not without_data)
+            if not ex.ok then
+                print to error "error: " + ex.message
+                exit(1)
+            end if
+            print("exported tenant " + tid + " to " + rest[2] + ": " + string(ex.files) + " files, " + gdash_limits.bytes_text(ex.bytes) + ", " + string(ex.datasets) + " dataset databases")
+            print("  it holds the tenant's credentials: keep it as you keep /etc/gdash")
+            exit(0)
+        end if
+        if sub = "import" then
+            ' Here the second word is the export, not an id.
+            im = gdash_export.import_tenant(p, tid, import_as, tenant_hosts)
+            if not im.ok then
+                print to error "error: " + im.message
+                exit(1)
+            end if
+            print("imported tenant " + im.tenant + " at " + im.root)
+            print("  start its scheduler:  systemctl enable --now gdash-scheduler@" + im.tenant + ".timer")
+            exit(0)
+        end if
+        if sub = "delete" and purge then
+            if purge_backup = "" then
+                print to error "error: --purge removes the tenant's directory for good; name an export of it with --backup <dir>"
+                exit(2)
+            end if
+            pg = gdash_export.purge_tenant(p, tid, purge_backup)
+            if not pg.ok then
+                print to error "error: " + pg.message
+                exit(1)
+            end if
+            print("tenant " + tid + " removed from the registry, and its directory deleted: " + pg.root)
+            print("  the export it can be restored from was made " + pg.made + ": " + purge_backup)
+            exit(0)
         end if
         ' --- limits (GDASH-16) ---
         ' `limits` shows what governs the tenant now, defaults included, and

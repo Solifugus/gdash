@@ -167,6 +167,23 @@ ok "an invalid registry refuses every host rather than guess" "$(code acme.examp
 cp "$SCRATCH/tenants.good" "$BASE/etc/tenants.json"
 ok "and the restored one serves again" "$(code acme.example.test /d/sales)" "200"
 
+echo "--- export, restore, purge (GDASH-17) ---"
+EXP="$SCRATCH/acme-export"
+out="$(CLI tenant export acme "$EXP" 2>&1)"
+has "$out" "exported tenant acme to $EXP" "a live tenant exports from the CLI"
+has "$out" "it holds the tenant's credentials" "and says what it holds"
+out="$(CLI tenant import "$EXP" --as acme-copy --host copy.example.test 2>&1)"
+has "$out" "imported tenant acme-copy" "an export imports as another tenant"
+ok "which the server serves at its own host, data and all" "$(code copy.example.test /d/sales)" "200"
+out="$(CLI tenant delete acme-copy --purge 2>&1)"; rc=$?
+ok "a purge without a backup is refused" "$rc" "2"
+out="$(CLI tenant delete acme-copy --purge --backup "$EXP" 2>&1)"; rc=$?
+has "$out" "is an export of 'acme', not 'acme-copy'" "and one naming another tenant's export"
+CLI tenant export acme-copy "$SCRATCH/copy-export" >/dev/null 2>&1
+out="$(CLI tenant delete acme-copy --purge --backup "$SCRATCH/copy-export" 2>&1)"
+has "$out" "its directory deleted" "with its own export, it is purged"
+ok "and its host is refused" "$(code copy.example.test /d/sales)" "404"
+
 echo "--- deleting a tenant makes it unreachable and keeps its data ---"
 out="$(CLI tenant delete globex 2>&1)"
 has "$out" "unreachable" "delete says what it did"

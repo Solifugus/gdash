@@ -431,6 +431,26 @@ library gdash_store
         return got
     end function
 
+    ' A consistent copy of a database as of now, made while it stays in use
+    ' (GDASH-17: a tenant's export). The copy is an ordinary database: a
+    ' restore is using it. `dest` must not hold anything else.
+    ' { ok, bytes, message }.
+    function backup(db_path, dest)
+        db = connect(db_path, false)
+        if is_unknown(db) then
+            return { ok: false, bytes: 0, message: "no database at " + db_path }
+        end if
+        made = gdash_paths.ensure_dir(gdash_paths.dir_of(dest))
+        on error goto next
+        got = gsql.backup(db, dest)
+        e = error
+        _close(db)
+        if e then
+            return { ok: false, bytes: 0, message: "cannot copy " + db_path + ": " + e.message }
+        end if
+        return { ok: true, bytes: got.bytes, message: "" }
+    end function
+
     function swap(db_path, table)
         return swap_all(db_path, [table])
     end function
