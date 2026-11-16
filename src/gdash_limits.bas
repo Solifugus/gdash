@@ -562,12 +562,12 @@ library gdash_limits
                 write(f, "")
             end if
             got = lock(f, { wait: false })
-            ' A RAISE is not "held by someone else": it is an interpreter
-            ' without the non-blocking lock, and saying "the server is full"
-            ' then would send an operator looking for refreshes that do not
-            ' exist.
+            ' A RAISE is not "held by someone else", and saying "the server
+            ' is full" would send an operator looking for refreshes that do
+            ' not exist. Every build gdash accepts has the non-blocking lock,
+            ' so it is the slot file's own failure, said as such (G17-2).
             if error then
-                return "refreshes cannot be limited by this gBASIC: it has no lock(f, { wait: false }) (0.11.0 or later is required): " + error.message
+                return "cannot take a refresh slot: " + error.message
             end if
             on error stop
             if got then

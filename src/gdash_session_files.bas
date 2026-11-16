@@ -42,10 +42,14 @@ library gdash_session_files
         f {file} = tmp
         write(f, encode(rec))
         if error then
+            ' The viewer's 500 cannot say why without naming server paths;
+            ' the journal can, and without this it held nothing (G17-3).
+            print to error "gdash: cannot store a session: " + error.message
             return false
         end if
         atomic_replace(tmp, path)
         if error then
+            print to error "gdash: cannot store a session: " + error.message
             return false
         end if
         return true

@@ -272,10 +272,19 @@ library gdash_tenants
             return { ok: false, registry: {}, message: join(loaded.errors, "; ") }
         end if
         if not loaded.present then
-            if string(base) = "" then
-                return { ok: false, registry: {}, message: "there is no tenant registry yet; the first `tenant create` must say --base <directory>" }
+            ' No --base: tenants go where precious state goes (G17-1).
+            chosen = string(base)
+            if chosen = "" then
+                chosen = gdash_paths.tenants_base(base_p)
             end if
-            return { ok: true, registry: { format: 1, base: string(base), tenants: {} }, message: "" }
+            made = gdash_paths.ensure_dir(chosen)
+            on error goto next
+            abs = real_path(chosen)
+            if error then
+                return { ok: false, registry: {}, message: "cannot create the tenant base " + chosen }
+            end if
+            on error stop
+            return { ok: true, registry: { format: 1, base: abs, tenants: {} }, message: "" }
         end if
         return { ok: true, registry: loaded.registry, message: "" }
     end function
@@ -312,6 +321,13 @@ library gdash_tenants
         for each d in [tp.config_dir, tp.state_dir, tp.cache_dir, tp.log_dir, tp.run_dir, gdash_paths.dashboards_dir(tp)]
             if not gdash_paths.ensure_dir(d) then
                 return { ok: false, root: root, message: "cannot create " + d }
+            end if
+        next
+        ' 0700: what a tenant holds is another organisation's, and no other
+        ' local user has any business listing it.
+        for each d in [root, tp.config_dir, tp.state_dir, tp.cache_dir, tp.log_dir, tp.run_dir]
+            if not gdash_paths.close_dir(d) then
+                return { ok: false, root: root, message: "cannot restrict " + d + " to its owner" }
             end if
         next
         ' A format stamp per tenant, so a later migration knows what it is

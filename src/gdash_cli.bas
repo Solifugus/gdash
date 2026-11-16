@@ -141,7 +141,7 @@ program main(args)
             exit(0)
         end if
         if tid = "" or not contains(["create", "suspend", "resume", "delete", "limits", "limit"], sub) then
-            print to error "usage: gdash [--root <dir>] tenant create <id> --host <host> [--host <host>] [--base <dir>]"
+            print to error "usage: gdash [--root <dir>] tenant create <id> --host <host> [--host <host>] [--base <dir>]   (the base defaults to " + gdash_paths.tenants_base(p) + ")"
             print to error "       gdash [--root <dir>] tenant list | suspend <id> | resume <id> | delete <id>"
             print to error "       gdash [--root <dir>] tenant limits <id> | limit <id> <name> <value>"
             exit(2)

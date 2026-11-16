@@ -254,6 +254,16 @@ library gdash_paths
         return _join(p.config_dir, "tenants.json")
     end function
 
+    ' Where tenants live unless the first `tenant create` says otherwise:
+    ' <state>/tenants, so /var/lib/gdash/tenants when installed. A tenant is
+    ' ONE directory holding all five roles, so it cannot follow the FHS split
+    ' the way a single root does; it goes where precious state goes. Every
+    ' unit can write there under ProtectSystem=strict (StateDirectory=), and
+    ' it is inside the documented backup set (G17-1, ruled 2026-11-16).
+    function tenants_base(p)
+        return _join(p.state_dir, "tenants")
+    end function
+
     ' Each tenant's own format stamp, inside its root, so a migration across
     ' hundreds of roots knows what each one is.
     function tenant_stamp(p)
@@ -306,6 +316,18 @@ library gdash_paths
             return false
         end if
         return r.exit_code = 0
+    end function
+
+    ' A directory only its owner can enter: 0700. For a tenant's root and
+    ' roles, which hold data kept on behalf of another organisation.
+    function close_dir(path)
+        on error goto next
+        d {dir} = path
+        chmod(d, "0700")
+        if error then
+            return false
+        end if
+        return true
     end function
 
     ' Runtime state: /run is cleared on reboot, which is the correct lifetime

@@ -44,6 +44,12 @@ out="$(CLI tenant create acme --host acme.example.test --base "$TROOTS" 2>&1)"
 has "$out" "created tenant acme" "a tenant is created"
 ok "under the base, at a root derived from its id" "$(test -d "$TROOTS/acme/etc" && echo yes)" "yes"
 ok "with a format stamp" "$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['format'])" "$TROOTS/acme/etc/tenant.json")" "1"
+ok "and closed to every other local user (0700)" "$(stat -c %a "$TROOTS/acme" "$TROOTS/acme/etc" "$TROOTS/acme/lib" "$TROOTS/acme/cache" "$TROOTS/acme/log" "$TROOTS/acme/run" | sort -u)" "700"
+# With no --base, tenants go where precious state goes: <state>/tenants, which
+# is /var/lib/gdash/tenants when installed, writable by every unit (G17-1).
+DBASE="$SCRATCH/defaultbase"; mkdir -p "$DBASE/etc"
+out="$("$GBASIC" src/gdash_cli.bas --root "$DBASE" tenant create solo --host solo.example.test 2>&1)"
+has "$out" "created tenant solo at $(cd "$DBASE" && pwd -P)/lib/tenants/solo" "with no --base, a tenant goes under the state directory's tenants/"
 out="$(CLI tenant create globex --host globex.example.test --host bi.globex.test 2>&1)"
 has "$out" "created tenant globex" "a second tenant joins the registry"
 for bad in ".." "../x" "ACME" "a.b" "-x" "x-" "a/b"; do
