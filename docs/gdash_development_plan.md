@@ -308,16 +308,21 @@ is a limit that was needed before it.
 - A per-tenant model budget with a refusal when exhausted. This is the item most
   likely to be discovered by a bill rather than by a test.
 
-### GDASH-17 — Operating many tenants
+### GDASH-17 — Operating many tenants  *(brief: gdash17_brief.md; built 2026-11-16, at review)*
 
-- `gdash tenant export` / `import`: the backup story, the move-between-servers
-  story and the deletion story are the same directory operation, and want to be
-  exercised before they are needed rather than written during an outage.
-- Per-tenant backup and a **tested** restore, extending the FHS suite rather
-  than duplicating it.
-- An operator-side event stream — sign-ins, refresh failures, spend — which is
-  what tolerating downtime obliges, because a human is now the failover.
-- `gdash tenant migrate --all`, reading the format stamp.
+**Built:**
+
+- tenants default to `/var/lib/gdash/tenants` (ruled 2026-11-16), 0700; a
+  base elsewhere takes a documented `ReadWritePaths=` drop-in (G17-1);
+- `gdash tenant export` / `import`: a directory with a checked manifest,
+  datasets copied consistently while live, the registry entry carried, the
+  stamp rewritten for the importing server, and the entry written last;
+- `tenant delete --purge`, only with a whole export, waiting out open
+  databases before deleting anything (G17-5);
+- a **tested** restore under the real systemd units, at both bases, in
+  `run_systemd.sh`;
+- the operator's event stream, `events.log` in the base's log;
+- `gdash tenant migrate --all`, reading the format stamp;
 - ~~A tenant-level policy gate on `access: open`~~ — built in GDASH-16.
 
 ### GDASH-18 — The onboarding surface  *(shape only; not scheduled)*

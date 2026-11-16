@@ -1,7 +1,7 @@
 # GDASH-17 — Operating many tenants
 
-**Status:** step 0 run (2026-11-15). **Stopped on G17-1**, which a decision
-is needed for before building.
+**Status:** built (2026-11-16) and committed locally. Step 0 stopped on
+G17-1; the maintainer ruled the two decisions below on 2026-11-16.
 **Authority:** `gdash_design.md` outranks this brief. What it implements is
 the GDASH-17 entry in `gdash_development_plan.md`, and
 `gdash_saas_design.md` §5 (the format stamp) and §6 (the operator-side
@@ -72,54 +72,70 @@ beta customers.
   by any local user. For data held on behalf of other organisations, 0700
   is the right default. G-SQL already creates its own directories 0700.
 
-## Decisions needed
+## Decisions, ruled 2026-11-16
 
-1. **Where tenants live under systemd (G17-1).** Recommended: the base
-   defaults to `/var/lib/gdash/tenants`, which every unit can already write.
-   The existing `tar` of `/var/lib/gdash` then backs tenants up too. A base
-   anywhere else, such as a separate volume at `/srv/gdash`, takes a
-   drop-in adding `ReadWritePaths=` to `gdash.service` and
-   `gdash-scheduler@.service`, documented and tested. The alternative is to
-   put `ReadWritePaths=-/srv/gdash` in the shipped units, which works only
-   for that one path.
-2. **Whether an export carries the datasets.** Recommended: yes, through
-   `gsql.backup`. A restored or moved tenant then shows its dashboards at
-   once, without depending on its sources being reachable from the new
-   server, and the measured cost is small. `--without-data` leaves them to
-   refetch, which is what a single root's backup does today.
+1. **Tenants live under `/var/lib/gdash/tenants` by default** (G17-1). A
+   tenant is one directory holding all five roles, so it goes where precious
+   state goes: every unit can write there, and the documented backup of
+   `/var/lib/gdash` covers it. A base elsewhere takes a `ReadWritePaths=`
+   drop-in, documented in operations §6b and tested. The maintainer's other
+   multi-tenant applications are to follow the same layout.
+2. **An export carries the datasets**, by `gsql.backup`, so a restored or
+   moved tenant shows its dashboards at once. `--without-data` leaves them to
+   refetch.
 
-## Proposed, once those are ruled
+## What was built
 
-- **G17-1, G17-2 and G17-3 fixed first**, and tenant directories made 0700.
-- `tenant export <id> <dir>`, which runs live:
-  - pointers first, then `etc/`, `lib/` and `log/`;
-  - each dataset database through `gdash_store`, by `gsql.backup`;
-  - never `run/`, which holds only sessions and counters;
-  - a `manifest.json` last: format, tenant, gdash and gBASIC versions, and
-    every file with its size and SHA-256;
-  - the export directory 0700, because it holds the tenant's credentials.
-- `tenant import <dir> [--as <id>] [--host <host>]`:
-  - checks the manifest before writing anything;
-  - refuses a format newer than this build reads;
-  - places the tenant at `<base>/<id>` and rewrites its stamp for this
-    server's registry;
-  - writes the registry entry **last**, the order `tenant create` already
-    uses, so a half-imported tenant is unreachable rather than half-open.
-- `tenant delete <id> --purge`, which removes the directory after the
-  entry. It refuses unless an export of that tenant made since its last
-  change is named.
-- The event stream: `<base log>/events.log`, one JSON line per event,
-  carrying the tenant id. It covers sign-ins (ok, failed, throttled),
-  refresh failures and deferrals, quota, reserve and budget refusals, and
-  each question's charge. It is written beside the tenant's own audit line,
-  best-effort like the audit log, and never carries a credential.
-- `tenant migrate --all | <id>`: reads each stamp and reports it current,
-  newer than this build (refused), or unreadable. It applies the steps
-  between, of which there are none today: format 1 is the only one.
+- **G17-1, G17-2, G17-3 fixed**, and a tenant's directories created 0700.
+- `src/gdash_export.bas`:
+  - `export_tenant`: pointers first, then `etc/`, `lib/`, `log/`, each
+    dataset database through `gdash_store.backup`, and the manifest last.
+    Copies and digests are made a 4 MB chunk at a time, so nothing is held
+    whole. Everything is 0700/0600;
+  - `check_export`: format, stamp format, every path inside a tenant, every
+    file's size and SHA-256, and nothing the manifest does not name;
+  - `import_tenant`: checked first, built in a hidden directory, renamed into
+    place, stamp rewritten, registered last;
+  - `purge_tenant`: a whole export of that tenant, suspend, wait for every
+    owner, unregister, remove.
+- `gdash_tenants`: `write_stamp`, `can_register`, `register`, `read_stamp`
+  and `base_of` (moved from `gdash_limits`), `migrate`.
+- `gdash_store`: `backup` and `wait_idle`.
+- `gdash_audit`: the operator's stream. `gdash_spend` logs each charge;
+  `gdash_ask` logs a budget refusal.
+- CLI: `tenant export`, `import`, `delete --purge --backup`, `migrate`.
 - Tests:
-  - an export and import round trip in the hermetic suite;
-  - a restore under the real units in `run_systemd.sh`: export, destroy,
-    import, and the tenant serves and refreshes again.
+  - `test_export`, 45 assertions: the round trip, tampering, a move to a
+    second server's registry, `--without-data`, purge refusals and purge;
+  - `test_events`, 21: what is forwarded and what is not, a single root,
+    a refresh failure, spend, and every `migrate` status;
+  - `run_tenants`: the default base, 0700, and export, import and purge
+    from the CLI;
+  - `run_systemd`: a tenant under the units and a restore, at the default
+    base and (`GDASH_SYSTEMD_TENANT_BASE=/srv/gdash`) with the drop-in.
+- Docs: operations §4, §6b, §6d and §10.
+
+## Findings
+
+- **G17-1** (GDASH-15): tenants at the documented `/srv/gdash` could not be
+  written under the units. Fixed by the default base and the drop-in.
+- **G17-2** (GDASH-16, mine): a slot that could not be written was blamed
+  on gBASIC's version. Fixed.
+- **G17-3**: a session that could not be stored was a 500 with nothing in
+  the journal. Fixed.
+- **G17-4** (mine, caught by the round trip): the chunked copy advanced by
+  `len(piece)`, which counts characters; on binary data that is fewer than
+  the bytes read, so chunks overlapped and each database file grew by a few
+  bytes. The digests still agreed, being taken the same wrong way, and the
+  imported database read as CORRUPT. It now uses `byte_count`. Not a
+  platform defect: `len` is documented as codepoints.
+- **G17-5**: a purge deleted a database's directory while a viewer's G-SQL
+  owner still lingered on it, and the tenant imported to the same path
+  rendered without its data (one run in three under the units). A purge now
+  suspends the tenant and waits for every owner to exit first.
+- **The single root's spawn check in `run_systemd.sh` was timing-sensitive**:
+  started inside the second the publish's fresh data was written, the pass
+  found nothing due. It now waits, as the A1 check already did.
 
 ## Deliberately not in this phase
 
@@ -128,3 +144,11 @@ beta customers.
 - Encrypting an export. It holds credentials, so it is 0700 and the
   operations guide says so, but encryption at rest is the backup store's
   job.
+- A purge that also stops the tenant's scheduler timer: gdash does not
+  drive systemd. The purge says to, if an owner outlasts the wait.
+- Refusing a purge whose export is older than the tenant's last change.
+  "Last change" has no single definition here (the audit log changes on
+  every sign-in), so the purge requires a whole, verified export of that
+  tenant and reports when it was made.
+- Rotating `events.log`. It is the base's log directory; logrotate is the
+  operator's, as for the audit logs.

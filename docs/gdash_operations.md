@@ -115,6 +115,10 @@ systemctl start gdash gdash-scheduler.timer
 gdash refresh <dashboard>          # or wait for the timer
 ```
 
+Tenants (§6b) live under `/var/lib/gdash/tenants` by default, so this backs
+them up too, caches included. To back up, move or restore **one** tenant,
+use `gdash tenant export` (§6d).
+
 **This has been performed, not assumed.** `tests/run_fhs.sh` backs up
 `/var/lib/gdash`, destroys both data directories, restores only the backup, and
 requires the dashboard, its published history and a working refresh to come
@@ -331,7 +335,7 @@ with any other tenant. The server's own root (FHS, or `GDASH_ROOT`) holds the
 single-tenant deployment it has always been.
 
 ```sh
-gdash tenant create acme --host acme.example.com --base /srv/gdash   # the first one names the base
+gdash tenant create acme --host acme.example.com                     # under /var/lib/gdash/tenants
 printf 'pw\npw\n' | gdash --tenant acme user add alice --admin       # its first admin
 gdash tenant list
 gdash tenant suspend acme | resume acme | delete acme
@@ -348,6 +352,27 @@ systemctl enable --now gdash-scheduler@acme.timer                    # its sched
 
 **Where tenants live.** A tenant's root is always `<base>/<id>`, and a tenant
 directory that resolves outside the base (a symlink out, say) is refused.
+The first `tenant create` fixes the base for the registry:
+- **By default it is `/var/lib/gdash/tenants`** (`<root>/lib/tenants` under
+  `--root`). A tenant is one directory holding all five roles, so it cannot
+  follow the FHS split a single root does; it goes where precious state goes.
+  Every unit can write there, and it is inside the backup set (§4).
+- **A base anywhere else needs the units told.** The units run under
+  `ProtectSystem=strict`, which makes every path but their own directories
+  read-only. A tenant there cannot be refreshed, and its viewers cannot sign
+  in (sign-in answers 500). For a base on another volume, say `/srv/gdash`:
+
+  ```sh
+  for u in gdash.service gdash-scheduler@.service; do
+    mkdir -p /etc/systemd/system/$u.d
+    printf '[Service]\nReadWritePaths=/srv/gdash\n' > /etc/systemd/system/$u.d/tenants.conf
+  done
+  systemctl daemon-reload && systemctl restart gdash
+  gdash tenant create acme --host acme.example.com --base /srv/gdash
+  ```
+
+Each tenant's directories are created 0700: what is in them belongs to
+another organisation.
 
 **Deleting.** `delete` makes a tenant unreachable at once and keeps its
 directory; remove the directory yourself once nothing in it is wanted.
@@ -464,6 +489,74 @@ purpose: one token per two characters in, and `max_tokens` out. The ledger is
 pass the check, so a month can end above its budget by at most one question
 per worker.
 
+## 6d. Backing up, moving and deleting a tenant (GDASH-17)
+
+**One tenant is one directory**, so backup, moving it to another server and
+deleting it are one operation, and it has been performed rather than assumed:
+`tests/run_systemd.sh` exports a live tenant under the real units, purges it,
+imports it back, and requires its dashboard to serve its data before any
+refresh.
+
+```sh
+gdash tenant export acme /var/backups/gdash/acme-2026-11-16    # live; a new or empty directory
+gdash tenant export acme /backups/acme --without-data          # leave the datasets to refetch
+gdash tenant import /var/backups/gdash/acme-2026-11-16         # same id, same hosts
+gdash tenant import /backups/acme --as acme2 --host acme2.example.com
+gdash tenant delete acme --purge --backup /var/backups/gdash/acme-2026-11-16
+```
+
+**An export is a directory**, not an archive: `tar`, `rsync` or `scp` it.
+It holds:
+- `etc/`, `lib/` and `log/` (`run/` is never exported: sessions and counters);
+- each dataset database, copied consistently while in use, unless
+  `--without-data`;
+- the tenant's registry entry: hosts, status and limits;
+- `manifest.json`, written last, with every file's size and SHA-256.
+
+**It holds the tenant's credentials**: connection passwords, model keys,
+password hashes and the CSRF secret. It is 0700, every file in it 0600; keep
+it as you keep `/etc/gdash`. Encrypting it at rest is the backup store's job.
+
+**An import checks the whole export before writing anything.** It refuses:
+- a missing manifest (an export that did not finish);
+- any file changed, missing, or not named in the manifest;
+- a tenant stamped newer than this gdash reads;
+- an id that exists here, or a host another tenant has.
+
+It builds the tenant in a hidden directory, renames it into place, rewrites
+its stamp for this server's registry (so its limits are found here), and
+registers it last. A tenant half-imported is unreachable, not half-open.
+Then start its scheduler: `systemctl enable --now gdash-scheduler@acme.timer`.
+
+**Moving a tenant** is export on the old server, import on the new, repoint
+the proxy, then `tenant delete` on the old.
+
+**`delete --purge` deletes the directory too**, and only with a whole export
+of that tenant named. It suspends the tenant first, then waits (the G-SQL
+linger plus 15 s) for every database's owner to exit: an owner still serving
+a deleted database is still serving it, and a tenant imported to the same
+path would meet it. If one does not exit, the tenant is left suspended and
+whole, and the purge says to stop its scheduler and try again. Plain
+`delete`, without `--purge`, still only unregisters.
+
+**Upgrades.** `gdash tenant migrate --all` reads every tenant's format stamp
+and says each is `current`, `migrated`, `newer` (it needs a newer gdash), or
+`unreadable`, and exits 1 if any is not current or migrated. Format 1 is the
+only format so far.
+
+**The operator's event stream.** Each tenant's audit log is its own.
+`/var/log/gdash/events.log` collects, from every tenant, one JSON line per
+event with its `tenant`:
+- sign-ins, failed and throttled sign-ins, directory and auth-config failures;
+- refresh failures and deferrals, and an invalid schedule;
+- publishes, publish refusals and rollbacks;
+- questions asked, budget refusals, and each question's `spend` (cost,
+  currency and tokens).
+
+A question's text stays in the tenant's own log. Nothing in either carries a
+credential. A single root writes no events.log: its audit log is already the
+operator's.
+
 ## 7. Upgrades
 
 ```sh
@@ -549,6 +642,13 @@ Honesty about the gap between this document and a running system:
   work. Starting them found a real defect the first time (G14-1).
 - **The install, refresh, publish, serve, backup and restore have all run** at
   real FHS paths as root, in a container, with no `GDASH_*` set.
+- **A tenant has run under the units too** (GDASH-17), at the default base and
+  at `/srv/gdash` with the drop-in: refreshed by its own scheduler unit,
+  signed into, exported live, purged and imported back. Until then tenants had
+  only run under `--root`, which is how a tenant at `/srv/gdash` went unable to
+  refresh or sign in under the units without anyone seeing it (G17-1). Not yet
+  run: a move between two real servers, and an export of a tenant past a few
+  megabytes.
 - **TLS is served by gdash in the end-to-end suite** (HTTPS answered, plain
   HTTP refused, `Secure` cookies). It has not yet run under the systemd units
   with a real certificate.
